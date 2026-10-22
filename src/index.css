@@ -1,0 +1,228 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-serif: 'Cormorant Garamond', Georgia, Cambria, 'Times New Roman', Times, serif;
+    --font-cinzel: 'Cinzel', 'Playfair Display', Georgia, serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --color-teak: #3B2F2A;
+    --color-teak-hover: #4D3E37;
+    --color-teak-active: #2E2420;
+    --color-teak-green: #0F5B46;
+    --color-teak-green-hover: #0B4536;
+    --color-teak-green-active: #083A2D;
+    --color-teal-green: #008C78;
+    --color-teal-green-dark: #007A68;
+    --color-teal-green-mint: #B2F5E8;
+    --color-ivory: #FAF7F2;
+    --color-gold: #DFB982;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #FAF7F2;
+    color: #241C1A;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4, .font-serif-heading {
+    font-family: var(--font-serif);
+  }
+
+  .font-cinzel {
+    font-family: var(--font-cinzel);
+  }
+}
+
+/* Elegant Teak Green Button Standard (#0F5B46) */
+.btn-teak-green {
+  background-color: #0F5B46 !important;
+  color: #FFFFFF !important;
+  border: 1px solid #0F5B46 !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 6px rgba(15, 91, 70, 0.18);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.btn-teak-green:hover:not(:disabled) {
+  background-color: #0B4536 !important;
+  border-color: #0B4536 !important;
+  box-shadow: 0 4px 12px rgba(15, 91, 70, 0.28);
+}
+
+.btn-teak-green:active:not(:disabled) {
+  background-color: #083A2D !important;
+  border-color: #083A2D !important;
+  transform: scale(0.98);
+}
+
+.btn-teak-green:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(15, 91, 70, 0.35), 0 2px 6px rgba(15, 91, 70, 0.18);
+}
+
+.btn-teak-green:disabled {
+  background-color: #E5E7EB !important;
+  border-color: #E5E7EB !important;
+  color: #9CA3AF !important;
+  opacity: 0.65 !important;
+  cursor: not-allowed !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+/* Teak Green Outline / Secondary */
+.btn-teak-green-outline {
+  background-color: transparent !important;
+  color: #0F5B46 !important;
+  border: 1.5px solid #0F5B46 !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.btn-teak-green-outline:hover:not(:disabled) {
+  background-color: #0F5B46 !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 4px 12px rgba(15, 91, 70, 0.22);
+}
+
+.btn-teak-green-outline:active:not(:disabled) {
+  background-color: #083A2D !important;
+  border-color: #083A2D !important;
+  color: #FFFFFF !important;
+  transform: scale(0.98);
+}
+
+.btn-teak-green-outline:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(15, 91, 70, 0.35);
+}
+
+.btn-teak-green-outline:disabled {
+  border-color: #D1D5DB !important;
+  color: #9CA3AF !important;
+  cursor: not-allowed !important;
+  opacity: 0.6 !important;
+}
+
+/* Global Dark Teak Button Standard */
+.btn-dark-teak {
+  background-color: #3B2F2A !important;
+  color: #FAF7F2 !important;
+  border: 1px solid #3B2F2A;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 6px rgba(59, 47, 42, 0.15);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.btn-dark-teak:hover {
+  background-color: #4D3E37 !important;
+  border-color: #4D3E37;
+  box-shadow: 0 4px 12px rgba(59, 47, 42, 0.25);
+}
+
+.btn-dark-teak:active {
+  background-color: #2E2420 !important;
+  transform: scale(0.98);
+}
+
+.btn-dark-teak:disabled {
+  background-color: #9CA3AF !important;
+  border-color: #9CA3AF !important;
+  color: #E5E7EB !important;
+  opacity: 0.6 !important;
+  cursor: not-allowed !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+/* Dark Teak Secondary / Outline */
+.btn-dark-teak-outline {
+  background-color: transparent !important;
+  color: #3B2F2A !important;
+  border: 1.5px solid #3B2F2A !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.btn-dark-teak-outline:hover {
+  background-color: #3B2F2A !important;
+  color: #FAF7F2 !important;
+  box-shadow: 0 4px 12px rgba(59, 47, 42, 0.2);
+}
+
+/* Luxury Hero Section Classes */
+.hero {
+  position: relative;
+  background-color: #1F0712;
+  overflow: hidden;
+}
+
+.hero-image img {
+  max-width: 100%;
+  height: auto;
+  object-fit: cover;
+}
+
+.btn-dark-teak-outline:active {
+  transform: scale(0.98);
+}
+
+/* Custom luxury scrollbar */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: #F4EBE1;
+}
+::-webkit-scrollbar-thumb {
+  background: #D4AF37;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #B8860B;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.4) 50%, rgba(255,255,255,0) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+#mobile-input::placeholder,
+#mobile-input::-webkit-input-placeholder,
+#mobile-input::-moz-placeholder,
+#mobile-input:-ms-input-placeholder {
+  color: #FBD028 !important;
+  opacity: 1 !important;
+}
+
+/* Premium Teak Green Footer Standard (#0F5B46 - Exact match with Add to Cart / Buy Now buttons) */
+.footer-teak-green {
+  background-color: #0F5B46 !important;
+  color: #FFFFFF !important;
+}
+
+.footer-teak-green a,
+.footer-teak-green button {
+  color: #FFFFFF;
+}
+
+.footer-teak-green a:hover,
+.footer-teak-green button:hover {
+  color: #B2F5E8 !important;
+}

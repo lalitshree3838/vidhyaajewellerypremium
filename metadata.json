@@ -1,0 +1,8 @@
+{
+  "name": "Remix VIDHYAA Jewellery Studio",
+  "description": "Premium Quality Luxury women\u0027s jewellery brand e-commerce store offering gold imitation, silver 92.5, oxidise jewellery,  Watches, Bracelets, Ankelets, Kangan /kada, Bangales, and premium watches with UPI checkout.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

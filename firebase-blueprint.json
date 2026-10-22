@@ -1,0 +1,171 @@
+{
+  "entities": {
+    "user": {
+      "title": "User",
+      "description": "User profile with role, customer info and addresses",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "phone": { "type": "string" },
+        "role": { "type": "string", "enum": ["customer", "admin"] },
+        "savedAddresses": { "type": "array" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "email", "role"]
+    },
+    "product": {
+      "title": "Product",
+      "description": "Jewellery or watch catalog item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "slug": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "categoryName": { "type": "string" },
+        "subcategory": { "type": "string" },
+        "description": { "type": "string" },
+        "material": { "type": "string" },
+        "price": { "type": "number" },
+        "mrp": { "type": "number" },
+        "discountPercent": { "type": "number" },
+        "images": { "type": "array" },
+        "stock": { "type": "number" },
+        "inStock": { "type": "boolean" },
+        "isFeatured": { "type": "boolean" },
+        "isBestseller": { "type": "boolean" },
+        "isNewArrival": { "type": "boolean" },
+        "active": { "type": "boolean" },
+        "rating": { "type": "number" },
+        "reviewCount": { "type": "number" },
+        "specifications": { "type": "object" },
+        "careInstructions": { "type": "string" },
+        "variations": { "type": "array" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "categoryId", "price", "mrp", "active"]
+    },
+    "category": {
+      "title": "Category",
+      "description": "Jewellery product category",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "slug": { "type": "string" },
+        "description": { "type": "string" },
+        "image": { "type": "string" },
+        "subcategories": { "type": "array" },
+        "active": { "type": "boolean" },
+        "order": { "type": "number" }
+      },
+      "required": ["id", "name", "slug", "active"]
+    },
+    "order": {
+      "title": "Order",
+      "description": "Customer jewellery order",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orderNumber": { "type": "string" },
+        "userId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerEmail": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "shippingAddress": { "type": "object" },
+        "items": { "type": "array" },
+        "subtotal": { "type": "number" },
+        "discount": { "type": "number" },
+        "deliveryCharge": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "paymentMethod": { "type": "string" },
+        "paymentStatus": { "type": "string", "enum": ["pending", "paid", "failed"] },
+        "paymentId": { "type": "string" },
+        "upiReference": { "type": "string" },
+        "orderStatus": { "type": "string", "enum": ["Pending", "Confirmed", "Processing", "Shipped", "Delivered", "Cancelled"] },
+        "trackingNumber": { "type": "string" },
+        "courierName": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "orderNumber", "customerName", "customerPhone", "totalAmount", "paymentStatus", "orderStatus"]
+    },
+    "review": {
+      "title": "Review",
+      "description": "Product review and customer rating",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "rating": { "type": "number" },
+        "comment": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "productId", "userId", "userName", "rating", "comment"]
+    },
+    "storeSettings": {
+      "title": "StoreSettings",
+      "description": "Global store settings and rules",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "freeDeliveryThreshold": { "type": "number" },
+        "deliveryCharge": { "type": "number" },
+        "upiVpa": { "type": "string" },
+        "upiPayeeName": { "type": "string" },
+        "contactPhone": { "type": "string" },
+        "contactEmail": { "type": "string" },
+        "announcementText": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "freeDeliveryThreshold", "deliveryCharge", "upiVpa"]
+    },
+    "admin": {
+      "title": "Admin",
+      "description": "Designated administrator identity document",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" }
+      },
+      "required": ["id", "email"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "user",
+      "description": "Customer profile and saved addresses"
+    },
+    "/products/{productId}": {
+      "schema": "product",
+      "description": "Jewellery products catalog"
+    },
+    "/categories/{categoryId}": {
+      "schema": "category",
+      "description": "Product categories"
+    },
+    "/orders/{orderId}": {
+      "schema": "order",
+      "description": "Customer orders with UPI payment details"
+    },
+    "/reviews/{reviewId}": {
+      "schema": "review",
+      "description": "Product customer reviews"
+    },
+    "/settings/{settingsId}": {
+      "schema": "storeSettings",
+      "description": "Global store configuration and delivery rates"
+    },
+    "/admins/{adminId}": {
+      "schema": "admin",
+      "description": "Administrator authorization records"
+    }
+  }
+}
