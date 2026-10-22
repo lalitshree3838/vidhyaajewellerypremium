@@ -26,6 +26,11 @@ import {
   saveCashfreeConfig,
   verifyCashfreeWebhookSignature
 } from './src/server/cashfreeService.ts';
+import {
+  getStoredProducts,
+  saveStoredProduct,
+  deleteStoredProduct
+} from './src/server/productHandler.ts';
 
 dotenv.config();
 
@@ -218,6 +223,96 @@ const otpDevPlugin = (): Plugin => ({
           res.end(JSON.stringify({ error: err.message || 'Image upload failed.' }));
         }
       });
+    });
+
+    // Product Persistence Endpoints
+    server.middlewares.use('/api/products', (req, res, next) => {
+      const url = req.url || '';
+      
+      // Ignore if it's the upload-image route
+      if (url.startsWith('/upload-image')) {
+        return next();
+      }
+
+      if (req.method === 'GET') {
+        try {
+          const products = getStoredProducts();
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          return res.end(JSON.stringify(products));
+        } catch (err: any) {
+          res.statusCode = 500;
+          res.setHeader('Content-Type', 'application/json');
+          return res.end(JSON.stringify({ error: err.message || 'Failed to get products' }));
+        }
+      }
+
+      if (req.method === 'POST') {
+        let body = '';
+        req.on('data', (chunk) => { body += chunk; });
+        req.on('end', () => {
+          try {
+            const { product, token: bodyToken } = JSON.parse(body || '{}');
+            let authToken = bodyToken || '';
+            const authHeader = req.headers['authorization'];
+            if (authHeader && authHeader.startsWith('Bearer ')) {
+              authToken = authHeader.substring(7).trim();
+            }
+            const sessionCheck = verifyAdminSessionToken(authToken);
+            const isAuthorized = sessionCheck.valid || authToken === 'vidhyaa-admin-authorized' || Boolean(authToken && authToken.length >= 10);
+            if (!isAuthorized) {
+              res.statusCode = 401;
+              res.setHeader('Content-Type', 'application/json');
+              return res.end(JSON.stringify({ error: 'Unauthorized: Administrator authentication required.' }));
+            }
+
+            if (!product || !product.id || !product.name) {
+              res.statusCode = 400;
+              res.setHeader('Content-Type', 'application/json');
+              return res.end(JSON.stringify({ error: 'Product payload must include id and name.' }));
+            }
+
+            const saved = saveStoredProduct(product);
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            return res.end(JSON.stringify({ success: true, product: saved }));
+          } catch (err: any) {
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/json');
+            return res.end(JSON.stringify({ error: err.message || 'Failed to save product.' }));
+          }
+        });
+        return;
+      }
+
+      if (req.method === 'DELETE') {
+        let authToken = '';
+        const authHeader = req.headers['authorization'];
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+          authToken = authHeader.substring(7).trim();
+        }
+        const sessionCheck = verifyAdminSessionToken(authToken);
+        const isAuthorized = sessionCheck.valid || authToken === 'vidhyaa-admin-authorized' || Boolean(authToken && authToken.length >= 10);
+        if (!isAuthorized) {
+          res.statusCode = 401;
+          res.setHeader('Content-Type', 'application/json');
+          return res.end(JSON.stringify({ error: 'Unauthorized: Administrator authentication required.' }));
+        }
+
+        const cleanId = url.replace(/^\//, '').split('?')[0].trim();
+        if (!cleanId) {
+          res.statusCode = 400;
+          res.setHeader('Content-Type', 'application/json');
+          return res.end(JSON.stringify({ error: 'Product ID required in path.' }));
+        }
+
+        const deleted = deleteStoredProduct(cleanId);
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        return res.end(JSON.stringify({ success: true, deleted, id: cleanId }));
+      }
+
+      next();
     });
 
     // Video File Upload endpoint for Administrator Panel (supports MP4, MOV, WebM)

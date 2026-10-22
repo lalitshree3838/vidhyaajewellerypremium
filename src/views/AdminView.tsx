@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Truck,
   RotateCcw,
+  RefreshCw,
   Sparkles,
   Search,
   Layers,
@@ -236,6 +237,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
   // Local reactive states for instantaneous catalog & category updates
   const [localProducts, setLocalProducts] = useState<Product[]>(products);
   const [localCategories, setLocalCategories] = useState<Category[]>(categories);
+  const [isRefreshingCatalog, setIsRefreshingCatalog] = useState(false);
 
   useEffect(() => {
     setLocalProducts(products);
@@ -244,6 +246,32 @@ export const AdminView: React.FC<AdminViewProps> = ({
   useEffect(() => {
     setLocalCategories(categories);
   }, [categories]);
+
+  // Ensure Admin Panel fetches the absolute latest database records upon mount
+  useEffect(() => {
+    onRefreshData().catch((err) => {
+      console.warn('[AdminView] Auto-refresh catalog notice:', err);
+    });
+
+    const handleProductsUpdated = (e: any) => {
+      if (e.detail && Array.isArray(e.detail)) {
+        setLocalProducts(e.detail);
+      }
+    };
+    window.addEventListener('vidhyaa_products_updated', handleProductsUpdated);
+    return () => window.removeEventListener('vidhyaa_products_updated', handleProductsUpdated);
+  }, []);
+
+  const handleManualRefreshCatalog = async () => {
+    setIsRefreshingCatalog(true);
+    try {
+      await onRefreshData();
+    } catch (err: any) {
+      console.error('[AdminView] Manual refresh error:', err);
+    } finally {
+      setIsRefreshingCatalog(false);
+    }
+  };
 
   // Product Deletion Confirmation Modal State
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
@@ -1438,13 +1466,25 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 </p>
               </div>
 
-              <button
-                onClick={handleOpenNewProduct}
-                className="bg-[#3B1E22] hover:bg-[#802336] text-[#FAF7F2] px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-2 cursor-pointer transition-colors shadow-md w-full sm:w-auto justify-center"
-              >
-                <Plus className="w-4 h-4 text-[#DFB982]" />
-                <span>Add New Jewellery Design</span>
-              </button>
+              <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                <button
+                  onClick={handleManualRefreshCatalog}
+                  disabled={isRefreshingCatalog}
+                  className="bg-white hover:bg-gray-50 text-[#3B1E22] border border-[#E8DCCF] px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-xs"
+                  title="Force re-fetch all products from database"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 text-[#802336] ${isRefreshingCatalog ? 'animate-spin' : ''}`} />
+                  <span>{isRefreshingCatalog ? 'Syncing...' : 'Sync Database'}</span>
+                </button>
+
+                <button
+                  onClick={handleOpenNewProduct}
+                  className="bg-[#3B1E22] hover:bg-[#802336] text-[#FAF7F2] px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-2 cursor-pointer transition-colors shadow-md w-full sm:w-auto justify-center"
+                >
+                  <Plus className="w-4 h-4 text-[#DFB982]" />
+                  <span>Add New Jewellery Design</span>
+                </button>
+              </div>
             </div>
 
             {/* Product Deletion Feedback */}

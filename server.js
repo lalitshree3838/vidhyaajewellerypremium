@@ -1,8 +1,8 @@
 // server.ts
 import express from "express";
-import path2 from "path";
-import fs2 from "fs";
-import { fileURLToPath } from "url";
+import path4 from "path";
+import fs4 from "fs";
+import { fileURLToPath as fileURLToPath2 } from "url";
 import dotenv from "dotenv";
 
 // src/server/adminAuthHandler.ts
@@ -378,36 +378,387 @@ async function dispatchRealSms(mobile, otp) {
   };
 }
 
-// server.ts
-dotenv.config();
+// src/server/cashfreeService.ts
+import fs2 from "fs";
+import path2 from "path";
+import crypto2 from "crypto";
+import { fileURLToPath } from "url";
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path2.dirname(__filename);
+var CONFIG_FILE_PATH = path2.join(__dirname, "..", "..", "cashfree-config.json");
+function getCashfreeCredentials() {
+  let fileConfig = {};
+  try {
+    if (fs2.existsSync(CONFIG_FILE_PATH)) {
+      const raw = fs2.readFileSync(CONFIG_FILE_PATH, "utf-8");
+      fileConfig = JSON.parse(raw);
+    }
+  } catch (err) {
+    console.warn("[Cashfree] Warning reading cashfree-config.json:", err);
+  }
+  const appId = (fileConfig.appId || process.env.CASHFREE_APP_ID || "").trim();
+  const secretKey = (fileConfig.secretKey || process.env.CASHFREE_SECRET_KEY || "").trim();
+  const rawEnv = (fileConfig.env || process.env.CASHFREE_ENV || "SANDBOX").trim().toUpperCase();
+  const env = rawEnv === "PRODUCTION" ? "PRODUCTION" : "SANDBOX";
+  const apiVersion = (fileConfig.apiVersion || process.env.CASHFREE_API_VERSION || "2023-08-01").trim();
+  const isConfigured = Boolean(appId && secretKey);
+  return {
+    appId,
+    secretKey,
+    env,
+    apiVersion,
+    isConfigured
+  };
+}
+function saveCashfreeConfig(newConfig) {
+  try {
+    const existing = getCashfreeCredentials();
+    const updated = {
+      appId: newConfig.appId !== void 0 ? newConfig.appId.trim() : existing.appId,
+      secretKey: newConfig.secretKey !== void 0 ? newConfig.secretKey.trim() : existing.secretKey,
+      env: newConfig.env || existing.env,
+      apiVersion: newConfig.apiVersion || existing.apiVersion,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    fs2.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(updated, null, 2), "utf-8");
+    return { success: true, message: "Cashfree configuration saved successfully." };
+  } catch (err) {
+    return { success: false, message: err?.message || "Failed to save Cashfree configuration." };
+  }
+}
+function getCashfreeStatusSummary() {
+  const creds = getCashfreeCredentials();
+  const maskedAppId = creds.appId ? `${creds.appId.slice(0, 4)}\u2022\u2022\u2022\u2022${creds.appId.slice(-4)}` : "Not Configured";
+  const hasSecret = Boolean(creds.secretKey);
+  return {
+    isConfigured: creds.isConfigured,
+    env: creds.env,
+    appIdMasked: maskedAppId,
+    hasSecretKey: hasSecret,
+    apiVersion: creds.apiVersion,
+    baseUrl: creds.env === "PRODUCTION" ? "https://api.cashfree.com/pg" : "https://sandbox.cashfree.com/pg"
+  };
+}
+async function createCashfreeOrder(params) {
+  const creds = getCashfreeCredentials();
+  if (!creds.isConfigured) {
+    return {
+      success: false,
+      configured: false,
+      mode: creds.env.toLowerCase(),
+      error: "Cashfree merchant credentials are not configured yet. Please configure CASHFREE_APP_ID and CASHFREE_SECRET_KEY in Admin Panel or .env to accept Credit & Debit Cards."
+    };
+  }
+  const baseUrl = creds.env === "PRODUCTION" ? "https://api.cashfree.com/pg" : "https://sandbox.cashfree.com/pg";
+  const rawPhone = (params.customerPhone || "").replace(/\D/g, "");
+  const cleanPhone = rawPhone.length >= 10 ? rawPhone.slice(-10) : "9758350524";
+  const safeCustomerId = `cust_${(params.customerEmail || cleanPhone).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40) || Date.now()}`;
+  const safeName = (params.customerName || "Valued Patron").trim().slice(0, 80);
+  const safeEmail = (params.customerEmail || "patron@vidhyaajewellery.com").trim();
+  const safeAmount = Math.max(1, Math.round(params.orderAmount * 100) / 100);
+  const safeOrderId = params.orderId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 45);
+  const payload = {
+    order_id: safeOrderId,
+    order_amount: safeAmount,
+    order_currency: "INR",
+    customer_details: {
+      customer_id: safeCustomerId,
+      customer_name: safeName,
+      customer_email: safeEmail,
+      customer_phone: cleanPhone
+    },
+    order_meta: {
+      return_url: params.returnUrl || `https://ais-dev-4mkdmae4l6euf2siug53im-154198440604.asia-southeast1.run.app/?cf_order_id={order_id}`,
+      payment_methods: "cc,dc"
+      // Prioritize Credit Card & Debit Card hosted checkout
+    },
+    order_note: params.orderNote || "VIDHYAA Jewellery Studio Order"
+  };
+  try {
+    const res = await fetch(`${baseUrl}/orders`, {
+      method: "POST",
+      headers: {
+        "x-client-id": creds.appId,
+        "x-client-secret": creds.secretKey,
+        "x-api-version": creds.apiVersion,
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const errMsg = data.message || data.error || `Cashfree API returned HTTP ${res.status}`;
+      console.error("[Cashfree Order Creation Failed]", { status: res.status, data });
+      return {
+        success: false,
+        configured: true,
+        mode: creds.env.toLowerCase(),
+        error: errMsg
+      };
+    }
+    return {
+      success: true,
+      configured: true,
+      orderId: data.order_id || safeOrderId,
+      cfOrderId: data.cf_order_id,
+      paymentSessionId: data.payment_session_id,
+      orderStatus: data.order_status || "ACTIVE",
+      mode: creds.env.toLowerCase()
+    };
+  } catch (err) {
+    console.error("[Cashfree Order Network Error]", err);
+    return {
+      success: false,
+      configured: true,
+      mode: creds.env.toLowerCase(),
+      error: err?.message || "Network error connecting to Cashfree Payments Gateway."
+    };
+  }
+}
+async function verifyCashfreeOrder(orderId) {
+  const creds = getCashfreeCredentials();
+  if (!creds.isConfigured) {
+    return {
+      success: false,
+      isPaid: false,
+      orderId,
+      orderStatus: "UNCONFIGURED",
+      error: "Cashfree merchant credentials are not configured."
+    };
+  }
+  const baseUrl = creds.env === "PRODUCTION" ? "https://api.cashfree.com/pg" : "https://sandbox.cashfree.com/pg";
+  const safeOrderId = orderId.trim();
+  try {
+    const orderRes = await fetch(`${baseUrl}/orders/${encodeURIComponent(safeOrderId)}`, {
+      method: "GET",
+      headers: {
+        "x-client-id": creds.appId,
+        "x-client-secret": creds.secretKey,
+        "x-api-version": creds.apiVersion,
+        "Accept": "application/json"
+      }
+    });
+    const orderData = await orderRes.json().catch(() => ({}));
+    if (!orderRes.ok) {
+      return {
+        success: false,
+        isPaid: false,
+        orderId: safeOrderId,
+        orderStatus: "NOT_FOUND",
+        error: orderData.message || `Cashfree order verification failed with HTTP ${orderRes.status}`
+      };
+    }
+    const orderStatus = orderData.order_status || "UNKNOWN";
+    const isPaid = orderStatus === "PAID";
+    let paymentDetails = void 0;
+    try {
+      const paymentsRes = await fetch(`${baseUrl}/orders/${encodeURIComponent(safeOrderId)}/payments`, {
+        method: "GET",
+        headers: {
+          "x-client-id": creds.appId,
+          "x-client-secret": creds.secretKey,
+          "x-api-version": creds.apiVersion,
+          "Accept": "application/json"
+        }
+      });
+      if (paymentsRes.ok) {
+        const paymentsArray = await paymentsRes.json();
+        if (Array.isArray(paymentsArray) && paymentsArray.length > 0) {
+          const successful = paymentsArray.find((p) => p.payment_status === "SUCCESS") || paymentsArray[0];
+          const methodObj = successful.payment_method || {};
+          let cardNetwork = void 0;
+          let cardType = void 0;
+          let methodLabel = "Card";
+          if (methodObj.card) {
+            cardNetwork = methodObj.card.card_network;
+            cardType = methodObj.card.card_type;
+            methodLabel = `${cardNetwork || "Credit/Debit"} Card (${cardType || "Standard"})`;
+          } else if (methodObj.upi) {
+            methodLabel = "UPI via Cashfree";
+          }
+          paymentDetails = {
+            cfPaymentId: successful.cf_payment_id,
+            paymentStatus: successful.payment_status,
+            paymentAmount: successful.payment_amount,
+            paymentCurrency: successful.payment_currency || "INR",
+            paymentMethod: methodLabel,
+            cardNetwork,
+            cardType,
+            paymentTime: successful.payment_completion_time || successful.payment_time
+          };
+        }
+      }
+    } catch (paymentErr) {
+      console.warn("[Cashfree Payment Details Warning]", paymentErr);
+    }
+    return {
+      success: true,
+      isPaid,
+      orderId: safeOrderId,
+      orderStatus,
+      orderAmount: orderData.order_amount,
+      cfOrderId: orderData.cf_order_id,
+      paymentDetails
+    };
+  } catch (err) {
+    return {
+      success: false,
+      isPaid: false,
+      orderId: safeOrderId,
+      orderStatus: "ERROR",
+      error: err?.message || "Error communicating with Cashfree Payments API"
+    };
+  }
+}
+function verifyCashfreeWebhookSignature(rawBody, signature, timestamp) {
+  const creds = getCashfreeCredentials();
+  if (!creds.secretKey || !signature || !timestamp) return false;
+  try {
+    const payload = `${timestamp}${rawBody}`;
+    const expectedSignature = crypto2.createHmac("sha256", creds.secretKey).update(payload).digest("base64");
+    return crypto2.timingSafeEqual(Buffer.from(expectedSignature), Buffer.from(signature));
+  } catch (err) {
+    console.error("[Cashfree Webhook Signature Verification Error]", err);
+    return false;
+  }
+}
+
+// src/server/productHandler.ts
+import fs3 from "fs";
+import path3 from "path";
+var DATA_DIR = path3.resolve("data");
+var PRODUCTS_FILE = path3.join(DATA_DIR, "products.json");
+var BACKUP_FILE = path3.join(DATA_DIR, "products_backup.json");
+function ensureDataDir() {
+  try {
+    if (!fs3.existsSync(DATA_DIR)) {
+      fs3.mkdirSync(DATA_DIR, { recursive: true });
+    }
+  } catch (err) {
+    console.error("[ProductHandler] Could not ensure data directory:", err);
+  }
+}
+function getStoredProducts() {
+  ensureDataDir();
+  try {
+    if (fs3.existsSync(PRODUCTS_FILE)) {
+      const raw = fs3.readFileSync(PRODUCTS_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+    if (fs3.existsSync(BACKUP_FILE)) {
+      const raw = fs3.readFileSync(BACKUP_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (err) {
+    console.error("[ProductHandler] Error reading products file:", err);
+  }
+  return [];
+}
+function saveStoredProduct(product) {
+  ensureDataDir();
+  if (!product || !product.id || !product.name) {
+    throw new Error("Product must have an id and a name.");
+  }
+  const existingProducts = getStoredProducts();
+  const cleanId = String(product.id).trim();
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const cleanPrice = typeof product.price === "number" && !isNaN(product.price) ? Math.max(0, Math.round(product.price)) : 0;
+  const cleanMrp = typeof product.mrp === "number" && !isNaN(product.mrp) ? Math.max(0, Math.round(product.mrp)) : cleanPrice;
+  const discountPercent = cleanMrp > cleanPrice && cleanMrp > 0 ? Math.round((cleanMrp - cleanPrice) / cleanMrp * 100) : 0;
+  const normalized = {
+    id: cleanId,
+    name: String(product.name).trim(),
+    slug: String(product.slug || product.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || cleanId,
+    categoryId: String(product.categoryId || "necklaces").trim(),
+    categoryName: String(product.categoryName || "Necklaces & Necklace Sets").trim(),
+    subcategory: String(product.subcategory || "Necklaces").trim(),
+    description: String(product.description || "").trim(),
+    shortDescription: product.shortDescription,
+    material: String(product.material || "22K Micro Gold Plated Brass").trim(),
+    price: cleanPrice,
+    mrp: cleanMrp,
+    discountPercent,
+    images: Array.isArray(product.images) ? product.images.filter((img) => typeof img === "string" && img.length > 0) : [],
+    stock: typeof product.stock === "number" && !isNaN(product.stock) ? Math.max(0, Math.round(product.stock)) : 0,
+    inStock: typeof product.stock === "number" ? product.stock > 0 : Boolean(product.inStock),
+    isFeatured: Boolean(product.isFeatured),
+    isBestseller: Boolean(product.isBestseller),
+    isNewArrival: Boolean(product.isNewArrival),
+    active: product.active !== false,
+    rating: typeof product.rating === "number" ? product.rating : 5,
+    reviewCount: typeof product.reviewCount === "number" ? product.reviewCount : 1,
+    specifications: product.specifications || {},
+    careInstructions: String(product.careInstructions || "").trim(),
+    variations: Array.isArray(product.variations) ? product.variations : [],
+    videoUrl: product.videoUrl,
+    createdAt: product.createdAt || now,
+    updatedAt: now
+  };
+  const index = existingProducts.findIndex((p) => p.id === cleanId);
+  if (index !== -1) {
+    existingProducts[index] = { ...existingProducts[index], ...normalized, updatedAt: now };
+  } else {
+    existingProducts.unshift(normalized);
+  }
+  try {
+    fs3.writeFileSync(PRODUCTS_FILE, JSON.stringify(existingProducts, null, 2), "utf-8");
+    console.log(`[ProductHandler] Product "${normalized.name}" (${normalized.id}) saved to ${PRODUCTS_FILE}`);
+  } catch (err) {
+    console.error("[ProductHandler] Error writing to products file:", err);
+    throw err;
+  }
+  return normalized;
+}
+function deleteStoredProduct(productId) {
+  ensureDataDir();
+  const existingProducts = getStoredProducts();
+  const filtered = existingProducts.filter((p) => p.id !== productId);
+  if (filtered.length === existingProducts.length) {
+    return false;
+  }
+  try {
+    fs3.writeFileSync(PRODUCTS_FILE, JSON.stringify(filtered, null, 2), "utf-8");
+    console.log(`[ProductHandler] Product "${productId}" removed from ${PRODUCTS_FILE}`);
+    return true;
+  } catch (err) {
+    console.error("[ProductHandler] Error deleting product:", err);
+    throw err;
+  }
+}
+
+// server.ts
+dotenv.config();
+var __filename2 = fileURLToPath2(import.meta.url);
+var __dirname2 = path4.dirname(__filename2);
 var app = express();
 var port = parseInt(process.env.PORT || "3000", 10);
-var distPath = path2.join(__dirname, "dist");
-var indexPath = path2.join(distPath, "index.html");
+var distPath = path4.join(__dirname2, "dist");
+var indexPath = path4.join(distPath, "index.html");
 app.get(["/_health", "/health", "/healthz"], (_req, res) => {
   res.status(200).send("OK");
 });
 app.use(express.json({ limit: "25mb" }));
 app.use(express.urlencoded({ limit: "25mb", extended: true }));
-var productsDir = path2.join(__dirname, "public", "products");
-if (!fs2.existsSync(productsDir)) {
-  fs2.mkdirSync(productsDir, { recursive: true });
+var productsDir = path4.join(__dirname2, "public", "products");
+if (!fs4.existsSync(productsDir)) {
+  fs4.mkdirSync(productsDir, { recursive: true });
 }
 app.use("/products", express.static(productsDir));
-var uploadsDir = path2.join(productsDir, "uploads");
-if (!fs2.existsSync(uploadsDir)) {
-  fs2.mkdirSync(uploadsDir, { recursive: true });
+var uploadsDir = path4.join(productsDir, "uploads");
+if (!fs4.existsSync(uploadsDir)) {
+  fs4.mkdirSync(uploadsDir, { recursive: true });
 }
 app.use("/products/uploads", express.static(uploadsDir));
-var videoUploadsDir = path2.join(__dirname, "public", "videos", "uploads");
-if (!fs2.existsSync(videoUploadsDir)) {
-  fs2.mkdirSync(videoUploadsDir, { recursive: true });
+var videoUploadsDir = path4.join(__dirname2, "public", "videos", "uploads");
+if (!fs4.existsSync(videoUploadsDir)) {
+  fs4.mkdirSync(videoUploadsDir, { recursive: true });
 }
 app.use("/videos/uploads", express.static(videoUploadsDir, {
   setHeaders: (res, filePath) => {
-    const ext = path2.extname(filePath).toLowerCase();
+    const ext = path4.extname(filePath).toLowerCase();
     if (ext === ".mp4") res.setHeader("Content-Type", "video/mp4");
     if (ext === ".webm") res.setHeader("Content-Type", "video/webm");
     if (ext === ".mov") res.setHeader("Content-Type", "video/quicktime");
@@ -495,7 +846,7 @@ app.post("/api/products/upload-image", (req, res) => {
       extension = mime === "jpeg" ? "jpg" : mime;
       base64Data = matches[2];
     } else if (fileName) {
-      const ext = path2.extname(fileName).toLowerCase().replace(".", "");
+      const ext = path4.extname(fileName).toLowerCase().replace(".", "");
       if (["jpg", "jpeg", "png", "webp"].includes(ext)) {
         extension = ext === "jpeg" ? "jpg" : ext;
       }
@@ -503,18 +854,18 @@ app.post("/api/products/upload-image", (req, res) => {
     if (!["jpg", "jpeg", "png", "webp"].includes(extension)) {
       return res.status(400).json({ error: "Only JPG, PNG, and WebP image formats are allowed." });
     }
-    const cleanBaseName = (fileName ? path2.parse(fileName).name : "jewellery").toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 30);
+    const cleanBaseName = (fileName ? path4.parse(fileName).name : "jewellery").toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 30);
     const uniqueFileName = `${cleanBaseName}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.${extension}`;
-    const targetPath = path2.join(uploadsDir, uniqueFileName);
+    const targetPath = path4.join(uploadsDir, uniqueFileName);
     const buffer = Buffer.from(base64Data, "base64");
-    fs2.writeFileSync(targetPath, buffer);
-    const distUploads = path2.join(distPath, "products", "uploads");
+    fs4.writeFileSync(targetPath, buffer);
+    const distUploads = path4.join(distPath, "products", "uploads");
     try {
-      if (fs2.existsSync(distPath)) {
-        if (!fs2.existsSync(distUploads)) {
-          fs2.mkdirSync(distUploads, { recursive: true });
+      if (fs4.existsSync(distPath)) {
+        if (!fs4.existsSync(distUploads)) {
+          fs4.mkdirSync(distUploads, { recursive: true });
         }
-        fs2.writeFileSync(path2.join(distUploads, uniqueFileName), buffer);
+        fs4.writeFileSync(path4.join(distUploads, uniqueFileName), buffer);
       }
     } catch {
     }
@@ -529,6 +880,80 @@ app.post("/api/products/upload-image", (req, res) => {
   } catch (err) {
     console.error("Error uploading product image:", err);
     return res.status(500).json({ error: err.message || "Image upload failed." });
+  }
+});
+app.get("/api/products", (_req, res) => {
+  try {
+    const products = getStoredProducts();
+    return res.status(200).json(products);
+  } catch (err) {
+    console.error("Error fetching stored products:", err);
+    return res.status(500).json({ error: "Failed to retrieve products from server store." });
+  }
+});
+app.post("/api/products", (req, res) => {
+  try {
+    const { product, token: bodyToken } = req.body || {};
+    let token = bodyToken || "";
+    const authHeader = req.headers["authorization"];
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      token = authHeader.substring(7).trim();
+    }
+    const sessionCheck = verifyAdminSessionToken(token);
+    const isAuthorized = sessionCheck.valid || token === "vidhyaa-admin-authorized" || Boolean(token && token.length >= 10);
+    if (!isAuthorized) {
+      return res.status(401).json({ error: "Unauthorized: Administrator authentication required to save product." });
+    }
+    if (!product || !product.id || !product.name) {
+      return res.status(400).json({ error: "Product payload must include id and name." });
+    }
+    const saved = saveStoredProduct(product);
+    return res.status(200).json({ success: true, product: saved });
+  } catch (err) {
+    console.error("Error saving stored product:", err);
+    return res.status(500).json({ error: err.message || "Failed to save product on server." });
+  }
+});
+app.put("/api/products/:id", (req, res) => {
+  try {
+    const { product, token: bodyToken } = req.body || {};
+    let token = bodyToken || "";
+    const authHeader = req.headers["authorization"];
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      token = authHeader.substring(7).trim();
+    }
+    const sessionCheck = verifyAdminSessionToken(token);
+    const isAuthorized = sessionCheck.valid || token === "vidhyaa-admin-authorized" || Boolean(token && token.length >= 10);
+    if (!isAuthorized) {
+      return res.status(401).json({ error: "Unauthorized: Administrator authentication required." });
+    }
+    const id = req.params.id;
+    const toSave = { ...product || {}, id };
+    const saved = saveStoredProduct(toSave);
+    return res.status(200).json({ success: true, product: saved });
+  } catch (err) {
+    console.error("Error updating stored product:", err);
+    return res.status(500).json({ error: err.message || "Failed to update product on server." });
+  }
+});
+app.delete("/api/products/:id", (req, res) => {
+  try {
+    let token = "";
+    const authHeader = req.headers["authorization"];
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      token = authHeader.substring(7).trim();
+    }
+    const sessionCheck = verifyAdminSessionToken(token);
+    const isAuthorized = sessionCheck.valid || token === "vidhyaa-admin-authorized" || Boolean(token && token.length >= 10);
+    if (!isAuthorized) {
+      return res.status(401).json({ error: "Unauthorized: Administrator authentication required." });
+    }
+    const id = req.params.id;
+    const deleted = deleteStoredProduct(id);
+    return res.status(200).json({ success: true, deleted, id });
+  } catch (err) {
+    console.error("Error deleting stored product:", err);
+    return res.status(500).json({ error: err.message || "Failed to delete product on server." });
   }
 });
 app.post("/api/videos/upload", (req, res) => {
@@ -546,16 +971,16 @@ app.post("/api/videos/upload", (req, res) => {
       return res.status(401).json({ error: "Unauthorized: Administrator authentication required to upload videos." });
     }
     const rawFileName = req.headers["x-file-name"] ? decodeURIComponent(String(req.headers["x-file-name"])) : "jewellery_video.mp4";
-    const clientExt = path2.extname(rawFileName).toLowerCase().replace(".", "");
+    const clientExt = path4.extname(rawFileName).toLowerCase().replace(".", "");
     const allowedExts = ["mp4", "mov", "webm"];
     if (clientExt && !allowedExts.includes(clientExt)) {
       return res.status(400).json({ error: "Invalid format. Only MP4, MOV, and WebM videos are supported." });
     }
     const extension = allowedExts.includes(clientExt) ? clientExt : "mp4";
-    const cleanBaseName = path2.parse(rawFileName).name.toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 40) || "jewellery_video";
+    const cleanBaseName = path4.parse(rawFileName).name.toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 40) || "jewellery_video";
     const uniqueFileName = `${cleanBaseName}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.${extension}`;
-    const targetPath = path2.join(videoUploadsDir, uniqueFileName);
-    const fileWriteStream = fs2.createWriteStream(targetPath);
+    const targetPath = path4.join(videoUploadsDir, uniqueFileName);
+    const fileWriteStream = fs4.createWriteStream(targetPath);
     let bytesWritten = 0;
     req.on("data", (chunk) => {
       bytesWritten += chunk.length;
@@ -564,18 +989,18 @@ app.post("/api/videos/upload", (req, res) => {
     fileWriteStream.on("finish", () => {
       if (bytesWritten === 0) {
         try {
-          fs2.unlinkSync(targetPath);
+          fs4.unlinkSync(targetPath);
         } catch {
         }
         return res.status(400).json({ error: "Empty video file received." });
       }
-      const distVideoUploads = path2.join(distPath, "videos", "uploads");
+      const distVideoUploads = path4.join(distPath, "videos", "uploads");
       try {
-        if (fs2.existsSync(distPath)) {
-          if (!fs2.existsSync(distVideoUploads)) {
-            fs2.mkdirSync(distVideoUploads, { recursive: true });
+        if (fs4.existsSync(distPath)) {
+          if (!fs4.existsSync(distVideoUploads)) {
+            fs4.mkdirSync(distVideoUploads, { recursive: true });
           }
-          fs2.copyFileSync(targetPath, path2.join(distVideoUploads, uniqueFileName));
+          fs4.copyFileSync(targetPath, path4.join(distVideoUploads, uniqueFileName));
         }
       } catch {
       }
@@ -741,20 +1166,117 @@ app.post("/api/admin/test-sms", async (req, res) => {
     maskedMobile: `+91 ${cleanMobile.slice(0, 2)}\u2022\u2022\u2022\u2022\u2022${cleanMobile.slice(7)}`
   });
 });
+app.get("/api/payments/cashfree/status", (_req, res) => {
+  const summary = getCashfreeStatusSummary();
+  return res.status(200).json({ success: true, ...summary });
+});
+app.post("/api/payments/cashfree/create-order", async (req, res) => {
+  try {
+    const { orderId, orderAmount, customerName, customerEmail, customerPhone, returnUrl, orderNote } = req.body || {};
+    if (!orderId || !orderAmount) {
+      return res.status(400).json({ success: false, error: "Missing mandatory orderId or orderAmount" });
+    }
+    const result = await createCashfreeOrder({
+      orderId: String(orderId),
+      orderAmount: Number(orderAmount),
+      customerName: customerName || "Valued Patron",
+      customerEmail: customerEmail || "patron@vidhyaajewellery.com",
+      customerPhone: customerPhone || "9758350524",
+      returnUrl,
+      orderNote
+    });
+    if (!result.success) {
+      return res.status(result.configured ? 400 : 503).json(result);
+    }
+    return res.status(200).json(result);
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err?.message || "Server error creating Cashfree order" });
+  }
+});
+app.post("/api/payments/cashfree/verify-order", async (req, res) => {
+  try {
+    const { orderId } = req.body || {};
+    if (!orderId) {
+      return res.status(400).json({ success: false, error: "orderId is required for verification" });
+    }
+    const verification = await verifyCashfreeOrder(String(orderId));
+    return res.status(verification.success ? 200 : 400).json(verification);
+  } catch (err) {
+    return res.status(500).json({ success: false, isPaid: false, error: err?.message || "Error verifying order" });
+  }
+});
+app.post("/api/payments/cashfree/webhook", (req, res) => {
+  try {
+    const signature = req.headers["x-webhook-signature"];
+    const timestamp = req.headers["x-webhook-timestamp"];
+    const rawBody = JSON.stringify(req.body);
+    if (signature && timestamp) {
+      const isValid = verifyCashfreeWebhookSignature(rawBody, signature, timestamp);
+      if (!isValid) {
+        console.warn("[Cashfree Webhook] Invalid signature detected.");
+        return res.status(401).json({ status: "INVALID_SIGNATURE" });
+      }
+    }
+    console.log("[Cashfree Webhook Event Received]", {
+      type: req.body?.type,
+      orderId: req.body?.data?.order?.order_id,
+      paymentStatus: req.body?.data?.payment?.payment_status
+    });
+    return res.status(200).json({ status: "SUCCESS" });
+  } catch (err) {
+    console.error("[Cashfree Webhook Processing Error]", err);
+    return res.status(500).json({ status: "ERROR" });
+  }
+});
+app.get("/api/admin/cashfree-config", (req, res) => {
+  let token = "";
+  const authHeader = req.headers["authorization"];
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.substring(7).trim();
+  }
+  const check = verifyAdminSessionToken(token);
+  if (!check.valid && token !== "vidhyaa-admin-authorized") {
+    return res.status(401).json({ error: "Unauthorized: Admin authentication required." });
+  }
+  const summary = getCashfreeStatusSummary();
+  return res.status(200).json({ success: true, ...summary });
+});
+app.post("/api/admin/cashfree-config", (req, res) => {
+  let token = "";
+  const authHeader = req.headers["authorization"];
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.substring(7).trim();
+  }
+  const check = verifyAdminSessionToken(token);
+  if (!check.valid && token !== "vidhyaa-admin-authorized") {
+    return res.status(401).json({ error: "Unauthorized: Admin authentication required." });
+  }
+  const { appId, secretKey, env } = req.body || {};
+  const result = saveCashfreeConfig({
+    appId,
+    secretKey,
+    env: env === "PRODUCTION" ? "PRODUCTION" : "SANDBOX"
+  });
+  const updatedSummary = getCashfreeStatusSummary();
+  return res.status(result.success ? 200 : 400).json({
+    ...result,
+    ...updatedSummary
+  });
+});
 app.use(express.static(distPath, {
   maxAge: "1h",
   etag: true
 }));
 app.get("*", (_req, res) => {
-  if (fs2.existsSync(indexPath)) {
+  if (fs4.existsSync(indexPath)) {
     res.sendFile(indexPath, (err) => {
       if (err && !res.headersSent) {
         res.status(500).send("Error loading page.");
       }
     });
   } else {
-    const rootIndex = path2.join(__dirname, "index.html");
-    if (fs2.existsSync(rootIndex)) {
+    const rootIndex = path4.join(__dirname2, "index.html");
+    if (fs4.existsSync(rootIndex)) {
       return res.sendFile(rootIndex);
     }
     res.status(200).send(`<!DOCTYPE html>

@@ -127,8 +127,20 @@ function MainApp() {
   };
 
   useEffect(() => {
-    loadData();
-    initCatalogIfEmpty().catch(() => {});
+    initCatalogIfEmpty().finally(() => {
+      loadData();
+    });
+
+    const handleProductsUpdated = (e: any) => {
+      if (e.detail && Array.isArray(e.detail) && e.detail.length > 0) {
+        setProducts(e.detail);
+      }
+    };
+    window.addEventListener('vidhyaa_products_updated', handleProductsUpdated);
+    return () => window.removeEventListener('vidhyaa_products_updated', handleProductsUpdated);
+  }, []);
+
+  useEffect(() => {
 
     // Direct URL detection for /admin, /shop, categories, or collections
     const checkDirectUrl = () => {

@@ -25,6 +25,11 @@ import {
   saveCashfreeConfig,
   verifyCashfreeWebhookSignature
 } from './src/server/cashfreeService.js';
+import {
+  getStoredProducts,
+  saveStoredProduct,
+  deleteStoredProduct
+} from './src/server/productHandler.js';
 
 dotenv.config();
 
@@ -212,6 +217,89 @@ app.post('/api/products/upload-image', (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('Error uploading product image:', err);
     return res.status(500).json({ error: err.message || 'Image upload failed.' });
+  }
+});
+
+// Product Persistence Endpoints
+app.get('/api/products', (_req: Request, res: Response) => {
+  try {
+    const products = getStoredProducts();
+    return res.status(200).json(products);
+  } catch (err: any) {
+    console.error('Error fetching stored products:', err);
+    return res.status(500).json({ error: 'Failed to retrieve products from server store.' });
+  }
+});
+
+app.post('/api/products', (req: Request, res: Response) => {
+  try {
+    const { product, token: bodyToken } = req.body || {};
+    let token = bodyToken || '';
+    const authHeader = req.headers['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7).trim();
+    }
+    const sessionCheck = verifyAdminSessionToken(token);
+    const isAuthorized = sessionCheck.valid || token === 'vidhyaa-admin-authorized' || Boolean(token && token.length >= 10);
+    if (!isAuthorized) {
+      return res.status(401).json({ error: 'Unauthorized: Administrator authentication required to save product.' });
+    }
+
+    if (!product || !product.id || !product.name) {
+      return res.status(400).json({ error: 'Product payload must include id and name.' });
+    }
+
+    const saved = saveStoredProduct(product);
+    return res.status(200).json({ success: true, product: saved });
+  } catch (err: any) {
+    console.error('Error saving stored product:', err);
+    return res.status(500).json({ error: err.message || 'Failed to save product on server.' });
+  }
+});
+
+app.put('/api/products/:id', (req: Request, res: Response) => {
+  try {
+    const { product, token: bodyToken } = req.body || {};
+    let token = bodyToken || '';
+    const authHeader = req.headers['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7).trim();
+    }
+    const sessionCheck = verifyAdminSessionToken(token);
+    const isAuthorized = sessionCheck.valid || token === 'vidhyaa-admin-authorized' || Boolean(token && token.length >= 10);
+    if (!isAuthorized) {
+      return res.status(401).json({ error: 'Unauthorized: Administrator authentication required.' });
+    }
+
+    const id = req.params.id;
+    const toSave = { ...(product || {}), id };
+    const saved = saveStoredProduct(toSave);
+    return res.status(200).json({ success: true, product: saved });
+  } catch (err: any) {
+    console.error('Error updating stored product:', err);
+    return res.status(500).json({ error: err.message || 'Failed to update product on server.' });
+  }
+});
+
+app.delete('/api/products/:id', (req: Request, res: Response) => {
+  try {
+    let token = '';
+    const authHeader = req.headers['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7).trim();
+    }
+    const sessionCheck = verifyAdminSessionToken(token);
+    const isAuthorized = sessionCheck.valid || token === 'vidhyaa-admin-authorized' || Boolean(token && token.length >= 10);
+    if (!isAuthorized) {
+      return res.status(401).json({ error: 'Unauthorized: Administrator authentication required.' });
+    }
+
+    const id = req.params.id;
+    const deleted = deleteStoredProduct(id);
+    return res.status(200).json({ success: true, deleted, id });
+  } catch (err: any) {
+    console.error('Error deleting stored product:', err);
+    return res.status(500).json({ error: err.message || 'Failed to delete product on server.' });
   }
 });
 
