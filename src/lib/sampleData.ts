@@ -12,6 +12,13 @@ export const GENUINE_PRODUCT_IMAGE_FILENAMES = new Set([
   'sapphire_wheel_cocktail_ring_1650.jpg',
   'cushion_solitaire_winged_ring_1850.jpg',
   'oval_solitaire_infinity_ring_1150.jpg',
+  '_gold_plated_multicolor_polki__1792725900655_ib5s.jpg',
+  'diamond_set_with_violet_dublet_1792726066491_1ps7.jpg',
+  'gold__diamond_plated_neclace_l_1792726223045_u5vt.jpg',
+  'gold_polish_daily_use_no_effec_1792725709360_k74e.png',
+  'gold_rajwada_kada_openable_____1792726903001_4fx1.jpg',
+  'royal_gold_ad_square_pendant_n_1792726395202_nzjd.jpg',
+  'hero-section-image-final.jpg'
 ]);
 
 // Explicit list of sample/unwanted images to strictly exclude
@@ -77,7 +84,12 @@ export function isGenuineImageUrl(url?: string | null): boolean {
   }
 
   // Allow uploads stored in Firebase Cloud Storage
-  if (trimmed.includes('firebasestorage.googleapis.com')) {
+  if (trimmed.includes('firebasestorage.googleapis.com') || trimmed.includes('firebasestorage.app')) {
+    return true;
+  }
+
+  // Allow luxury fallback banner
+  if (trimmed === '/hero-section-image-final.jpg') {
     return true;
   }
 
@@ -189,8 +201,8 @@ export const INITIAL_CATEGORIES: Category[] = [
     slug: 'mangalsutra',
     subtitle: 'Sacred American Diamond & Black Onyx Heirlooms',
     description: 'Contemporary elegant bridal mangalsutras featuring sunburst feather motifs paved with VVS American Diamonds and matching earrings.',
-    image: '',
-    heroBannerUrl: '',
+    image: '/products/uploads/royal_gold_ad_square_pendant_n_1792726395202_nzjd.jpg',
+    heroBannerUrl: '/products/uploads/royal_gold_ad_square_pendant_n_1792726395202_nzjd.jpg',
     subcategories: ['Sunburst Designs', 'AD Mangalsutras', 'Daily Wear'],
     active: true,
     order: 2,
@@ -368,8 +380,8 @@ export const INITIAL_CATEGORIES: Category[] = [
     slug: 'kangan-kada-and-bracelet',
     subtitle: 'Royal Rajputana Kadas, Traditional Kangans & Designer Cuffs',
     description: 'Handcrafted 22K micro gold plated kangan, artisanal openable kadas, and luxury American diamond bracelets with secure safety locks.',
-    image: '',
-    heroBannerUrl: '',
+    image: '/products/uploads/gold_rajwada_kada_openable_____1792726903001_4fx1.jpg',
+    heroBannerUrl: '/products/uploads/gold_rajwada_kada_openable_____1792726903001_4fx1.jpg',
     subcategories: ['All Styles', 'Kangan / Kada', 'Bracelets', 'Openable Kadas', 'Traditional Bangles', 'Cuff Bracelets'],
     active: true,
     order: 5,
@@ -381,7 +393,7 @@ export const INITIAL_CATEGORIES: Category[] = [
     galleryImages: [
       {
         id: 'img-kb-polki-pair',
-        url: '/products/polki_kundan_ad_kada_pair_1450.jpg',
+        url: '/products/uploads/gold_rajwada_kada_openable_____1792726903001_4fx1.jpg',
         title: 'Royal 22K Gold Plated Polki Kundan & AD Openable Kadas',
         caption: '₹1,450 • Uncut Polki Kundan and Marquise Lattice',
         isCover: true,
@@ -406,8 +418,8 @@ export const INITIAL_CATEGORIES: Category[] = [
     slug: 'watches',
     subtitle: 'Luxury Royal Timepieces & Artisan Wristwear',
     description: 'Handcrafted royal luxury watches and heritage timepieces celebrating timeless Indian craftsmanship with 22K micro gold and rose gold finishes.',
-    image: '',
-    heroBannerUrl: '',
+    image: '/products/uploads/gold__diamond_plated_neclace_l_1792726223045_u5vt.jpg',
+    heroBannerUrl: '/products/uploads/gold__diamond_plated_neclace_l_1792726223045_u5vt.jpg',
     subcategories: ['All Watches', 'Royal Timepieces', 'Gold Finish Watches', 'Diamond Studded', 'Daily Wear'],
     active: true,
     order: 6,
@@ -446,7 +458,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     price: 1250,
     mrp: 2500,
     discountPercent: 50,
-    images: [],
+    images: ['/products/pink_beaded_choker_set_1250.jpg'],
     stock: 15,
     inStock: true,
     isFeatured: true,
@@ -472,7 +484,7 @@ export const INITIAL_PRODUCTS: Product[] = [
         price: 1250,
         mrp: 2500,
         stock: 15,
-        image: '',
+        image: '/products/pink_beaded_choker_set_1250.jpg',
         active: true
       }
     ],
@@ -494,7 +506,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     price: 1250,
     mrp: 2500,
     discountPercent: 50,
-    images: [],
+    images: ['/products/pink_beaded_choker_set_1250.jpg'],
     stock: 18,
     inStock: true,
     isFeatured: true,
@@ -519,7 +531,7 @@ export const INITIAL_PRODUCTS: Product[] = [
         price: 1250,
         mrp: 2500,
         stock: 18,
-        image: '',
+        image: '/products/pink_beaded_choker_set_1250.jpg',
         active: true
       }
     ],
@@ -541,7 +553,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     price: 2200,
     mrp: 4400,
     discountPercent: 50,
-    images: [],
+    images: ['/products/uploads/_gold_plated_multicolor_polki__1792725900655_ib5s.jpg'],
     stock: 12,
     inStock: true,
     isFeatured: true,
@@ -567,7 +579,7 @@ export const INITIAL_PRODUCTS: Product[] = [
         price: 2200,
         mrp: 4400,
         stock: 12,
-        image: '',
+        image: '/products/uploads/_gold_plated_multicolor_polki__1792725900655_ib5s.jpg',
         active: true
       }
     ],
@@ -638,7 +650,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     price: 600,
     mrp: 1200,
     discountPercent: 50,
-    images: [],
+    images: ['/products/uploads/royal_gold_ad_square_pendant_n_1792726395202_nzjd.jpg'],
     stock: 30,
     inStock: true,
     isFeatured: true,
@@ -662,7 +674,7 @@ export const INITIAL_PRODUCTS: Product[] = [
         price: 600,
         mrp: 1200,
         stock: 30,
-        image: '',
+        image: '/products/uploads/royal_gold_ad_square_pendant_n_1792726395202_nzjd.jpg',
         active: true
       }
     ],
@@ -1114,7 +1126,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     price: 2200,
     mrp: 4400,
     discountPercent: 50,
-    images: [],
+    images: ['/products/uploads/royal_gold_ad_square_pendant_n_1792726395202_nzjd.jpg'],
     stock: 15,
     inStock: true,
     isFeatured: true,
@@ -1138,7 +1150,7 @@ export const INITIAL_PRODUCTS: Product[] = [
         price: 2200,
         mrp: 4400,
         stock: 15,
-        image: '',
+        image: '/products/uploads/royal_gold_ad_square_pendant_n_1792726395202_nzjd.jpg',
         active: true
       }
     ],
@@ -1160,7 +1172,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     price: 2200,
     mrp: 4400,
     discountPercent: 50,
-    images: [],
+    images: ['/products/uploads/royal_gold_ad_square_pendant_n_1792726395202_nzjd.jpg'],
     stock: 18,
     inStock: true,
     isFeatured: true,
@@ -1184,7 +1196,7 @@ export const INITIAL_PRODUCTS: Product[] = [
         price: 2200,
         mrp: 4400,
         stock: 18,
-        image: '',
+        image: '/products/uploads/royal_gold_ad_square_pendant_n_1792726395202_nzjd.jpg',
         active: true
       }
     ],
@@ -1206,7 +1218,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     price: 10000,
     mrp: 20000,
     discountPercent: 50,
-    images: [],
+    images: ['/products/rajwada_choker_set_green_2100.jpg'],
     stock: 8,
     inStock: true,
     isFeatured: true,
@@ -1231,7 +1243,7 @@ export const INITIAL_PRODUCTS: Product[] = [
         price: 10000,
         mrp: 20000,
         stock: 8,
-        image: '',
+        image: '/products/rajwada_choker_set_green_2100.jpg',
         active: true
       }
     ],
@@ -1577,7 +1589,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     price: 1200,
     mrp: 2400,
     discountPercent: 50,
-    images: [],
+    images: ['/products/uploads/gold_rajwada_kada_openable_____1792726903001_4fx1.jpg'],
     stock: 25,
     inStock: true,
     isFeatured: true,
@@ -1605,7 +1617,7 @@ export const INITIAL_PRODUCTS: Product[] = [
         price: 1200,
         mrp: 2400,
         stock: 25,
-        image: '',
+        image: '/products/uploads/gold_rajwada_kada_openable_____1792726903001_4fx1.jpg',
         active: true
       },
       {
@@ -1617,7 +1629,7 @@ export const INITIAL_PRODUCTS: Product[] = [
         price: 1200,
         mrp: 2400,
         stock: 15,
-        image: '',
+        image: '/products/uploads/gold_rajwada_kada_openable_____1792726903001_4fx1.jpg',
         active: true
       },
       {
@@ -1629,7 +1641,7 @@ export const INITIAL_PRODUCTS: Product[] = [
         price: 1200,
         mrp: 2400,
         stock: 12,
-        image: '',
+        image: '/products/uploads/gold_rajwada_kada_openable_____1792726903001_4fx1.jpg',
         active: true
       }
     ],
@@ -1804,7 +1816,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     mrp: 2900,
     discountPercent: 50,
     images: [
-      '/products/polki_kundan_ad_kada_pair_1450.jpg'
+      '/products/uploads/gold_rajwada_kada_openable_____1792726903001_4fx1.jpg'
     ],
     stock: 20,
     inStock: true,
@@ -1832,7 +1844,7 @@ export const INITIAL_PRODUCTS: Product[] = [
         price: 1450,
         mrp: 2900,
         stock: 20,
-        image: '/products/polki_kundan_ad_kada_pair_1450.jpg',
+        image: '/products/uploads/gold_rajwada_kada_openable_____1792726903001_4fx1.jpg',
         active: true
       }
     ],

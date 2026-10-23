@@ -42,29 +42,37 @@ export const SHOP_BY_COLLECTION_ITEMS: NavDropdownItem[] = [
  * Filter catalog products by navigation category or collection slug
  */
 export function filterProductsByNavSlug(products: Product[], slug: string): Product[] {
-  const f = (slug || 'all').toLowerCase();
+  const f = (slug || 'all').toLowerCase().trim();
+  if (f === 'all') return products;
 
   return products.filter((p) => {
     const text = `${p.name} ${p.description} ${p.shortDescription || ''} ${p.subcategory || ''} ${p.categoryName || ''} ${p.material}`.toLowerCase();
+    const pCatId = (p.categoryId || '').toLowerCase().trim();
+    const pCatSlug = pCatId.replace(/[^a-z0-9]+/g, '-');
 
-    // 1. Categories
+    // 1. Direct match by categoryId or slug
+    if (pCatId === f || pCatSlug === f) {
+      return true;
+    }
+
+    // 2. Categories with specialized mapping
     if (f === 'necklace' || f === 'necklaces') {
-      return p.categoryId === 'necklaces' && !text.includes('choker');
+      return (pCatId === 'necklaces' || pCatId === 'necklace') && !text.includes('choker');
     }
     if (f === 'chocker-set' || f === 'choker-set' || f === 'choker' || f === 'chokers') {
-      return text.includes('choker');
+      return text.includes('choker') || pCatId === 'chocker-set' || pCatId === 'choker-set';
     }
     if (f === 'chains' || f === 'chain') {
-      return text.includes('chain') || text.includes('matar mala');
+      return pCatId === 'chains' || text.includes('chain') || text.includes('matar mala');
     }
     if (f === 'pendant-set' || f === 'pendant-sets' || f === 'pendants' || f === 'pendant') {
-      return text.includes('pendant');
+      return pCatId === 'pendant-set' || pCatId === 'pendants' || text.includes('pendant');
     }
     if (f === 'mangalsutra') {
-      return p.categoryId === 'mangalsutra' || text.includes('mangalsutra');
+      return pCatId === 'mangalsutra' || text.includes('mangalsutra');
     }
     if (f === 'earrings-cuffs' || f === 'earrings' || f === 'cuffs') {
-      return text.includes('earring') || text.includes('jhumka') || text.includes('cuff');
+      return pCatId === 'earrings-cuffs' || text.includes('earring') || text.includes('jhumka') || text.includes('cuff');
     }
     if (
       f === 'bangles-kangan-kada-bracelets' ||
@@ -74,37 +82,39 @@ export function filterProductsByNavSlug(products: Product[], slug: string): Prod
       f === 'bracelet' ||
       f === 'bracelets' ||
       f === 'bangles-bracelets' ||
-      f === 'bangles-kangan'
+      f === 'bangles-kangan' ||
+      f === 'bangles' ||
+      f === 'kada' ||
+      f === 'kadas'
     ) {
       return (
-        p.categoryId === 'kangan-kada-bracelet' ||
-        /\b(bangle|bangles|kangan|kada|kadas|bracelet|bracelets)\b/.test(p.name.toLowerCase())
+        pCatId === 'kangan-kada-bracelet' ||
+        pCatId === 'bangles' ||
+        pCatId === 'bracelets' ||
+        /\b(bangle|bangles|kangan|kada|kadas|bracelet|bracelets)\b/.test(text)
       );
     }
-    if (f === 'rings' || f === 'devotional-rings') {
+    if (f === 'rings' || f === 'devotional-rings' || f === 'ring') {
       return (
-        p.categoryId === 'rings' ||
-        p.categoryId === 'devotional-rings' ||
-        (/\b(ring|rings)\b/.test(p.name.toLowerCase()) && !/\bearring\b/.test(p.name.toLowerCase()))
+        pCatId === 'rings' ||
+        pCatId === 'devotional-rings' ||
+        (/\b(ring|rings)\b/.test(text) && !/\bearring\b/.test(text))
       );
     }
     if (f === 'mla-jewellery' || f === 'mala' || f === 'mala-jewellery') {
       return text.includes('mala') || text.includes('haar') || text.includes('pearl');
     }
     if (f === 'elegent-everyday' || f === 'elegant-everyday' || f === 'everyday') {
-      return text.includes('daily') || text.includes('everyday');
+      return pCatId === 'elegent-everyday' || text.includes('daily') || text.includes('everyday') || text.includes('waterproof');
     }
     if (f === 'best-sellers' || f === 'bestsellers' || f === 'bestseller') {
-      return !!p.isBestseller || p.rating >= 4.8;
+      return !!p.isBestseller || (p.rating || 0) >= 4.8;
     }
     if (f === 'watches' || f === 'watch') {
-      return text.includes('watch');
+      return pCatId === 'watches' || text.includes('watch') || text.includes('timepiece');
     }
 
-    // 2. Collections
-    if (f === 'all') {
-      return true;
-    }
+    // 3. Collections
     if (
       f === 'diamond-necklace-sett' ||
       f === 'diamond-necklace-sets' ||
@@ -138,7 +148,7 @@ export function filterProductsByNavSlug(products: Product[], slug: string): Prod
       return text.includes('rajwada');
     }
 
-    return true;
+    return false;
   });
 }
 

@@ -43,12 +43,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const discountPercent = calculateDiscountPercent(currentMrp, currentPrice);
   const hasDiscount = currentMrp > currentPrice && discountPercent > 0;
 
-  const hasGenuineImage = Boolean(displayImage && isGenuineImageUrl(displayImage) && !imageError);
-
-  // If the product is not genuine or has no genuine image, or if the image failed to load, hide it from the storefront
-  if (!isGenuineProduct(product) || !hasGenuineImage || imageError) {
-    return null;
-  }
+  // Elegant luxury fallback placeholder if image is missing or cannot be loaded
+  const fallbackImage = '/hero-section-image-final.jpg';
+  const effectiveImage = (!imageError && displayImage) ? displayImage : fallbackImage;
 
   const handleAddToCart = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -104,14 +101,17 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         )}
 
         <img
-          src={displayImage}
+          src={effectiveImage}
           alt={product.name}
           className={`w-full h-full object-contain object-center group-hover:scale-105 transition-transform duration-500 ease-out ${
             imageLoaded ? 'opacity-100' : 'opacity-0'
           }`}
           loading="lazy"
           onLoad={() => setImageLoaded(true)}
-          onError={() => setImageError(true)}
+          onError={() => {
+            setImageError(true);
+            setImageLoaded(true);
+          }}
         />
 
         {/* Badges */}

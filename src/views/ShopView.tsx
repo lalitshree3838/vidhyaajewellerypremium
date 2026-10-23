@@ -122,9 +122,9 @@ export const ShopView: React.FC<ShopViewProps> = ({
     }
   }, [initialCategory]);
 
-  // Restrict to genuine products with verified uploaded photos
+  // Include all authentic catalog products
   const genuineProducts = useMemo(() => {
-    return products.filter((p) => isGenuineProduct(p) && p.images && p.images.some(isGenuineImageUrl));
+    return products.filter((p) => isGenuineProduct(p));
   }, [products]);
 
   // Dynamic materials & finishes derived solely from actual catalog products

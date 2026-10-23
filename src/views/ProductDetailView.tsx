@@ -109,7 +109,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const rawGallery = variationImage
     ? [variationImage, ...product.images.filter((img) => img !== variationImage)]
     : product.images;
-  const galleryImages = rawGallery.filter(isGenuineImageUrl);
+  const validGallery = rawGallery.filter((img) => img && isGenuineImageUrl(img));
+  const galleryImages = validGallery.length > 0 ? validGallery : ['/hero-section-image-final.jpg'];
 
   const currentDisplayImage = galleryImages[activeImageIndex] || galleryImages[0];
   const hasGenuineVideo = Boolean(product.videoUrl && isGenuineVideoUrl(product.videoUrl));

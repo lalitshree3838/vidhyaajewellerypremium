@@ -72,6 +72,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { isGenuineImageUrl } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice, validatePrices } from '../lib/priceUtils';
+import { uploadProductImageToStorage } from '../lib/storageService';
 
 interface AdminViewProps {
   products: Product[];
@@ -405,7 +406,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
       stock: 10,
       inStock: true,
       active: true,
-      isFeatured: false,
+      isFeatured: true,
       isBestseller: false,
       isNewArrival: true,
       rating: 5.0,
@@ -719,40 +720,11 @@ export const AdminView: React.FC<AdminViewProps> = ({
     setImageUploadStatus(null);
 
     try {
-      const storedToken =
-        localStorage.getItem('vidhyaa_admin_token') ||
-        sessionStorage.getItem('vidhyaa_admin_token') ||
-        'vidhyaa-admin-authorized';
-
-      let uploadedUrl = '';
-      try {
-        const response = await fetch('/api/products/upload-image', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${storedToken}`
-          },
-          body: JSON.stringify({
-            imageBase64: selectedFileForUpload.base64,
-            fileName: selectedFileForUpload.name,
-            token: storedToken
-          })
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          if (data && data.success && data.url) {
-            uploadedUrl = data.url;
-          }
-        }
-      } catch (uploadNetErr) {
-        console.warn('Server upload endpoint not reached, falling back to embedded payload:', uploadNetErr);
-      }
-
-      // If backend file endpoint was not reachable, fallback to persistent base64 data URL
-      if (!uploadedUrl) {
-        uploadedUrl = selectedFileForUpload.base64;
-      }
+      // Upload directly to persistent Firebase Cloud Storage (with optimized data URI fallback)
+      const uploadedUrl = await uploadProductImageToStorage(
+        selectedFileForUpload.file,
+        editingProduct.name
+      );
 
       // Add to product images
       const updatedImages = [...(editingProduct.images || []), uploadedUrl];

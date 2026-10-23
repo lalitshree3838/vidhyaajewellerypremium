@@ -76,18 +76,23 @@ export const HomeView: React.FC<HomeViewProps> = ({
   };
 
   const genuineProducts = useMemo(() => {
-    return products.filter((p: Product) => {
-      if (!isGenuineProduct(p)) return false;
-      const validImg = (p.images || []).find((img) => isGenuineImageUrl(img) && !failedImageUrls.has(img));
-      return Boolean(validImg);
-    });
-  }, [products, failedImageUrls]);
+    return products.filter((p: Product) => isGenuineProduct(p));
+  }, [products]);
 
-  const filteredProducts = genuineProducts.filter((p: Product) => {
-    if (activeTab === 'bestsellers') return p.isBestseller;
-    if (activeTab === 'new') return p.isNewArrival;
-    return p.isFeatured;
-  });
+  const filteredProducts = useMemo(() => {
+    if (activeTab === 'bestsellers') {
+      const best = genuineProducts.filter((p) => p.isBestseller);
+      if (best.length > 0) return best;
+    } else if (activeTab === 'new') {
+      const newItems = genuineProducts.filter((p) => p.isNewArrival);
+      if (newItems.length > 0) return newItems;
+    } else {
+      // 'featured' tab: display featured products or recent active products
+      const feat = genuineProducts.filter((p) => p.isFeatured);
+      if (feat.length > 0) return feat;
+    }
+    return genuineProducts;
+  }, [genuineProducts, activeTab]);
 
   const handleShopNow = () => {
     const el = document.getElementById('shop-products');

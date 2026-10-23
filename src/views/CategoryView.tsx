@@ -61,24 +61,50 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
   // Video Modal Player
   const [activeVideo, setActiveVideo] = useState<CategoryVideo | null>(null);
 
-  // Products belonging strictly to this category (genuine verified with valid photos only)
+  // Products belonging to this category with normalized ID and keyword fallback
   const categoryProducts = useMemo(() => {
+    const catId = (category.id || '').toLowerCase().trim();
+    const catSlug = (category.slug || catId).toLowerCase().trim();
+
     return products.filter((p) => {
       if (!isGenuineProduct(p)) return false;
-      const hasImage = p.images && p.images.some(isGenuineImageUrl);
-      if (!hasImage) return false;
-      if (p.categoryId === category.id) return true;
-      if ((category.id === 'rings' || category.id === 'devotional-rings') && (p.categoryId === 'rings' || p.categoryId === 'devotional-rings')) return true;
+      const pCatId = (p.categoryId || '').toLowerCase().trim();
+      const pCatSlug = pCatId.replace(/[^a-z0-9]+/g, '-');
+
+      // Direct match
+      if (pCatId === catId || pCatSlug === catSlug || pCatId === catSlug || pCatSlug === catId) {
+        return true;
+      }
+
+      // Rings and Devotional Rings grouping
+      if ((catId === 'rings' || catId === 'devotional-rings') && (pCatId === 'rings' || pCatId === 'devotional-rings')) {
+        return true;
+      }
+
+      // Bangles, Kangan, Kada, Bracelets
       if (
-        (category.id === 'kangan-kada-bracelet' || category.id === 'kangan-kada' || category.id === 'bracelet' || category.id === 'bracelets') &&
-        (p.categoryId === 'kangan-kada-bracelet' ||
+        (catId.includes('kangan') || catId.includes('bangle') || catId.includes('kada') || catId.includes('bracelet')) &&
+        (pCatId.includes('kangan') || pCatId.includes('bangle') || pCatId.includes('kada') || pCatId.includes('bracelet') ||
          ['kangan', 'kada', 'bracelet', 'bangle'].some((kw) =>
            `${p.name} ${p.description} ${p.shortDescription || ''} ${p.subcategory || ''}`.toLowerCase().includes(kw)
          ))
-      ) return true;
+      ) {
+        return true;
+      }
+
+      // Watches
+      if (catId === 'watches' && (pCatId === 'watches' || `${p.name} ${p.description}`.toLowerCase().includes('watch'))) {
+        return true;
+      }
+
+      // Chains & Matar Mala
+      if ((catId === 'chains' || catId === 'chain') && (pCatId === 'chains' || `${p.name} ${p.description}`.toLowerCase().includes('chain') || `${p.name} ${p.description}`.toLowerCase().includes('mala'))) {
+        return true;
+      }
+
       return false;
     });
-  }, [products, category.id]);
+  }, [products, category.id, category.slug]);
 
   // Featured Products pinned by CMS
   const featuredProducts = useMemo(() => {

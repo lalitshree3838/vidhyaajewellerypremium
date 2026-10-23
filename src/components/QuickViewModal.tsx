@@ -50,10 +50,12 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
 
   // When variation is selected, the primary image switches to that variation's image!
   const variationImage = selectedVariation?.image;
-  const currentImages = (variationImage ? [variationImage, ...product.images.filter(img => img !== variationImage)] : product.images).filter(isGenuineImageUrl);
+  const rawList = variationImage
+    ? [variationImage, ...product.images.filter((img) => img !== variationImage)]
+    : product.images;
+  const validList = rawList.filter((img) => img && isGenuineImageUrl(img));
+  const currentImages = validList.length > 0 ? validList : ['/hero-section-image-final.jpg'];
   const activeImage = currentImages[activeImageIndex] || currentImages[0];
-
-  if (currentImages.length === 0) return null;
 
   const currentPrice = product.price;
   const currentMrp = product.mrp > 0 ? product.mrp : product.price;

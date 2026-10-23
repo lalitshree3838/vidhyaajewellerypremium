@@ -363,6 +363,11 @@ export async function fetchProducts(): Promise<Product[]> {
           }))
         : [];
 
+      const fallbackSample = INITIAL_PRODUCTS.find((p) => p.id === d.id);
+      const finalImgs = cleanImgs.length > 0
+        ? cleanImgs
+        : (fallbackSample?.images && fallbackSample.images.length > 0 ? fallbackSample.images : ['/hero-section-image-final.jpg']);
+
       const prodCandidate: Product = {
         id: d.id,
         name: data.name || '',
@@ -376,19 +381,19 @@ export async function fetchProducts(): Promise<Product[]> {
         price: cleanPrice,
         mrp: cleanMrp,
         discountPercent,
-        images: cleanImgs,
+        images: finalImgs,
         stock: typeof data.stock === 'number' ? data.stock : 0,
         inStock: typeof data.stock === 'number' ? data.stock > 0 : Boolean(data.inStock),
-        isFeatured: Boolean(data.isFeatured),
+        isFeatured: typeof data.isFeatured === 'boolean' ? data.isFeatured : true,
         isBestseller: Boolean(data.isBestseller),
-        isNewArrival: Boolean(data.isNewArrival),
+        isNewArrival: typeof data.isNewArrival === 'boolean' ? data.isNewArrival : true,
         active: data.active !== false,
         rating: typeof data.rating === 'number' ? data.rating : 5,
         reviewCount: typeof data.reviewCount === 'number' ? data.reviewCount : 1,
         specifications: data.specifications || {},
         careInstructions: data.careInstructions || '',
         variations: cleanVars,
-        videoUrl: (typeof data.videoUrl === 'string' && data.videoUrl.trim()) ? data.videoUrl.trim() : INITIAL_PRODUCTS.find((p) => p.id === d.id)?.videoUrl,
+        videoUrl: (typeof data.videoUrl === 'string' && data.videoUrl.trim()) ? data.videoUrl.trim() : fallbackSample?.videoUrl,
         createdAt: data.createdAt || new Date().toISOString(),
         updatedAt: data.updatedAt || new Date().toISOString()
       };
@@ -591,9 +596,13 @@ export async function saveProduct(product: Product): Promise<Product> {
     window.dispatchEvent(new CustomEvent('vidhyaa_products_updated', { detail: cached }));
   }
 
-  // If neither Firestore nor server succeeded, throw so the UI can report context
-  if (!firestoreSuccess && !serverSuccess && firestoreError) {
-    handleFirestoreError(firestoreError, OperationType.WRITE, `${PRODUCTS_COL}/${sanitized.id}`);
+  // Ensure Firestore confirmed the write before reporting success
+  if (!firestoreSuccess) {
+    if (firestoreError) {
+      handleFirestoreError(firestoreError, OperationType.WRITE, `${PRODUCTS_COL}/${sanitized.id}`);
+    } else {
+      throw new Error('Failed to confirm product save to Firestore.');
+    }
   }
 
   return sanitized;
