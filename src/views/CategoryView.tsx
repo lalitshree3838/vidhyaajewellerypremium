@@ -10,6 +10,7 @@ import {
 import { ProductCard } from '../components/ProductCard';
 import { MetadataManager } from '../components/MetadataManager';
 import { isGenuineProduct, isGenuineImageUrl, isGenuineVideoUrl } from '../lib/sampleData';
+import { SeamlessLoopVideo } from '../components/SeamlessLoopVideo';
 import {
   Sparkles,
   ChevronRight,
@@ -172,16 +173,16 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     return order.filter((key) => !hidden.has(key));
   }, [category.sectionsOrder, category.hiddenSections]);
 
-  // Helper to detect YouTube / Vimeo embed
+  // Helper to detect YouTube / Vimeo embed with continuous looping
   const getEmbedUrl = (url: string) => {
     if (!url) return null;
     const ytMatch = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i);
     if (ytMatch && ytMatch[1]) {
-      return `https://www.youtube.com/embed/${ytMatch[1]}?autoplay=1`;
+      return `https://www.youtube.com/embed/${ytMatch[1]}?autoplay=1&loop=1&playlist=${ytMatch[1]}&mute=1&playsinline=1`;
     }
     const vimeoMatch = url.match(/vimeo\.com\/(?:channels\/(?:\w+\/)?|groups\/([^\/]*)\/videos\/|album\/(\d+)\/video\/|)(\d+)(?:$|\/|\?)/i);
     if (vimeoMatch && vimeoMatch[3]) {
-      return `https://player.vimeo.com/video/${vimeoMatch[3]}?autoplay=1`;
+      return `https://player.vimeo.com/video/${vimeoMatch[3]}?autoplay=1&loop=1&muted=1`;
     }
     return null;
   };
@@ -468,12 +469,23 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
                       key={video.id}
                       className="bg-white rounded-3xl overflow-hidden border border-[#E8DCCF] shadow-sm hover:shadow-xl transition-all duration-300 flex flex-col"
                     >
-                      {/* Video Thumbnail Area */}
+                      {/* Video Thumbnail Area with Continuous Seamless Loop Preview */}
                       <div
                         onClick={() => setActiveVideo(video)}
                         className="relative aspect-video bg-black cursor-pointer group overflow-hidden"
                       >
-                        {(video.thumbnailUrl || category.image) ? (
+                        {video.videoUrl && !getEmbedUrl(video.videoUrl) ? (
+                          <SeamlessLoopVideo
+                            src={video.videoUrl}
+                            poster={video.thumbnailUrl || category.image}
+                            title={video.title}
+                            autoPlay={true}
+                            isMuted={true}
+                            enableObserver={true}
+                            observerThreshold={0.15}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
+                          />
+                        ) : (video.thumbnailUrl || category.image) ? (
                           <img
                             src={video.thumbnailUrl || category.image}
                             alt={video.title}
@@ -483,20 +495,20 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
                         ) : (
                           <div className="w-full h-full bg-gradient-to-br from-[#241C1A] to-[#120B0D] flex items-center justify-center opacity-90" />
                         )}
-                        <div className="absolute inset-0 bg-black/40 group-hover:bg-black/25 transition-colors flex items-center justify-center">
-                          <div className="w-14 h-14 rounded-full bg-[#DFB982] text-[#3B1E22] flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform">
+                        <div className="absolute inset-0 bg-black/30 group-hover:bg-black/15 transition-colors flex items-center justify-center pointer-events-none">
+                          <div className="w-14 h-14 rounded-full bg-[#DFB982]/90 backdrop-blur-sm text-[#3B1E22] flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform">
                             <Play className="w-6 h-6 fill-[#3B1E22] ml-1" />
                           </div>
                         </div>
 
                         {video.duration && (
-                          <div className="absolute bottom-3 right-3 bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-md text-[11px] font-mono text-white">
+                          <div className="absolute bottom-3 right-3 bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-md text-[11px] font-mono text-white pointer-events-none">
                             {video.duration}
                           </div>
                         )}
 
                         {video.isFeatured && (
-                          <div className="absolute top-3 left-3 bg-[#802336] text-white text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider">
+                          <div className="absolute top-3 left-3 bg-[#802336] text-white text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider pointer-events-none">
                             Featured Video
                           </div>
                         )}
@@ -1000,16 +1012,16 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
                   allowFullScreen
                 />
               ) : (
-                <video
+                <SeamlessLoopVideo
                   src={activeVideo.videoUrl}
                   poster={activeVideo.thumbnailUrl}
-                  autoPlay
-                  controls
-                  playsInline
+                  title={activeVideo.title}
+                  autoPlay={true}
+                  isMuted={false}
+                  controls={true}
+                  enableObserver={false}
                   className="w-full h-full object-contain"
-                >
-                  <source src={activeVideo.videoUrl} type="video/mp4" />
-                </video>
+                />
               )}
             </div>
 

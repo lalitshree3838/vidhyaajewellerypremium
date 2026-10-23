@@ -21,6 +21,8 @@ import { useCart } from '../context/CartContext';
 import { isGenuineVideoUrl, isGenuineImageUrl, INITIAL_PRODUCTS } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 
+import { SeamlessLoopVideo, SeamlessLoopVideoHandle } from './SeamlessLoopVideo';
+
 interface VideoReelItem {
   id: string;
   title: string;
@@ -51,71 +53,16 @@ const AutoplayingReelVideo: React.FC<AutoplayingReelVideoProps> = ({
   posterImage,
   title
 }) => {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    // Strict muted and playsInline for continuous uninterrupted loop autoplay without user interaction
-    video.muted = true;
-    video.defaultMuted = true;
-    video.loop = true;
-
-    const playVideo = () => {
-      if (video.paused) {
-        const promise = video.play();
-        if (promise !== undefined) {
-          promise.catch(() => {
-            // Autoplay gracefully handles browser restriction until visible
-          });
-        }
-      }
-    };
-
-    // Attempt playback immediately upon mounting
-    playVideo();
-
-    // IntersectionObserver guarantees autoplay triggers when the section enters the viewport
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            playVideo();
-          }
-        });
-      },
-      { threshold: 0.05 }
-    );
-
-    if (containerRef.current) {
-      observer.observe(containerRef.current);
-    }
-
-    return () => {
-      observer.disconnect();
-    };
-  }, [videoUrl]);
-
   return (
-    <div
-      ref={containerRef}
-      className="absolute inset-0 w-full h-full overflow-hidden bg-black select-none pointer-events-none"
-    >
-      <video
-        ref={videoRef}
+    <div className="absolute inset-0 w-full h-full overflow-hidden bg-black select-none pointer-events-none">
+      <SeamlessLoopVideo
         src={videoUrl}
-        autoPlay
-        muted
-        loop
-        playsInline
-        preload="auto"
-        controls={false}
         poster={posterImage && isGenuineImageUrl(posterImage) ? posterImage : undefined}
         title={title}
-        aria-hidden="true"
-        tabIndex={-1}
+        isMuted={true}
+        autoPlay={true}
+        enableObserver={true}
+        observerThreshold={0.1}
         className="w-full h-full object-cover pointer-events-none select-none block"
         style={{
           width: '100%',
@@ -123,6 +70,8 @@ const AutoplayingReelVideo: React.FC<AutoplayingReelVideoProps> = ({
           objectFit: 'cover',
           pointerEvents: 'none'
         }}
+        aria-hidden="true"
+        tabIndex={-1}
       />
     </div>
   );
@@ -186,7 +135,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
   const [videoHasError, setVideoHasError] = useState<boolean>(false);
   const [addedReelId, setAddedReelId] = useState<string | null>(null);
 
-  const lightboxVideoRef = useRef<HTMLVideoElement | null>(null);
+  const lightboxLoopHandleRef = useRef<SeamlessLoopVideoHandle | null>(null);
 
   // Reset video error on reel change
   useEffect(() => {
@@ -234,15 +183,13 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
   };
 
   const togglePlayPause = () => {
-    if (lightboxVideoRef.current && !videoHasError) {
-      if (lightboxVideoRef.current.paused) {
-        lightboxVideoRef.current.play().catch(() => {
-          setIsPlaying(false);
-        });
-        setIsPlaying(true);
-      } else {
-        lightboxVideoRef.current.pause();
+    if (!videoHasError && lightboxLoopHandleRef.current) {
+      if (isPlaying) {
+        lightboxLoopHandleRef.current.pause();
         setIsPlaying(false);
+      } else {
+        lightboxLoopHandleRef.current.play().catch(() => {});
+        setIsPlaying(true);
       }
     } else {
       setIsPlaying((prev) => !prev);
@@ -250,9 +197,9 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
   };
 
   const toggleMute = () => {
-    if (lightboxVideoRef.current) {
-      lightboxVideoRef.current.muted = !lightboxVideoRef.current.muted;
-      setIsMuted(lightboxVideoRef.current.muted);
+    if (lightboxLoopHandleRef.current) {
+      const nextMuted = lightboxLoopHandleRef.current.toggleMute();
+      setIsMuted(nextMuted);
     } else {
       setIsMuted((prev) => !prev);
     }
@@ -509,21 +456,50 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
             {/* LEFT / CENTER: 9:16 Continuous Autoplaying Background Video Area */}
             <div className="relative md:w-3/5 bg-black flex items-center justify-center overflow-hidden select-none">
               {!videoHasError ? (
-                <video
-                  ref={lightboxVideoRef}
-                  key={currentReel.id}
-                  poster={currentReel.posterImage && isGenuineImageUrl(currentReel.posterImage) ? currentReel.posterImage : undefined}
-                  autoPlay
-                  playsInline
-                  loop
-                  muted
-                  controls={false}
-                  onError={() => setVideoHasError(true)}
-                  className="w-full h-full max-h-[550px] md:max-h-[640px] object-cover pointer-events-none select-none"
-                  style={{ width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }}
+                <div
+                  className="relative w-full h-full max-h-[550px] md:max-h-[640px] flex items-center justify-center cursor-pointer"
+                  onClick={togglePlayPause}
                 >
-                  <source src={currentReel.videoUrl} type="video/mp4" />
-                </video>
+                  <SeamlessLoopVideo
+                    ref={lightboxLoopHandleRef}
+                    key={currentReel.id}
+                    src={currentReel.videoUrl}
+                    poster={currentReel.posterImage && isGenuineImageUrl(currentReel.posterImage) ? currentReel.posterImage : undefined}
+                    title={currentReel.title}
+                    autoPlay={true}
+                    isMuted={isMuted}
+                    enableObserver={false}
+                    onError={() => setVideoHasError(true)}
+                    className="w-full h-full max-h-[550px] md:max-h-[640px] object-cover pointer-events-none select-none"
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }}
+                  />
+
+                  {/* Play / Pause indicator overlay if user pauses */}
+                  {!isPlaying && (
+                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center pointer-events-none">
+                      <div className="w-16 h-16 rounded-full bg-black/70 backdrop-blur-md flex items-center justify-center border border-white/20 text-[#DFB982]">
+                        <Play className="w-8 h-8 fill-[#DFB982] ml-1" />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Audio Toggle Button in Video Player */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleMute();
+                    }}
+                    className="absolute top-4 left-4 z-20 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 backdrop-blur-md text-white flex items-center justify-center transition-colors cursor-pointer border border-white/20"
+                    title={isMuted ? 'Click to Unmute' : 'Click to Mute'}
+                    aria-label={isMuted ? 'Unmute video audio' : 'Mute video audio'}
+                  >
+                    {isMuted ? (
+                      <VolumeX className="w-4 h-4 text-red-300" />
+                    ) : (
+                      <Volume2 className="w-4 h-4 text-emerald-400" />
+                    )}
+                  </button>
+                </div>
               ) : (
                 <div
                   className="relative w-full h-full max-h-[550px] md:max-h-[640px] flex items-center justify-center overflow-hidden bg-[#1C1615] select-none pointer-events-none"

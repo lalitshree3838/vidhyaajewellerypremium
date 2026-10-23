@@ -28,6 +28,7 @@ import { ProductCard } from '../components/ProductCard';
 import { MetadataManager } from '../components/MetadataManager';
 import { isGenuineProduct, isGenuineImageUrl, isGenuineVideoUrl } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
+import { SeamlessLoopVideo } from '../components/SeamlessLoopVideo';
 
 interface ProductDetailViewProps {
   product: Product;
@@ -294,21 +295,52 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
           )}
 
           {videoData && (
-            <button
-              onClick={() => setVideoModalOpen(true)}
-              className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-[#160E10] via-[#2A1619] to-[#160E10] text-[#DFB982] hover:text-[#F7E7CE] border border-[#DFB982]/50 text-xs font-semibold flex items-center justify-between shadow-md hover:shadow-lg transition-all cursor-pointer group mt-3"
-            >
-              <div className="flex items-center gap-2.5">
-                <div className="w-6 h-6 rounded-full bg-[#DFB982] text-black flex items-center justify-center group-hover:scale-110 transition-transform shadow">
-                  <Play className="w-3 h-3 fill-black ml-0.5" />
+            <div className="mt-4 rounded-2xl overflow-hidden border border-[#DFB982]/60 bg-[#160E10] shadow-lg">
+              <div
+                onClick={() => setVideoModalOpen(true)}
+                className="relative aspect-[16/9] sm:aspect-[4/3] w-full bg-black overflow-hidden cursor-pointer group"
+              >
+                <SeamlessLoopVideo
+                  src={videoData.videoUrl}
+                  poster={videoData.poster}
+                  title={videoData.title}
+                  autoPlay={true}
+                  isMuted={true}
+                  enableObserver={true}
+                  observerThreshold={0.15}
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/30 pointer-events-none" />
+
+                {/* Badges & Live Loop Indicator */}
+                <div className="absolute top-3 left-3 flex items-center gap-2 pointer-events-none">
+                  <span className="bg-[#DFB982] text-black text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider shadow">
+                    360° Studio Reel
+                  </span>
+                  <span className="flex items-center gap-1 bg-black/60 backdrop-blur-md text-[#DFB982] text-[10px] px-2 py-0.5 rounded-full border border-white/20">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    Continuous Loop
+                  </span>
                 </div>
-                <div className="text-left">
-                  <span className="block font-bold leading-tight">Watch 360° HD Video Reel</span>
-                  <span className="text-[10px] text-[#E8DCCF]/80">Duration {videoData.duration} • Natural Light Rotating Showcase</span>
+
+                {/* Center Hover Trigger */}
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="w-12 h-12 rounded-full bg-black/50 group-hover:bg-black/80 border border-white/20 text-white flex items-center justify-center transition-all group-hover:scale-110 shadow-lg">
+                    <Play className="w-5 h-5 fill-white ml-0.5" />
+                  </div>
+                </div>
+
+                {/* Bottom Bar */}
+                <div className="absolute bottom-3 inset-x-3 flex items-center justify-between text-white text-xs pointer-events-none">
+                  <span className="text-[11px] font-medium text-gray-200 drop-shadow">
+                    Click for Full Screen & Audio
+                  </span>
+                  <span className="bg-black/70 px-2 py-0.5 rounded text-[10px] font-mono text-[#DFB982]">
+                    HD 1080p
+                  </span>
                 </div>
               </div>
-              <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
-            </button>
+            </div>
           )}
         </div>
 
@@ -832,13 +864,13 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
             {/* Video Player */}
             <div className="relative aspect-[3/4] max-h-[520px] bg-black flex items-center justify-center overflow-hidden">
-              <video
+              <SeamlessLoopVideo
                 src={videoData.videoUrl}
                 poster={videoData.poster}
-                autoPlay
-                playsInline
-                loop
-                muted={videoMuted}
+                title={videoData.title}
+                autoPlay={true}
+                isMuted={videoMuted}
+                enableObserver={false}
                 className="w-full h-full object-cover"
               />
               {/* Audio Toggle */}

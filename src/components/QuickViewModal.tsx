@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { X, Heart, Star, ShoppingBag, ShieldCheck, Truck, RefreshCw, Check } from 'lucide-react';
+import { X, Heart, Star, ShoppingBag, ShieldCheck, Truck, RefreshCw, Check, Play } from 'lucide-react';
 import { Product, ProductVariation } from '../types';
 import { useCart } from '../context/CartContext';
 import { useWishlist } from '../context/WishlistContext';
-import { isGenuineProduct, isGenuineImageUrl } from '../lib/sampleData';
+import { isGenuineProduct, isGenuineImageUrl, isGenuineVideoUrl } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
+import { SeamlessLoopVideo } from './SeamlessLoopVideo';
 
 interface QuickViewModalProps {
   product: Product | null;
@@ -29,6 +30,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
   const [quantity, setQuantity] = useState(1);
   const [added, setAdded] = useState(false);
   const [imageError, setImageError] = useState(false);
+  const [showVideo, setShowVideo] = useState(false);
 
   useEffect(() => {
     if (initialVariation) {
@@ -39,9 +41,12 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
     setActiveImageIndex(0);
     setQuantity(1);
     setImageError(false);
+    setShowVideo(false);
   }, [product, initialVariation]);
 
   if (!product || !isGenuineProduct(product)) return null;
+
+  const hasVideo = Boolean(product.videoUrl && isGenuineVideoUrl(product.videoUrl));
 
   // When variation is selected, the primary image switches to that variation's image!
   const variationImage = selectedVariation?.image;
@@ -92,7 +97,22 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
         {/* Gallery Column */}
         <div className="md:w-1/2 p-6 bg-[#FAF7F2] flex flex-col justify-between">
           <div className="relative aspect-square rounded-xl overflow-hidden bg-white border border-[#E8DCCF] flex items-center justify-center p-3">
-            {imageError || !activeImage || !isGenuineImageUrl(activeImage) ? (
+            {showVideo && hasVideo ? (
+              <div className="w-full h-full bg-black flex items-center justify-center relative overflow-hidden rounded-lg">
+                <SeamlessLoopVideo
+                  src={product.videoUrl!}
+                  poster={activeImage}
+                  title={product.name}
+                  autoPlay={true}
+                  isMuted={true}
+                  enableObserver={false}
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute top-2 left-2 bg-[#DFB982] text-black text-[9px] font-bold px-2 py-0.5 rounded shadow uppercase tracking-wider">
+                  360° Video Reel
+                </div>
+              </div>
+            ) : imageError || !activeImage || !isGenuineImageUrl(activeImage) ? (
               <div className="w-full h-full flex flex-col items-center justify-center text-center p-4 bg-[#FAF7F2] text-gray-400">
                 <span className="text-xs font-serif font-bold text-[#241C1A]">Product image coming soon</span>
                 <span className="text-[10px] text-gray-500 mt-0.5">VIDHYAA Fine Jewellery</span>
@@ -112,22 +132,42 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
             )}
           </div>
 
-          {/* Thumbnails */}
-          {currentImages.length > 1 && (
-            <div className="flex gap-2 mt-4 overflow-x-auto pb-1">
-              {currentImages.slice(0, 5).map((img, idx) => (
+          {/* Thumbnails (Images + Video Reel Button) */}
+          <div className="flex gap-2 mt-4 overflow-x-auto pb-1 items-center">
+            {hasVideo && (
+              <button
+                onClick={() => setShowVideo(true)}
+                className={`w-14 h-14 rounded-lg overflow-hidden border-2 bg-gradient-to-br from-[#160E10] to-[#2B0E14] flex flex-col items-center justify-center flex-shrink-0 cursor-pointer p-1 transition-all ${
+                  showVideo
+                    ? 'border-[#DFB982] scale-105 ring-2 ring-[#DFB982]/40'
+                    : 'border-[#E8DCCF] opacity-80 hover:opacity-100'
+                }`}
+                title="Watch 360° Video Reel"
+              >
+                <div className="w-6 h-6 rounded-full bg-[#DFB982] flex items-center justify-center mb-0.5 shadow">
+                  <Play className="w-3 h-3 fill-black text-black ml-0.5" />
+                </div>
+                <span className="text-[8px] font-bold text-[#DFB982] tracking-wider uppercase">Video</span>
+              </button>
+            )}
+            {currentImages.length > 1 &&
+              currentImages.slice(0, 5).map((img, idx) => (
                 <button
                   key={idx}
-                  onClick={() => setActiveImageIndex(idx)}
+                  onClick={() => {
+                    setShowVideo(false);
+                    setActiveImageIndex(idx);
+                  }}
                   className={`w-14 h-14 rounded-lg overflow-hidden border-2 bg-white flex-shrink-0 cursor-pointer p-1 transition-all ${
-                    activeImageIndex === idx ? 'border-[#0F5B46] scale-105 ring-2 ring-[#0F5B46]/20' : 'border-[#E8DCCF] opacity-70 hover:opacity-100'
+                    !showVideo && activeImageIndex === idx
+                      ? 'border-[#0F5B46] scale-105 ring-2 ring-[#0F5B46]/20'
+                      : 'border-[#E8DCCF] opacity-70 hover:opacity-100'
                   }`}
                 >
                   <img src={img} alt="" className="w-full h-full object-contain" />
                 </button>
               ))}
-            </div>
-          )}
+          </div>
         </div>
 
         {/* Info Column */}
