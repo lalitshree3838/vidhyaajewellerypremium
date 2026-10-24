@@ -471,15 +471,29 @@ const otpDevPlugin = (): Plugin => ({
       req.on('data', (chunk) => { body += chunk; });
       req.on('end', async () => {
         try {
-          const { mobile } = JSON.parse(body || '{}');
-          const cleanMobile = (mobile || '').replace(/\D/g, '').slice(-10);
-          if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
+          const { mobile, phoneNumber } = JSON.parse(body || '{}');
+          const raw = (phoneNumber || mobile || '').toString().trim();
+          if (!raw) {
             res.statusCode = 400;
             res.setHeader('Content-Type', 'application/json');
-            return res.end(JSON.stringify({ error: 'Please enter a valid 10-digit Indian mobile number.' }));
+            return res.end(JSON.stringify({ error: 'Mobile phone number is required.' }));
           }
 
-          const existing = otpSessions.get(cleanMobile);
+          let e164 = raw;
+          if (!e164.startsWith('+')) {
+            const digits = e164.replace(/\D/g, '');
+            if (digits.length === 10) e164 = `+91${digits}`;
+            else e164 = `+${digits}`;
+          }
+
+          if (e164.length < 8 || e164.length > 18) {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/json');
+            return res.end(JSON.stringify({ error: 'Please enter a valid international mobile phone number.' }));
+          }
+
+          const sessionKey = e164;
+          const existing = otpSessions.get(sessionKey);
           const now = Date.now();
           if (existing && (now - existing.lastSentAt) < 25000) {
             const waitSec = Math.ceil((25000 - (now - existing.lastSentAt)) / 1000);
@@ -491,8 +505,8 @@ const otpDevPlugin = (): Plugin => ({
           // Generate secure 6-digit OTP
           const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-          // Dispatch real SMS via configured Indian SMS Gateway (Fast2SMS, 2Factor, MSG91, Twilio)
-          const smsResult = await dispatchRealSms(cleanMobile, otp);
+          // Dispatch real SMS via configured telecom carrier (Twilio worldwide or India gateways)
+          const smsResult = await dispatchRealSms(e164, otp);
 
           if (!smsResult.success) {
             res.statusCode = 502;
@@ -506,20 +520,21 @@ const otpDevPlugin = (): Plugin => ({
           }
 
           // Save session only when OTP was generated and dispatched
-          otpSessions.set(cleanMobile, {
+          otpSessions.set(sessionKey, {
             otp,
             expiresAt: now + (5 * 60 * 1000),
             attempts: 0,
             lastSentAt: now
           });
 
-          const maskedNumber = `+91 ${cleanMobile.slice(0, 2)}•••••${cleanMobile.slice(7)}`;
+          const maskedNumber = e164.length > 6 ? `${e164.slice(0, 4)}••••${e164.slice(-2)}` : e164;
           res.statusCode = 200;
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify({
             success: true,
             message: smsResult.message || `SMS OTP dispatched to your mobile number (${maskedNumber})`,
             maskedNumber,
+            phoneNumber: e164,
             expiresIn: 300,
             provider: smsResult.provider
           }));
@@ -540,11 +555,23 @@ const otpDevPlugin = (): Plugin => ({
       req.on('data', (chunk) => { body += chunk; });
       req.on('end', () => {
         try {
-          const { mobile, otp } = JSON.parse(body || '{}');
-          const cleanMobile = (mobile || '').toString().replace(/\D/g, '').slice(-10);
-          const cleanOtp = (otp || '').toString().trim();
+          const { mobile, phoneNumber, otp } = JSON.parse(body || '{}');
+          const raw = (phoneNumber || mobile || '').toString().trim();
+          if (!raw || !otp) {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/json');
+            return res.end(JSON.stringify({ error: 'Phone number and OTP code are required.' }));
+          }
 
-          const session = otpSessions.get(cleanMobile);
+          let e164 = raw;
+          if (!e164.startsWith('+')) {
+            const digits = e164.replace(/\D/g, '');
+            if (digits.length === 10) e164 = `+91${digits}`;
+            else e164 = `+${digits}`;
+          }
+
+          const cleanOtp = (otp || '').toString().trim();
+          const session = otpSessions.get(e164);
           const now = Date.now();
 
           if (!session) {
@@ -554,14 +581,14 @@ const otpDevPlugin = (): Plugin => ({
           }
 
           if (now > session.expiresAt) {
-            otpSessions.delete(cleanMobile);
+            otpSessions.delete(e164);
             res.statusCode = 400;
             res.setHeader('Content-Type', 'application/json');
             return res.end(JSON.stringify({ error: 'OTP has expired. Please request a new OTP.' }));
           }
 
           if (session.attempts >= 5) {
-            otpSessions.delete(cleanMobile);
+            otpSessions.delete(e164);
             res.statusCode = 429;
             res.setHeader('Content-Type', 'application/json');
             return res.end(JSON.stringify({ error: 'Too many incorrect attempts. Please request a fresh OTP.' }));
@@ -574,13 +601,15 @@ const otpDevPlugin = (): Plugin => ({
             return res.end(JSON.stringify({ error: 'Invalid OTP. Please check the 6-digit code and try again.' }));
           }
 
-          otpSessions.delete(cleanMobile);
+          otpSessions.delete(e164);
+          console.log(`[Authentication] Mobile ${e164} successfully verified.`);
+
           res.statusCode = 200;
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify({
             success: true,
             verified: true,
-            mobile: cleanMobile,
+            phoneNumber: e164,
             timestamp: new Date().toISOString()
           }));
         } catch {

@@ -7,15 +7,18 @@ import {
   ConfirmationResult,
   User
 } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { CountryCode } from 'libphonenumber-js';
 import { auth, db } from './firebase';
 import { saveUserProfile } from './dbService';
 import { UserProfile } from '../types';
+import { validateInternationalPhone, maskPhoneNumber, getCountryByCode } from './countries';
 
 export interface SendOtpResponse {
   success: boolean;
   message: string;
   maskedNumber: string;
+  e164: string;
   expiresIn: number;
   provider?: 'firebase' | 'fast2sms' | 'twofactor' | 'twilio' | 'msg91' | 'gateway';
 }
@@ -30,7 +33,7 @@ export interface VerifyOtpResponse {
 // In-memory reference for active Firebase Phone Auth confirmation session
 let activeConfirmationResult: ConfirmationResult | null = null;
 let activeRecaptchaVerifier: RecaptchaVerifier | null = null;
-let activeSessionMobile = '';
+let activeSessionPhone = '';
 
 export function clearOtpSession(): void {
   if (activeRecaptchaVerifier) {
@@ -40,7 +43,7 @@ export function clearOtpSession(): void {
     activeRecaptchaVerifier = null;
   }
   activeConfirmationResult = null;
-  activeSessionMobile = '';
+  activeSessionPhone = '';
 }
 
 /**
@@ -94,44 +97,49 @@ export async function getRecaptchaVerifier(containerId = 'firebase-recaptcha-con
       errorCode: recaptchaErr?.code || 'CAPTCHA_INIT_ERROR',
       message: recaptchaErr?.message || 'reCAPTCHA initialization failed'
     });
-    throw new Error(`reCAPTCHA check unavailable: ${recaptchaErr?.message || 'Please refresh'}`);
+    throw new Error(`reCAPTCHA check unavailable: ${recaptchaErr?.message || 'Please refresh page'}`);
   }
 }
 
 /**
- * Send 6-digit OTP to Indian mobile number via Real SMS.
- * 1st: Attempts Firebase Phone Auth (Google Telecom SMS) if enabled.
- * 2nd: Seamlessly routes to configured Indian SMS Gateway (Fast2SMS / 2Factor / Twilio / MSG91).
+ * Send real 6-digit SMS OTP to international or Indian mobile numbers worldwide
+ * 1st: Attempts Firebase Phone Authentication (Google Telecom SMS worldwide network)
+ * 2nd: Seamlessly routes to server SMS Gateway (Twilio for international, Fast2SMS / 2Factor / MSG91 for India)
  */
-export async function sendMobileOtp(mobile: string): Promise<SendOtpResponse> {
-  const cleanMobile = mobile.replace(/\D/g, '').slice(-10);
-  if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
-    throw new Error('Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
+export async function sendMobileOtp(
+  rawInput: string,
+  countryCode: CountryCode = 'IN'
+): Promise<SendOtpResponse> {
+  const validation = validateInternationalPhone(rawInput, countryCode);
+  if (!validation.isValid) {
+    throw new Error(validation.error || 'Please enter a valid international mobile phone number.');
   }
 
-  const formattedIndianNumber = `+91${cleanMobile}`;
-  const maskedNumber = `+91 ${cleanMobile.slice(0, 2)}•••••${cleanMobile.slice(7)}`;
+  const e164 = validation.e164;
+  const maskedNumber = maskPhoneNumber(e164);
+  const countryInfo = getCountryByCode(validation.country);
 
-  // 1. Attempt Firebase Phone Authentication first (signInWithPhoneNumber)
   let firebaseErrorCode = '';
   let firebaseErrorMessage = '';
 
+  // 1. Primary Route: Firebase Phone Authentication (signInWithPhoneNumber)
   try {
     const verifier = await getRecaptchaVerifier();
-    const confirmation = await signInWithPhoneNumber(auth, formattedIndianNumber, verifier);
+    const confirmation = await signInWithPhoneNumber(auth, e164, verifier);
     activeConfirmationResult = confirmation;
-    activeSessionMobile = cleanMobile;
+    activeSessionPhone = e164;
 
-    // Safe diagnostic logging (no phone numbers, no OTPs, no secrets)
     console.log('[Auth Diagnostic]', {
       provider: 'firebase_phone',
-      status: 'SMS_DISPATCHED_TO_CARRIER'
+      status: 'SMS_DISPATCHED_TO_CARRIER',
+      destinationCountry: countryInfo.name
     });
 
     return {
       success: true,
-      message: `SMS OTP dispatched via Google telecom network to ${maskedNumber}`,
+      message: `SMS verification code dispatched via Google telecom network to ${maskedNumber}`,
       maskedNumber,
+      e164,
       expiresIn: 300,
       provider: 'firebase'
     };
@@ -139,31 +147,28 @@ export async function sendMobileOtp(mobile: string): Promise<SendOtpResponse> {
     firebaseErrorCode = firebaseErr?.code || 'auth/unknown';
     firebaseErrorMessage = firebaseErr?.message || 'Firebase phone authentication failed.';
 
-    // Safe diagnostic logging for the real Firebase provider error code and message
     console.warn('[Auth Diagnostic]', {
       provider: 'firebase_phone',
       errorCode: firebaseErrorCode,
       errorMessage: firebaseErrorMessage
     });
 
-    // Reset verifier
     if (activeRecaptchaVerifier) {
       try { activeRecaptchaVerifier.clear(); } catch {}
       activeRecaptchaVerifier = null;
     }
   }
 
-  // 2. Dispatch via Indian SMS Gateway (/api/auth/send-otp)
+  // 2. Secondary Fallback Route: Server SMS Gateway (/api/auth/send-otp)
   try {
     const res = await fetch('/api/auth/send-otp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mobile: cleanMobile }),
+      body: JSON.stringify({ phoneNumber: e164, mobile: e164 }),
     });
 
     const data = await res.json().catch(() => ({}));
 
-    // Safe diagnostic logging of gateway response
     console.warn('[Auth Diagnostic]', {
       provider: data.provider || 'none',
       httpStatus: res.status,
@@ -171,36 +176,48 @@ export async function sendMobileOtp(mobile: string): Promise<SendOtpResponse> {
     });
 
     if (!res.ok || !data.success) {
-      // Build a clear, non-misleading error message explaining why no SMS was received
       let userFacingError = data.error || 'Failed to dispatch SMS to your phone.';
-      if (firebaseErrorCode === 'auth/operation-not-allowed' && (!data.provider || data.provider === 'none')) {
-        userFacingError = 'SMS delivery unavailable: Phone Authentication is disabled in Firebase Console (OPERATION_NOT_ALLOWED), and no Indian SMS gateway (Fast2SMS/2Factor) is configured in Admin Settings.';
-      } else if (firebaseErrorCode === 'auth/unauthorized-domain' && (!data.provider || data.provider === 'none')) {
-        userFacingError = 'SMS delivery unavailable: Current deployment domain is not in Firebase Authorized Domains, and no Indian SMS gateway is configured in Admin Settings.';
+
+      if (firebaseErrorCode === 'auth/operation-not-allowed') {
+        userFacingError = `SMS delivery to ${countryInfo.name} unavailable: Phone Authentication is disabled in Firebase Console (OPERATION_NOT_ALLOWED). Please enable Phone Provider in Firebase Console > Authentication > Sign-in method.`;
+      } else if (firebaseErrorCode === 'auth/unauthorized-domain') {
+        userFacingError = `SMS delivery unavailable: Current domain is not in Firebase Authorized Domains. Add this domain to Firebase Console > Authentication > Settings > Authorized Domains.`;
+      } else if (firebaseErrorCode === 'auth/quota-exceeded') {
+        userFacingError = 'Daily SMS verification quota exceeded for this project. Please retry later or contact support.';
+      } else if (firebaseErrorCode === 'auth/invalid-phone-number') {
+        userFacingError = `Carrier rejected phone format for ${countryInfo.name} (${e164}). Please verify your number.`;
+      } else if (firebaseErrorCode === 'auth/billing-not-enabled') {
+        userFacingError = 'International SMS delivery requires Firebase Blaze pay-as-you-go billing plan for telecom carrier routes outside test quotas.';
       }
       throw new Error(userFacingError);
     }
 
     activeConfirmationResult = null;
-    activeSessionMobile = cleanMobile;
+    activeSessionPhone = e164;
 
     return {
       success: true,
       message: data.message || `SMS OTP dispatched via telecom network to ${maskedNumber}`,
       maskedNumber,
+      e164,
       expiresIn: data.expiresIn || 300,
       provider: data.provider || 'gateway'
     };
   } catch (gatewayErr: any) {
-    throw new Error(gatewayErr?.message || 'Failed to send OTP via SMS. Please check your network and mobile number.');
+    throw new Error(gatewayErr?.message || 'Failed to send OTP via SMS. Please check your international phone number and network.');
   }
 }
 
 /**
- * Verify 6-digit OTP received on user's phone
+ * Verify 6-digit OTP code received on customer's mobile phone
  */
-export async function verifyMobileOtp(mobile: string, otp: string): Promise<VerifyOtpResponse> {
-  const cleanMobile = mobile.replace(/\D/g, '').slice(-10);
+export async function verifyMobileOtp(
+  rawInput: string,
+  otp: string,
+  countryCode: CountryCode = 'IN'
+): Promise<VerifyOtpResponse> {
+  const validation = validateInternationalPhone(rawInput, countryCode);
+  const e164 = validation.isValid ? validation.e164 : rawInput.trim();
   const cleanOtp = otp.trim();
 
   if (cleanOtp.length !== 6 || !/^\d{6}$/.test(cleanOtp)) {
@@ -208,17 +225,17 @@ export async function verifyMobileOtp(mobile: string, otp: string): Promise<Veri
   }
 
   // Case A: Verified via Firebase Phone Auth confirmation session
-  if (activeConfirmationResult && activeSessionMobile === cleanMobile) {
+  if (activeConfirmationResult && activeSessionPhone === e164) {
     try {
       const credential = await activeConfirmationResult.confirm(cleanOtp);
       const user = credential.user;
-      await syncMobileUserProfile(user, cleanMobile);
+      await syncMobileUserProfile(user, e164);
       clearOtpSession();
       console.log('[Auth Diagnostic]', { provider: 'firebase_phone', status: 'VERIFICATION_SUCCESS' });
       return {
         success: true,
         verified: true,
-        mobile: cleanMobile,
+        mobile: e164,
         user
       };
     } catch (err: any) {
@@ -228,17 +245,17 @@ export async function verifyMobileOtp(mobile: string, otp: string): Promise<Veri
         throw new Error('Invalid verification code. Please check the 6-digit OTP received on your phone and try again.');
       }
       if (code === 'auth/code-expired') {
-        throw new Error('The OTP code has expired. Please click Resend OTP to receive a fresh code.');
+        throw new Error('The OTP code has expired. Please click Resend OTP to receive a fresh verification code.');
       }
       throw new Error(err.message || 'OTP verification failed. Please try again.');
     }
   }
 
-  // Case B: Verified via SMS Gateway endpoint
+  // Case B: Verified via SMS Gateway backend endpoint
   const res = await fetch('/api/auth/verify-otp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mobile: cleanMobile, otp: cleanOtp }),
+    body: JSON.stringify({ phoneNumber: e164, mobile: e164, otp: cleanOtp }),
   });
 
   const data = await res.json().catch(() => ({}));
@@ -248,36 +265,60 @@ export async function verifyMobileOtp(mobile: string, otp: string): Promise<Veri
   }
 
   console.log('[Auth Diagnostic]', { provider: 'sms_gateway', status: 'VERIFICATION_SUCCESS' });
-  const user = await completeMobileAuth(cleanMobile);
+  const user = await completeMobileAuth(e164);
   clearOtpSession();
 
   return {
     success: true,
     verified: true,
-    mobile: cleanMobile,
+    mobile: e164,
     user: user || undefined
   };
 }
 
 /**
- * Sync or create user profile in Firestore
+ * Sync or create customer profile in Firestore with verified phone number
+ * Preserves existing accounts and never merges solely on unverified data
  */
-async function syncMobileUserProfile(user: User, cleanMobile: string): Promise<void> {
+async function syncMobileUserProfile(user: User, e164Phone: string): Promise<void> {
   try {
     const userDocRef = doc(db, 'users', user.uid);
     const snap = await getDoc(userDocRef);
+
     if (!snap.exists()) {
+      // Check if another customer profile already had this verified phone number
+      let existingProfile: Partial<UserProfile> | null = null;
+      try {
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, where('phone', '==', e164Phone));
+        const matchingDocs = await getDocs(q);
+        if (!matchingDocs.empty) {
+          const docData = matchingDocs.docs[0].data() as UserProfile;
+          existingProfile = docData;
+        }
+      } catch {}
+
+      const cleanDigits = e164Phone.replace(/\D/g, '');
       const profile: Partial<UserProfile> = {
         id: user.uid,
-        email: user.email || `${cleanMobile}@vidhyaacustomer.in`,
-        displayName: user.displayName || `Customer +91${cleanMobile.slice(-4)}`,
-        phone: `+91${cleanMobile}`,
-        role: 'customer',
-        savedAddresses: [],
-        createdAt: new Date().toISOString(),
+        email: user.email || existingProfile?.email || '',
+        displayName: user.displayName || existingProfile?.displayName || `Patron (${maskPhoneNumber(e164Phone)})`,
+        phone: e164Phone,
+        role: existingProfile?.role || 'customer',
+        savedAddresses: existingProfile?.savedAddresses || [],
+        createdAt: existingProfile?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
       await saveUserProfile(user.uid, profile);
+    } else {
+      // Profile exists, ensure verified phone is recorded
+      const currentData = snap.data();
+      if (!currentData?.phone || currentData.phone !== e164Phone) {
+        await saveUserProfile(user.uid, {
+          phone: e164Phone,
+          updatedAt: new Date().toISOString()
+        });
+      }
     }
   } catch (err) {
     console.warn('[Auth Diagnostic] Profile sync warning:', err);
@@ -287,21 +328,23 @@ async function syncMobileUserProfile(user: User, cleanMobile: string): Promise<v
 /**
  * Establish authenticated session for customer verified via backend gateway OTP
  */
-export async function completeMobileAuth(cleanMobile: string): Promise<User | null> {
-  const syntheticEmail = `${cleanMobile}@vidhyaacustomer.in`;
-  const syntheticPass = `Vidhyaa#MobileAuth_${cleanMobile}_SecureKey`;
+export async function completeMobileAuth(e164Phone: string): Promise<User | null> {
+  const cleanDigits = e164Phone.replace(/\D/g, '');
+  const syntheticEmail = `${cleanDigits}@phone.vidhyaajewellery.com`;
+  const syntheticPass = `Vidhyaa#MobileAuth_${cleanDigits}_SecureKey99!`;
 
   try {
     const cred = await signInWithEmailAndPassword(auth, syntheticEmail, syntheticPass);
+    await syncMobileUserProfile(cred.user, e164Phone);
     return cred.user;
   } catch (err: any) {
     if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
       try {
         const newCred = await createUserWithEmailAndPassword(auth, syntheticEmail, syntheticPass);
         await updateProfile(newCred.user, {
-          displayName: `Customer +91${cleanMobile.slice(-4)}`
+          displayName: `Patron (${maskPhoneNumber(e164Phone)})`
         });
-        await syncMobileUserProfile(newCred.user, cleanMobile);
+        await syncMobileUserProfile(newCred.user, e164Phone);
         return newCred.user;
       } catch (createErr) {
         console.warn('[Auth Diagnostic] Account creation fallback warning:', createErr);

@@ -109,9 +109,9 @@ export const AdminSmsSettingsPanel: React.FC = () => {
 
   const handleSendTestSms = async (e: React.FormEvent) => {
     e.preventDefault();
-    const clean = testMobile.replace(/\D/g, '').slice(-10);
-    if (!/^[6-9]\d{9}$/.test(clean)) {
-      setError('Please enter a valid 10-digit Indian mobile number for test SMS.');
+    const clean = testMobile.trim();
+    if (clean.length < 8) {
+      setError('Please enter a valid mobile number (e.g. +919876543210 or international +14155552671).');
       return;
     }
 
@@ -126,13 +126,13 @@ export const AdminSmsSettingsPanel: React.FC = () => {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${getAdminToken()}`,
         },
-        body: JSON.stringify({ mobile: clean }),
+        body: JSON.stringify({ phoneNumber: clean, mobile: clean }),
       });
 
       const data = await res.json();
       setTestResult(data);
       if (res.ok && data.success) {
-        setSuccess(`Test SMS successfully dispatched! Carrier: ${data.provider}`);
+        setSuccess(`Test SMS successfully dispatched! Carrier: ${data.provider} to ${data.phoneNumber || clean}`);
       } else {
         setError(data.error || data.message || 'Failed to dispatch test SMS. Please ensure an SMS gateway key is configured.');
       }
@@ -152,11 +152,11 @@ export const AdminSmsSettingsPanel: React.FC = () => {
               <Smartphone className="w-5 h-5" />
             </div>
             <h2 className="font-serif text-2xl font-bold text-[#3B1E22]">
-              SMS OTP Gateway & Mobile Login Configuration
+              Worldwide SMS OTP & Mobile Login Configuration
             </h2>
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Configure real SMS delivery for customer mobile OTP login (+91 Indian numbers) using Indian telecom gateways.
+            Configure real SMS delivery for customer mobile OTP login worldwide (India, US, UK, Canada, Australia, UAE, and 180+ countries) via Firebase Phone Authentication and telecom gateways.
           </p>
         </div>
         <button
@@ -247,29 +247,23 @@ export const AdminSmsSettingsPanel: React.FC = () => {
           <span>Send Live Test SMS to Handset</span>
         </div>
         <p className="text-[11px] text-gray-500">
-          Enter your Indian mobile number below to test real carrier SMS transmission immediately.
+          Enter any mobile number (e.g. +91 9876543210 for India, or +1 415 555 2671 for US) to test real carrier SMS transmission.
         </p>
 
         <form onSubmit={handleSendTestSms} className="flex gap-2">
           <div className="relative flex-1">
-            <div className="absolute left-3 top-2.5 flex items-center gap-1 text-gray-700 text-xs font-bold pointer-events-none select-none">
-              <span>🇮🇳</span>
-              <span>+91</span>
-              <span className="text-gray-300">|</span>
-            </div>
             <input
               type="tel"
-              maxLength={10}
               required
               value={testMobile}
-              onChange={(e) => setTestMobile(e.target.value.replace(/\D/g, ''))}
-              placeholder="9876543210"
-              className="w-full pl-18 pr-3 py-2 text-xs font-mono font-bold border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-[#802336]"
+              onChange={(e) => setTestMobile(e.target.value)}
+              placeholder="+919876543210 or +14155552671"
+              className="w-full px-3 py-2 text-xs font-mono font-bold border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-[#802336]"
             />
           </div>
           <button
             type="submit"
-            disabled={testing || testMobile.length < 10}
+            disabled={testing || testMobile.trim().length < 8}
             className="px-5 py-2 bg-[#802336] hover:bg-[#681c2c] text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shrink-0"
           >
             {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PhoneCall className="w-3.5 h-3.5" />}
@@ -400,7 +394,7 @@ export const AdminSmsSettingsPanel: React.FC = () => {
         </div>
         <ol className="list-decimal list-inside space-y-1 text-gray-600 pl-1 text-[11px] leading-relaxed">
           <li>
-            Go to <a href="https://console.firebase.google.com/" target="_blank" rel="noopener noreferrer" className="text-[#802336] font-semibold underline">Firebase Console</a> and select project <code className="bg-gray-200 px-1 py-0.5 rounded font-mono">ai-studio-applet-webapp-3339a</code>.
+            Go to <a href="https://console.firebase.google.com/" target="_blank" rel="noopener noreferrer" className="text-[#802336] font-semibold underline">Firebase Console</a> and select project <code className="bg-gray-200 px-1 py-0.5 rounded font-mono">gen-lang-client-0706507905</code>.
           </li>
           <li>
             Navigate to <strong>Build &gt; Authentication &gt; Sign-in method</strong> tab.
@@ -409,10 +403,10 @@ export const AdminSmsSettingsPanel: React.FC = () => {
             Click on <strong>Phone</strong> and toggle <strong>Enable</strong>, then click <strong>Save</strong>.
           </li>
           <li>
-            In <strong>Authentication &gt; Settings &gt; Authorized Domains</strong>, make sure your deployment domain (e.g. <code className="bg-gray-200 px-1 py-0.5 rounded font-mono">run.app</code>) is listed.
+            In <strong>Authentication &gt; Settings &gt; Authorized Domains</strong>, make sure your deployment domain (e.g. <code className="bg-gray-200 px-1 py-0.5 rounded font-mono">ais-dev-...run.app</code> and your production Hostinger domain) is listed.
           </li>
           <li>
-            (Optional for free tests) Add "Phone numbers for testing" (e.g. +91 9876543210 with OTP 123456) in the Phone provider settings.
+            (Optional for free tests) Add "Phone numbers for testing" (e.g. +91 9876543210 with OTP 123456, or +1 4155552671) in the Phone provider settings to test without consuming telecom credits.
           </li>
         </ol>
       </div>

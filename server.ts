@@ -395,20 +395,31 @@ interface OtpSession {
 // In-memory OTP session storage
 const otpSessions = new Map<string, OtpSession>();
 
-// Send OTP endpoint
+// Send OTP endpoint (Supports worldwide international E.164 mobile numbers)
 app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
   try {
-    const { mobile } = req.body || {};
-    if (!mobile || typeof mobile !== 'string') {
-      return res.status(400).json({ error: 'Mobile number is required.' });
+    const { mobile, phoneNumber } = req.body || {};
+    const raw = (phoneNumber || mobile || '').toString().trim();
+    if (!raw) {
+      return res.status(400).json({ error: 'Mobile phone number is required.' });
     }
 
-    const cleanMobile = mobile.replace(/\D/g, '').slice(-10);
-    if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
-      return res.status(400).json({ error: 'Please enter a valid 10-digit Indian mobile number.' });
+    let e164 = raw;
+    if (!e164.startsWith('+')) {
+      const digits = e164.replace(/\D/g, '');
+      if (digits.length === 10) {
+        e164 = `+91${digits}`;
+      } else {
+        e164 = `+${digits}`;
+      }
     }
 
-    const existing = otpSessions.get(cleanMobile);
+    if (e164.length < 8 || e164.length > 18) {
+      return res.status(400).json({ error: 'Please enter a valid international mobile phone number.' });
+    }
+
+    const sessionKey = e164;
+    const existing = otpSessions.get(sessionKey);
     const now = Date.now();
     if (existing && (now - existing.lastSentAt) < 25000) {
       const waitSec = Math.ceil((25000 - (now - existing.lastSentAt)) / 1000);
@@ -418,8 +429,8 @@ app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
     // Generate cryptographically random 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-    // Dispatch real SMS via configured Indian SMS Gateway (Fast2SMS, 2Factor, MSG91, Twilio)
-    const smsResult = await dispatchRealSms(cleanMobile, otp);
+    // Dispatch real SMS via configured telecom carrier (Twilio worldwide or India gateways)
+    const smsResult = await dispatchRealSms(e164, otp);
 
     if (!smsResult.success) {
       return res.status(502).json({
@@ -431,18 +442,19 @@ app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
     }
 
     // Save session only when OTP was generated and dispatched
-    otpSessions.set(cleanMobile, {
+    otpSessions.set(sessionKey, {
       otp,
       expiresAt: now + (5 * 60 * 1000), // 5 minutes validity
       attempts: 0,
       lastSentAt: now
     });
 
-    const maskedNumber = `+91 ${cleanMobile.slice(0, 2)}•••••${cleanMobile.slice(7)}`;
+    const maskedNumber = e164.length > 6 ? `${e164.slice(0, 4)}••••${e164.slice(-2)}` : e164;
     return res.status(200).json({
       success: true,
       message: smsResult.message || `SMS OTP dispatched to your mobile number (${maskedNumber})`,
       maskedNumber,
+      phoneNumber: e164,
       expiresIn: 300,
       provider: smsResult.provider
     });
@@ -452,17 +464,23 @@ app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
   }
 });
 
-// Verify OTP endpoint
+// Verify OTP endpoint (Supports worldwide international E.164 mobile numbers)
 app.post('/api/auth/verify-otp', (req: Request, res: Response) => {
-  const { mobile, otp } = req.body || {};
-  if (!mobile || !otp) {
-    return res.status(400).json({ error: 'Mobile number and OTP are required.' });
+  const { mobile, phoneNumber, otp } = req.body || {};
+  const raw = (phoneNumber || mobile || '').toString().trim();
+  if (!raw || !otp) {
+    return res.status(400).json({ error: 'Phone number and OTP code are required.' });
   }
 
-  const cleanMobile = mobile.toString().replace(/\D/g, '').slice(-10);
-  const cleanOtp = otp.toString().trim();
+  let e164 = raw;
+  if (!e164.startsWith('+')) {
+    const digits = e164.replace(/\D/g, '');
+    if (digits.length === 10) e164 = `+91${digits}`;
+    else e164 = `+${digits}`;
+  }
 
-  const session = otpSessions.get(cleanMobile);
+  const cleanOtp = otp.toString().trim();
+  const session = otpSessions.get(e164);
   const now = Date.now();
 
   if (!session) {
@@ -470,12 +488,12 @@ app.post('/api/auth/verify-otp', (req: Request, res: Response) => {
   }
 
   if (now > session.expiresAt) {
-    otpSessions.delete(cleanMobile);
+    otpSessions.delete(e164);
     return res.status(400).json({ error: 'OTP has expired. Please request a new OTP.' });
   }
 
   if (session.attempts >= 5) {
-    otpSessions.delete(cleanMobile);
+    otpSessions.delete(e164);
     return res.status(429).json({ error: 'Too many incorrect attempts. Please request a fresh OTP.' });
   }
 
@@ -485,13 +503,13 @@ app.post('/api/auth/verify-otp', (req: Request, res: Response) => {
   }
 
   // OTP verified successfully
-  otpSessions.delete(cleanMobile);
-  console.log(`[Authentication] Mobile +91 ${cleanMobile} successfully verified.`);
+  otpSessions.delete(e164);
+  console.log(`[Authentication] Mobile ${e164} successfully verified.`);
 
   return res.status(200).json({
     success: true,
     verified: true,
-    mobile: cleanMobile,
+    phoneNumber: e164,
     timestamp: new Date().toISOString()
   });
 });
@@ -551,21 +569,34 @@ app.post('/api/admin/test-sms', async (req: Request, res: Response) => {
     return res.status(401).json({ error: 'Unauthorized: Admin authentication required.' });
   }
 
-  const { mobile } = req.body || {};
-  const cleanMobile = (mobile || '').replace(/\D/g, '').slice(-10);
-  if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
-    return res.status(400).json({ error: 'Please enter a valid 10-digit Indian mobile number to test.' });
+  const { mobile, phoneNumber } = req.body || {};
+  const raw = (phoneNumber || mobile || '').toString().trim();
+  if (!raw) {
+    return res.status(400).json({ error: 'Phone number is required.' });
+  }
+
+  let e164 = raw;
+  if (!e164.startsWith('+')) {
+    const digits = e164.replace(/\D/g, '');
+    if (digits.length === 10) e164 = `+91${digits}`;
+    else e164 = `+${digits}`;
+  }
+
+  if (e164.length < 8 || e164.length > 18) {
+    return res.status(400).json({ error: 'Please enter a valid international mobile phone number (e.g., +14155552671 or +919876543210).' });
   }
 
   const testOtp = Math.floor(100000 + Math.random() * 900000).toString();
-  const result = await dispatchRealSms(cleanMobile, testOtp);
+  const result = await dispatchRealSms(e164, testOtp);
 
+  const masked = e164.length > 6 ? `${e164.slice(0, 4)}••••${e164.slice(-2)}` : e164;
   return res.status(result.success ? 200 : 502).json({
     success: result.success,
     provider: result.provider,
     errorCode: result.errorCode,
     message: result.message,
-    maskedMobile: `+91 ${cleanMobile.slice(0, 2)}•••••${cleanMobile.slice(7)}`
+    maskedMobile: masked,
+    phoneNumber: e164
   });
 });
 

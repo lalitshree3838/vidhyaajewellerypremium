@@ -79,165 +79,62 @@ export function getSmsStatusSummary() {
   const isMsg91Active = Boolean(config.msg91AuthKey && config.msg91TemplateId);
 
   let activeProvider = 'None Configured (Setup Required)';
-  if (isFast2SmsActive) activeProvider = 'Fast2SMS India';
+  if (isTwilioActive) activeProvider = 'Twilio Worldwide SMS';
+  else if (isFast2SmsActive) activeProvider = 'Fast2SMS India';
   else if (isTwoFactorActive) activeProvider = '2Factor.in India';
-  else if (isTwilioActive) activeProvider = 'Twilio SMS';
   else if (isMsg91Active) activeProvider = 'MSG91 Enterprise';
 
   return {
     configured: isFast2SmsActive || isTwoFactorActive || isTwilioActive || isMsg91Active,
     activeProvider,
+    internationalSupported: isTwilioActive,
     providers: {
+      twilio: {
+        configured: isTwilioActive,
+        description: 'Worldwide international SMS delivery (180+ countries)',
+        senderNumber: config.twilioPhoneNumber ? `${config.twilioPhoneNumber.slice(0, 3)}••••${config.twilioPhoneNumber.slice(-2)}` : '',
+      },
       fast2sms: {
         configured: isFast2SmsActive,
+        description: 'Domestic India (+91) OTP route',
         maskedKey: isFast2SmsActive ? `${config.fast2smsApiKey!.slice(0, 4)}••••${config.fast2smsApiKey!.slice(-3)}` : '',
       },
       twofactor: {
         configured: isTwoFactorActive,
+        description: 'Domestic India (+91) OTP route',
         maskedKey: isTwoFactorActive ? `${config.twofactorApiKey!.slice(0, 4)}••••${config.twofactorApiKey!.slice(-3)}` : '',
-      },
-      twilio: {
-        configured: isTwilioActive,
-        senderNumber: config.twilioPhoneNumber ? `${config.twilioPhoneNumber.slice(0, 3)}••••${config.twilioPhoneNumber.slice(-2)}` : '',
       },
       msg91: {
         configured: isMsg91Active,
+        description: 'Domestic India (+91) DLT transactional route',
       },
     },
   };
 }
 
 /**
- * Dispatch real SMS to Indian mobile numbers (+91) using configured real SMS gateway
+ * Dispatch real SMS to Indian or international mobile numbers using configured telecom gateway
+ * Supports full E.164 international numbers (+1..., +44..., +971..., +91..., etc.)
  */
-export async function dispatchRealSms(mobile: string, otp: string): Promise<SendSmsResult> {
-  const cleanMobile = mobile.replace(/\D/g, '').slice(-10);
+export async function dispatchRealSms(phoneInput: string, otp: string): Promise<SendSmsResult> {
+  const cleanInput = (phoneInput || '').trim();
   const config = getStoredSmsConfig();
 
-  // 1. Fast2SMS (India's premier Quick & OTP SMS route)
-  const fast2smsKey = (config.fast2smsApiKey || '').trim();
-  if (fast2smsKey) {
-    try {
-      const getUrl = `https://www.fast2sms.com/dev/bulkV2?authorization=${encodeURIComponent(fast2smsKey)}&route=otp&variables_values=${encodeURIComponent(otp)}&numbers=${encodeURIComponent(cleanMobile)}`;
-      const getRes = await fetch(getUrl, {
-        method: 'GET',
-        headers: {
-          'authorization': fast2smsKey,
-          'cache-control': 'no-cache',
-        },
-      });
-
-      const getData: any = await getRes.json().catch(() => null);
-      if (getData && (getData.return === true || getData.status_code === 200)) {
-        console.log('[SMS Gateway Diagnostic]', { provider: 'fast2sms', method: 'GET', status: 'DISPATCHED_TO_CARRIER' });
-        return {
-          success: true,
-          provider: 'fast2sms',
-          message: 'OTP dispatched successfully via Fast2SMS telecom gateway.',
-        };
-      }
-
-      // If GET route did not return success, try POST route
-      const postRes = await fetch('https://www.fast2sms.com/dev/bulkV2', {
-        method: 'POST',
-        headers: {
-          'authorization': fast2smsKey,
-          'Content-Type': 'application/json',
-          'cache-control': 'no-cache',
-        },
-        body: JSON.stringify({
-          route: 'otp',
-          variables_values: otp,
-          numbers: cleanMobile,
-        }),
-      });
-
-      const postData: any = await postRes.json().catch(() => null);
-      if (postData && (postData.return === true || postData.status_code === 200)) {
-        console.log('[SMS Gateway Diagnostic]', { provider: 'fast2sms', method: 'POST', status: 'DISPATCHED_TO_CARRIER' });
-        return {
-          success: true,
-          provider: 'fast2sms',
-          message: 'OTP dispatched successfully via Fast2SMS telecom gateway.',
-        };
-      }
-
-      const errMsg = Array.isArray(postData?.message)
-        ? postData.message[0]
-        : (postData?.message || (Array.isArray(getData?.message) ? getData.message[0] : getData?.message) || 'Fast2SMS delivery rejected by carrier.');
-
-      console.warn('[SMS Provider Diagnostic]', { provider: 'fast2sms', statusCode: postRes.status, errorCode: 'CARRIER_REJECTED' });
-      return {
-        success: false,
-        provider: 'fast2sms',
-        errorCode: 'FAST2SMS_DELIVERY_FAILED',
-        message: errMsg,
-      };
-    } catch (err: any) {
-      console.error('[SMS Provider Diagnostic]', { provider: 'fast2sms', errorCode: 'NETWORK_ERROR', message: err?.message || 'Connection failure' });
+  // Normalize phone to E.164
+  let e164Number = cleanInput;
+  if (!e164Number.startsWith('+')) {
+    const digitsOnly = e164Number.replace(/\D/g, '');
+    if (digitsOnly.length === 10) {
+      e164Number = `+91${digitsOnly}`;
+    } else {
+      e164Number = `+${digitsOnly}`;
     }
   }
 
-  // 2. 2Factor.in (Specialized Indian transactional OTP SMS API)
-  const twofactorKey = (config.twofactorApiKey || '').trim();
-  if (twofactorKey) {
-    try {
-      const url = `https://2factor.in/API/V1/${encodeURIComponent(twofactorKey)}/SMS/+91${encodeURIComponent(cleanMobile)}/${encodeURIComponent(otp)}/OTP1`;
-      const res = await fetch(url, { method: 'GET' });
-      const data: any = await res.json().catch(() => null);
+  const isIndia = e164Number.startsWith('+91');
+  const indian10Digit = isIndia ? e164Number.slice(3).replace(/\D/g, '').slice(-10) : '';
 
-      if (data && (data.Status === 'Success' || res.ok)) {
-        console.log('[SMS Gateway Diagnostic]', { provider: 'twofactor', status: 'DISPATCHED_TO_CARRIER' });
-        return {
-          success: true,
-          provider: 'twofactor',
-          message: 'OTP dispatched successfully via 2Factor Indian telecom route.',
-        };
-      }
-
-      console.warn('[SMS Provider Diagnostic]', { provider: 'twofactor', statusCode: res.status, errorCode: data?.Details || data?.Status || 'DISPATCH_FAILED' });
-      return {
-        success: false,
-        provider: 'twofactor',
-        errorCode: 'TWOFACTOR_DELIVERY_FAILED',
-        message: data?.Details || '2Factor.in OTP dispatch failed.',
-      };
-    } catch (err: any) {
-      console.error('[SMS Provider Diagnostic]', { provider: 'twofactor', errorCode: 'NETWORK_ERROR', message: err?.message || 'Connection failure' });
-    }
-  }
-
-  // 3. MSG91 (Indian Enterprise DLT Gateway)
-  const msg91Key = (config.msg91AuthKey || '').trim();
-  const msg91TemplateId = (config.msg91TemplateId || '').trim();
-  if (msg91Key && msg91TemplateId) {
-    try {
-      const url = `https://control.msg91.com/api/v5/otp?template_id=${encodeURIComponent(msg91TemplateId)}&mobile=91${cleanMobile}&authkey=${encodeURIComponent(msg91Key)}&otp=${encodeURIComponent(otp)}`;
-      const res = await fetch(url, { method: 'POST' });
-      const data: any = await res.json().catch(() => null);
-
-      if (data && (data.type === 'success' || res.ok)) {
-        console.log('[SMS Gateway Diagnostic]', { provider: 'msg91', status: 'DISPATCHED_TO_CARRIER' });
-        return {
-          success: true,
-          provider: 'msg91',
-          message: 'OTP dispatched successfully via MSG91 gateway.',
-        };
-      }
-
-      console.warn('[SMS Provider Diagnostic]', { provider: 'msg91', statusCode: res.status, errorCode: data?.type || 'DISPATCH_FAILED' });
-      return {
-        success: false,
-        provider: 'msg91',
-        errorCode: 'MSG91_DELIVERY_FAILED',
-        message: data?.message || 'MSG91 dispatch failed.',
-      };
-    } catch (err: any) {
-      console.error('[SMS Provider Diagnostic]', { provider: 'msg91', errorCode: 'NETWORK_ERROR', message: err?.message || 'Connection failure' });
-    }
-  }
-
-  // 4. Twilio SMS
+  // 1. Worldwide International SMS Route: Twilio SMS (Supports 180+ countries)
   const twilioSid = (config.twilioAccountSid || '').trim();
   const twilioToken = (config.twilioAuthToken || '').trim();
   const twilioFrom = (config.twilioPhoneNumber || '').trim();
@@ -245,9 +142,9 @@ export async function dispatchRealSms(mobile: string, otp: string): Promise<Send
     try {
       const url = `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`;
       const bodyParams = new URLSearchParams({
-        To: `+91${cleanMobile}`,
+        To: e164Number,
         From: twilioFrom,
-        Body: `Your VIDHYAA Jewellery verification code is: ${otp}. Valid for 5 minutes. Do not share this code.`,
+        Body: `Your VIDHYAA Jewellery Studio verification code is: ${otp}. Valid for 5 minutes. Do not share this OTP.`,
       });
       const authHeader = 'Basic ' + Buffer.from(`${twilioSid}:${twilioToken}`).toString('base64');
       const res = await fetch(url, {
@@ -261,28 +158,153 @@ export async function dispatchRealSms(mobile: string, otp: string): Promise<Send
       const data: any = await res.json().catch(() => null);
 
       if (res.ok && !data?.error_code) {
-        console.log('[SMS Gateway Diagnostic]', { provider: 'twilio', status: 'DISPATCHED_TO_CARRIER' });
+        console.log('[SMS Gateway Diagnostic]', { provider: 'twilio', status: 'DISPATCHED_TO_CARRIER', destination: e164Number.slice(0, 4) + '••••' });
         return {
           success: true,
           provider: 'twilio',
-          message: 'OTP dispatched successfully via Twilio gateway.',
+          message: `OTP dispatched successfully to ${e164Number} via Twilio international carrier.`,
         };
       }
 
       console.warn('[SMS Provider Diagnostic]', { provider: 'twilio', statusCode: res.status, errorCode: data?.error_code || 'DISPATCH_FAILED' });
-      return {
-        success: false,
-        provider: 'twilio',
-        errorCode: 'TWILIO_DELIVERY_FAILED',
-        message: data?.message || 'Twilio SMS dispatch failed.',
-      };
+      // If twilio fails and it's India, let it fall through to domestic Indian providers below
+      if (!isIndia) {
+        return {
+          success: false,
+          provider: 'twilio',
+          errorCode: 'TWILIO_DELIVERY_FAILED',
+          message: data?.message || 'Twilio SMS dispatch failed.',
+        };
+      }
     } catch (err: any) {
       console.error('[SMS Provider Diagnostic]', { provider: 'twilio', errorCode: 'NETWORK_ERROR', message: err?.message || 'Connection failure' });
+      if (!isIndia) {
+        return {
+          success: false,
+          provider: 'twilio',
+          errorCode: 'NETWORK_ERROR',
+          message: 'Failed to connect to Twilio SMS gateway.',
+        };
+      }
     }
   }
 
-  // 5. No SMS Provider Configured
-  // Safely inform that no telecom carrier gateway or Firebase phone auth is available
+  // Domestic Indian Routes (Fast2SMS, 2Factor, MSG91)
+  if (isIndia && indian10Digit.length === 10) {
+    // 2. Fast2SMS (India Quick & OTP Route)
+    const fast2smsKey = (config.fast2smsApiKey || '').trim();
+    if (fast2smsKey) {
+      try {
+        const getUrl = `https://www.fast2sms.com/dev/bulkV2?authorization=${encodeURIComponent(fast2smsKey)}&route=otp&variables_values=${encodeURIComponent(otp)}&numbers=${encodeURIComponent(indian10Digit)}`;
+        const getRes = await fetch(getUrl, {
+          method: 'GET',
+          headers: {
+            'authorization': fast2smsKey,
+            'cache-control': 'no-cache',
+          },
+        });
+
+        const getData: any = await getRes.json().catch(() => null);
+        if (getData && (getData.return === true || getData.status_code === 200)) {
+          console.log('[SMS Gateway Diagnostic]', { provider: 'fast2sms', method: 'GET', status: 'DISPATCHED_TO_CARRIER' });
+          return {
+            success: true,
+            provider: 'fast2sms',
+            message: 'OTP dispatched successfully via Fast2SMS telecom gateway.',
+          };
+        }
+
+        const postRes = await fetch('https://www.fast2sms.com/dev/bulkV2', {
+          method: 'POST',
+          headers: {
+            'authorization': fast2smsKey,
+            'Content-Type': 'application/json',
+            'cache-control': 'no-cache',
+          },
+          body: JSON.stringify({
+            route: 'otp',
+            variables_values: otp,
+            numbers: indian10Digit,
+          }),
+        });
+
+        const postData: any = await postRes.json().catch(() => null);
+        if (postData && (postData.return === true || postData.status_code === 200)) {
+          console.log('[SMS Gateway Diagnostic]', { provider: 'fast2sms', method: 'POST', status: 'DISPATCHED_TO_CARRIER' });
+          return {
+            success: true,
+            provider: 'fast2sms',
+            message: 'OTP dispatched successfully via Fast2SMS telecom gateway.',
+          };
+        }
+
+        const errMsg = Array.isArray(postData?.message)
+          ? postData.message[0]
+          : (postData?.message || (Array.isArray(getData?.message) ? getData.message[0] : getData?.message) || 'Fast2SMS delivery rejected by carrier.');
+
+        console.warn('[SMS Provider Diagnostic]', { provider: 'fast2sms', statusCode: postRes.status, errorCode: 'CARRIER_REJECTED' });
+      } catch (err: any) {
+        console.error('[SMS Provider Diagnostic]', { provider: 'fast2sms', errorCode: 'NETWORK_ERROR', message: err?.message || 'Connection failure' });
+      }
+    }
+
+    // 3. 2Factor.in (Indian transactional OTP route)
+    const twofactorKey = (config.twofactorApiKey || '').trim();
+    if (twofactorKey) {
+      try {
+        const url = `https://2factor.in/API/V1/${encodeURIComponent(twofactorKey)}/SMS/+91${encodeURIComponent(indian10Digit)}/${encodeURIComponent(otp)}/OTP1`;
+        const res = await fetch(url, { method: 'GET' });
+        const data: any = await res.json().catch(() => null);
+
+        if (data && (data.Status === 'Success' || res.ok)) {
+          console.log('[SMS Gateway Diagnostic]', { provider: 'twofactor', status: 'DISPATCHED_TO_CARRIER' });
+          return {
+            success: true,
+            provider: 'twofactor',
+            message: 'OTP dispatched successfully via 2Factor Indian telecom route.',
+          };
+        }
+        console.warn('[SMS Provider Diagnostic]', { provider: 'twofactor', statusCode: res.status, errorCode: data?.Details || data?.Status || 'DISPATCH_FAILED' });
+      } catch (err: any) {
+        console.error('[SMS Provider Diagnostic]', { provider: 'twofactor', errorCode: 'NETWORK_ERROR', message: err?.message || 'Connection failure' });
+      }
+    }
+
+    // 4. MSG91 (Indian DLT Enterprise Gateway)
+    const msg91Key = (config.msg91AuthKey || '').trim();
+    const msg91TemplateId = (config.msg91TemplateId || '').trim();
+    if (msg91Key && msg91TemplateId) {
+      try {
+        const url = `https://control.msg91.com/api/v5/otp?template_id=${encodeURIComponent(msg91TemplateId)}&mobile=91${indian10Digit}&authkey=${encodeURIComponent(msg91Key)}&otp=${encodeURIComponent(otp)}`;
+        const res = await fetch(url, { method: 'POST' });
+        const data: any = await res.json().catch(() => null);
+
+        if (data && (data.type === 'success' || res.ok)) {
+          console.log('[SMS Gateway Diagnostic]', { provider: 'msg91', status: 'DISPATCHED_TO_CARRIER' });
+          return {
+            success: true,
+            provider: 'msg91',
+            message: 'OTP dispatched successfully via MSG91 gateway.',
+          };
+        }
+        console.warn('[SMS Provider Diagnostic]', { provider: 'msg91', statusCode: res.status, errorCode: data?.type || 'DISPATCH_FAILED' });
+      } catch (err: any) {
+        console.error('[SMS Provider Diagnostic]', { provider: 'msg91', errorCode: 'NETWORK_ERROR', message: err?.message || 'Connection failure' });
+      }
+    }
+  }
+
+  // If phone is not India and Twilio was not configured:
+  if (!isIndia) {
+    return {
+      success: false,
+      provider: 'none',
+      errorCode: 'NO_INTERNATIONAL_SMS_PROVIDER',
+      message: `International SMS delivery to ${e164Number} requires Phone Authentication in the Firebase Console (which routes via Google Telecom globally) or Twilio configured on the server.`,
+    };
+  }
+
+  // No SMS provider configured for domestic India either
   console.warn('[SMS Gateway Diagnostic]', {
     provider: 'none',
     errorCode: 'NO_SMS_PROVIDER_CONFIGURED',
@@ -293,6 +315,6 @@ export async function dispatchRealSms(mobile: string, otp: string): Promise<Send
     success: false,
     provider: 'none',
     errorCode: 'NO_SMS_PROVIDER_CONFIGURED',
-    message: 'No active SMS provider is configured. Please enable Phone Auth in the Firebase Console or configure Fast2SMS/2Factor credentials in Admin Settings to receive real SMS messages on mobile devices.',
+    message: 'No active SMS provider is configured on the server. Please enable Phone Auth in the Firebase Console or configure SMS Gateway credentials (Twilio / Fast2SMS) in Admin Settings to receive real SMS messages on mobile devices.',
   };
 }

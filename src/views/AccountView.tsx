@@ -121,7 +121,9 @@ export const AccountView: React.FC<AccountViewProps> = ({
                 </span>
               )}
             </div>
-            <p className="text-xs text-gray-500">{user.email}</p>
+            <p className="text-xs text-gray-500 font-mono mt-0.5">
+              {user.phoneNumber || userProfile?.phone || (user.email && !user.email.includes('@phone.vidhyaajewellery.com') ? user.email : 'Verified Mobile Patron')}
+            </p>
           </div>
         </div>
 
