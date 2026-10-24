@@ -6,6 +6,7 @@ import { useWishlist } from '../context/WishlistContext';
 import { isGenuineProduct, isGenuineImageUrl, isGenuineVideoUrl } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 import { SeamlessLoopVideo } from './SeamlessLoopVideo';
+import { JEWELLERY_PLACEHOLDER_IMAGE } from '../lib/storageService';
 
 interface QuickViewModalProps {
   product: Product | null;
@@ -54,7 +55,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
     ? [variationImage, ...product.images.filter((img) => img !== variationImage)]
     : product.images;
   const validList = rawList.filter((img) => img && isGenuineImageUrl(img));
-  const currentImages = validList.length > 0 ? validList : ['/hero-section-image-final.jpg'];
+  const currentImages = validList.length > 0 ? validList : [JEWELLERY_PLACEHOLDER_IMAGE];
   const activeImage = currentImages[activeImageIndex] || currentImages[0];
 
   const currentPrice = product.price;

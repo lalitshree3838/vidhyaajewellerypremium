@@ -17,8 +17,7 @@ export const GENUINE_PRODUCT_IMAGE_FILENAMES = new Set([
   'gold__diamond_plated_neclace_l_1792726223045_u5vt.jpg',
   'gold_polish_daily_use_no_effec_1792725709360_k74e.png',
   'gold_rajwada_kada_openable_____1792726903001_4fx1.jpg',
-  'royal_gold_ad_square_pendant_n_1792726395202_nzjd.jpg',
-  'hero-section-image-final.jpg'
+  'royal_gold_ad_square_pendant_n_1792726395202_nzjd.jpg'
 ]);
 
 // Explicit list of sample/unwanted images to strictly exclude
@@ -85,11 +84,6 @@ export function isGenuineImageUrl(url?: string | null): boolean {
 
   // Allow uploads stored in Firebase Cloud Storage
   if (trimmed.includes('firebasestorage.googleapis.com') || trimmed.includes('firebasestorage.app')) {
-    return true;
-  }
-
-  // Allow luxury fallback banner
-  if (trimmed === '/hero-section-image-final.jpg') {
     return true;
   }
 

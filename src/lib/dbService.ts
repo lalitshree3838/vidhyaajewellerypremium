@@ -366,7 +366,7 @@ export async function fetchProducts(): Promise<Product[]> {
       const fallbackSample = INITIAL_PRODUCTS.find((p) => p.id === d.id);
       const finalImgs = cleanImgs.length > 0
         ? cleanImgs
-        : (fallbackSample?.images && fallbackSample.images.length > 0 ? fallbackSample.images : ['/hero-section-image-final.jpg']);
+        : (fallbackSample?.images && fallbackSample.images.length > 0 ? fallbackSample.images : []);
 
       const prodCandidate: Product = {
         id: d.id,

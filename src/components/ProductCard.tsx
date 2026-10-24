@@ -5,6 +5,7 @@ import { useCart } from '../context/CartContext';
 import { useWishlist } from '../context/WishlistContext';
 import { isGenuineImageUrl, isGenuineProduct } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
+import { JEWELLERY_PLACEHOLDER_IMAGE } from '../lib/storageService';
 
 interface ProductCardProps {
   product: Product;
@@ -35,16 +36,16 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const [imageError, setImageError] = useState(false);
 
   // Active displayed image: variation image if available, else product image
-  const displayImage = selectedVariation?.image || product.images[0];
-  const secondaryImage = product.images[1] || displayImage;
+  const displayImage = selectedVariation?.image?.trim() || product.images?.[0]?.trim() || '';
+  const secondaryImage = product.images?.[1]?.trim() || displayImage;
 
   const currentPrice = product.price;
   const currentMrp = product.mrp > 0 ? product.mrp : product.price;
   const discountPercent = calculateDiscountPercent(currentMrp, currentPrice);
   const hasDiscount = currentMrp > currentPrice && discountPercent > 0;
 
-  // Elegant luxury fallback placeholder if image is missing or cannot be loaded
-  const fallbackImage = '/hero-section-image-final.jpg';
+  // Elegant luxury jewellery placeholder if image is missing or cannot be loaded (never homepage banner)
+  const fallbackImage = JEWELLERY_PLACEHOLDER_IMAGE;
   const effectiveImage = (!imageError && displayImage) ? displayImage : fallbackImage;
 
   const handleAddToCart = (e: React.MouseEvent) => {

@@ -473,11 +473,43 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
     setSavingProduct(true);
     try {
+      let productImages = [...(editingProduct.images || [])];
+      let variationsList = [...(editingProduct.variations || [])];
+
+      // Automatically upload and attach selected file if user selected a photo but didn't separately click "Add Image"
+      if (selectedFileForUpload) {
+        try {
+          const uploadedUrl = await uploadProductImageToStorage(
+            selectedFileForUpload.file,
+            editingProduct.name
+          );
+          if (!productImages.includes(uploadedUrl)) {
+            productImages.push(uploadedUrl);
+          }
+          if (variationsList.length > 0) {
+            variationsList[0] = { ...variationsList[0], image: uploadedUrl };
+          }
+          if (selectedFileForUpload.previewUrl) {
+            URL.revokeObjectURL(selectedFileForUpload.previewUrl);
+          }
+          setSelectedFileForUpload(null);
+        } catch (uploadErr) {
+          console.warn('[AdminView] Auto-upload error during product save:', uploadErr);
+        }
+      }
+
+      // Guarantee primary variation points to primary product image
+      if (productImages.length > 0 && variationsList.length > 0) {
+        if (!variationsList[0].image || variationsList[0].image.trim() === '') {
+          variationsList[0] = { ...variationsList[0], image: productImages[0] };
+        }
+      }
+
       const sellingPrice = Number(editingProduct.price) || 0;
       const originalMrp = Number(editingProduct.mrp) || sellingPrice;
       const discount = calculateDiscountPercent(originalMrp, sellingPrice);
 
-      const updatedVariations = (editingProduct.variations || []).map((v) => ({
+      const updatedVariations = variationsList.map((v) => ({
         ...v,
         price: sellingPrice,
         mrp: originalMrp
@@ -485,6 +517,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
       const updated: Product = {
         ...editingProduct,
+        images: productImages,
         name: editingProduct.name.trim(),
         slug: (editingProduct.slug || editingProduct.name)
           .toLowerCase()
@@ -729,9 +762,9 @@ export const AdminView: React.FC<AdminViewProps> = ({
       // Add to product images
       const updatedImages = [...(editingProduct.images || []), uploadedUrl];
 
-      // If variations don't have an image or first variation matches empty, set it
+      // Always synchronize primary variation image with the uploaded image if it's primary or empty
       const updatedVariations = (editingProduct.variations || []).map((v, idx) => {
-        if (idx === 0 && (!v.image || v.image === '')) {
+        if (idx === 0) {
           return { ...v, image: uploadedUrl };
         }
         return v;
@@ -740,7 +773,18 @@ export const AdminView: React.FC<AdminViewProps> = ({
       setEditingProduct({
         ...editingProduct,
         images: updatedImages,
-        variations: updatedVariations
+        variations: updatedVariations.length > 0 ? updatedVariations : [
+          {
+            id: `var_${Date.now()}`,
+            name: 'Standard',
+            colorFinish: 'Yellow Gold',
+            hexCode: '#D4AF37',
+            sku: `VDH-${Date.now()}`,
+            stock: editingProduct.stock || 5,
+            image: uploadedUrl,
+            active: true
+          }
+        ]
       });
 
       // Clear pending selection
@@ -768,7 +812,14 @@ export const AdminView: React.FC<AdminViewProps> = ({
   const handleRemoveImageFromProduct = (index: number) => {
     if (!editingProduct) return;
     const imgs = editingProduct.images.filter((_, i) => i !== index);
-    setEditingProduct({ ...editingProduct, images: imgs });
+    const newPrimary = imgs[0] || '';
+    const updatedVariations = (editingProduct.variations || []).map((v, i) => {
+      if (i === 0) {
+        return { ...v, image: newPrimary };
+      }
+      return v;
+    });
+    setEditingProduct({ ...editingProduct, images: imgs, variations: updatedVariations });
   };
 
   const handleSetPrimaryImage = (index: number) => {
@@ -776,7 +827,13 @@ export const AdminView: React.FC<AdminViewProps> = ({
     const imgs = [...editingProduct.images];
     const [selected] = imgs.splice(index, 1);
     imgs.unshift(selected);
-    setEditingProduct({ ...editingProduct, images: imgs });
+    const updatedVariations = (editingProduct.variations || []).map((v, i) => {
+      if (i === 0) {
+        return { ...v, image: selected };
+      }
+      return v;
+    });
+    setEditingProduct({ ...editingProduct, images: imgs, variations: updatedVariations });
   };
 
   // -------------------------------------------------------------

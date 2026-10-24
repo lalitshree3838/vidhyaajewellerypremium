@@ -29,6 +29,7 @@ import { MetadataManager } from '../components/MetadataManager';
 import { isGenuineProduct, isGenuineImageUrl, isGenuineVideoUrl } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 import { SeamlessLoopVideo } from '../components/SeamlessLoopVideo';
+import { JEWELLERY_PLACEHOLDER_IMAGE } from '../lib/storageService';
 
 interface ProductDetailViewProps {
   product: Product;
@@ -110,7 +111,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     ? [variationImage, ...product.images.filter((img) => img !== variationImage)]
     : product.images;
   const validGallery = rawGallery.filter((img) => img && isGenuineImageUrl(img));
-  const galleryImages = validGallery.length > 0 ? validGallery : ['/hero-section-image-final.jpg'];
+  const galleryImages = validGallery.length > 0 ? validGallery : [JEWELLERY_PLACEHOLDER_IMAGE];
 
   const currentDisplayImage = galleryImages[activeImageIndex] || galleryImages[0];
   const hasGenuineVideo = Boolean(product.videoUrl && isGenuineVideoUrl(product.videoUrl));

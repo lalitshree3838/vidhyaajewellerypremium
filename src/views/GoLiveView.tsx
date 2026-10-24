@@ -28,6 +28,7 @@ import { Product, ProductVariation, LiveChatMessage, LiveProductShowcase } from 
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { MetadataManager } from '../components/MetadataManager';
+import { JEWELLERY_PLACEHOLDER_IMAGE } from '../lib/storageService';
 import { isGenuineProduct, isGenuineImageUrl } from '../lib/sampleData';
 
 interface GoLiveViewProps {
@@ -404,7 +405,7 @@ export const GoLiveView: React.FC<GoLiveViewProps> = ({
                 /* High-Definition Studio Showcase Feed */
                 <div className="relative w-full h-full">
                   <img
-                    src={pinnedProduct?.images[0] || products.find(p => p.images && p.images.length > 0)?.images[0] || '/hero-section-image-final.jpg'}
+                    src={pinnedProduct?.images[0] || products.find(p => p.images && p.images.length > 0)?.images[0] || JEWELLERY_PLACEHOLDER_IMAGE}
                     alt="Live Studio Stream"
                     className="w-full h-full object-cover transition-all duration-700 filter brightness-95"
                   />
