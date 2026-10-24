@@ -247,7 +247,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                   autoPlay={true}
                   isMuted={videoMuted}
                   enableObserver={true}
-                  observerThreshold={0.15}
+                  observerThreshold={0.05}
                   onError={() => {
                     setImageError(true);
                     setActiveMedia('image');
@@ -372,7 +372,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                   autoPlay={true}
                   isMuted={videoMuted}
                   enableObserver={true}
-                  observerThreshold={0.15}
+                  observerThreshold={0.05}
                   className="w-full h-full object-contain"
                   style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                 />

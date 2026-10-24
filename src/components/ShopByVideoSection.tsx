@@ -82,7 +82,8 @@ const AutoplayingReelVideo: React.FC<AutoplayingReelVideoProps> = ({
         isMuted={true}
         autoPlay={true}
         enableObserver={true}
-        observerThreshold={0.1}
+        observerThreshold={0.05}
+        showPlayButtonFallback={false}
         onError={() => setHasError(true)}
         className="w-full h-full object-cover pointer-events-none select-none block"
         style={{

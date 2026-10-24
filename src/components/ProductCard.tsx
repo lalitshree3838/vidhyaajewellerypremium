@@ -122,12 +122,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
               autoPlay={true}
               isMuted={isSoundMuted}
               enableObserver={true}
-              observerThreshold={0.15}
+              observerThreshold={0.05}
               onError={() => {
                 setVideoError(true);
                 setImageLoaded(true);
               }}
               onLoadedData={() => setImageLoaded(true)}
+              onCanPlay={() => setImageLoaded(true)}
               className="w-full h-full object-contain object-center group-hover:scale-105 transition-transform duration-500 ease-out"
               style={{ width: '100%', height: '100%', objectFit: 'contain' }}
             />
