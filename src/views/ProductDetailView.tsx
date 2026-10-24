@@ -89,6 +89,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const [reviewSubmitted, setReviewSubmitted] = useState(false);
   const [videoModalOpen, setVideoModalOpen] = useState(false);
   const [videoMuted, setVideoMuted] = useState(true);
+  const [activeMedia, setActiveMedia] = useState<'image' | 'video'>('image');
 
   useEffect(() => {
     if (initialVariation) {
@@ -98,6 +99,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     }
     setActiveImageIndex(0);
     setImageError(false);
+    setActiveMedia('image');
     setQuantity(1);
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
@@ -135,6 +137,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const handleVariationChange = (v: ProductVariation) => {
     setSelectedVariation(v);
     setActiveImageIndex(0); // Immediately displays that variation's photo!
+    setActiveMedia('image');
   };
 
   const handleAddToCart = () => {
@@ -233,9 +236,50 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-14 items-start">
         {/* Left Column: Image Gallery & Swatches */}
         <div className="space-y-4 lg:sticky lg:top-28">
-          {/* Main Large Image Container with Consistent Aspect Ratio & Object-Contain */}
+          {/* Main Large Media Container with Consistent 4:5 Aspect Ratio & Object-Contain */}
           <div className="relative aspect-[4/5] rounded-2xl overflow-hidden bg-white border border-[#E8DCCF] shadow-md group flex items-center justify-center p-4">
-            {imageError || !currentDisplayImage || !isGenuineImageUrl(currentDisplayImage) ? (
+            {activeMedia === 'video' && videoData ? (
+              <div className="relative w-full h-full flex items-center justify-center bg-white overflow-hidden">
+                <SeamlessLoopVideo
+                  src={videoData.videoUrl}
+                  poster={currentDisplayImage}
+                  title={videoData.title}
+                  autoPlay={true}
+                  isMuted={videoMuted}
+                  enableObserver={true}
+                  observerThreshold={0.15}
+                  onError={() => {
+                    setImageError(true);
+                    setActiveMedia('image');
+                  }}
+                  className="w-full h-full object-contain object-center"
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                />
+
+                {/* Sound Toggle Button */}
+                <button
+                  type="button"
+                  onClick={() => setVideoMuted(!videoMuted)}
+                  className="absolute bottom-4 right-4 z-20 w-8 h-8 rounded-full bg-black/60 hover:bg-black/85 backdrop-blur-md text-white border border-white/20 transition-all cursor-pointer shadow-md flex items-center justify-center active:scale-90"
+                  title={videoMuted ? 'Click to Unmute video' : 'Click to Mute video'}
+                  aria-label={videoMuted ? 'Unmute video audio' : 'Mute video audio'}
+                >
+                  {videoMuted ? (
+                    <VolumeX className="w-4 h-4 text-white/90" />
+                  ) : (
+                    <Volume2 className="w-4 h-4 text-emerald-400" />
+                  )}
+                </button>
+
+                {/* 360 Reel Badge */}
+                <div className="absolute top-4 left-4 flex items-center gap-2 pointer-events-none z-10">
+                  <span className="bg-[#0F5C4D] text-[#FAF7F2] text-[10px] font-bold tracking-wider uppercase px-2.5 py-1 rounded shadow flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse" />
+                    <span>360° Studio Showcase</span>
+                  </span>
+                </div>
+              </div>
+            ) : imageError || !currentDisplayImage || !isGenuineImageUrl(currentDisplayImage) ? (
               <div className="w-full h-full flex flex-col items-center justify-center text-center p-6 bg-[#FAF7F2] text-gray-400 select-none">
                 <div className="w-14 h-14 rounded-full bg-[#DFB982]/15 border border-[#DFB982]/30 flex items-center justify-center text-[#802336] mb-3">
                   <Sparkles className="w-6 h-6 text-[#802336]/80" />
@@ -252,7 +296,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             )}
 
             {/* Discount Badge */}
-            {discountPercent > 0 && (
+            {discountPercent > 0 && activeMedia !== 'video' && (
               <span className="absolute top-4 left-4 bg-[#802336] text-white text-xs font-bold px-2.5 py-1 rounded shadow-md uppercase tracking-wider">
                 {discountPercent}% OFF
               </span>
@@ -270,52 +314,72 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             )}
           </div>
 
-          {/* Thumbnails Row */}
-          {galleryImages.length > 1 && (
-            <div className="flex gap-3 overflow-x-auto pb-2">
-              {galleryImages.map((img, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => setActiveImageIndex(idx)}
-                  className={`w-20 h-20 rounded-xl overflow-hidden border-2 bg-white p-1 flex items-center justify-center flex-shrink-0 cursor-pointer transition-all ${
-                    activeImageIndex === idx
-                      ? 'border-[#0F5B46] ring-2 ring-[#0F5B46]/30 scale-105'
-                      : 'border-[#E8DCCF] opacity-70 hover:opacity-100 hover:border-gray-400'
-                  }`}
-                >
-                  <img
-                    src={img}
-                    alt=""
-                    className="w-full h-full object-contain"
-                    onError={(e) => {
-                      (e.target as HTMLElement).style.display = 'none';
-                    }}
-                  />
-                </button>
-              ))}
-            </div>
-          )}
+          {/* Thumbnails Row (Photos + 360° Video Button) */}
+          <div className="flex gap-3 overflow-x-auto pb-2 items-center">
+            {hasGenuineVideo && (
+              <button
+                type="button"
+                onClick={() => setActiveMedia('video')}
+                className={`w-20 h-20 rounded-xl overflow-hidden border-2 bg-gradient-to-b from-[#181113] to-[#2B0E14] p-1 flex flex-col items-center justify-center flex-shrink-0 cursor-pointer transition-all ${
+                  activeMedia === 'video'
+                    ? 'border-[#0F5B46] ring-2 ring-[#0F5B46]/30 scale-105'
+                    : 'border-[#E8DCCF] opacity-80 hover:opacity-100 hover:border-[#DFB982]'
+                }`}
+                title="Watch 360° Studio Video Reel"
+              >
+                <div className="w-7 h-7 rounded-full bg-[#DFB982] flex items-center justify-center shadow mb-1">
+                  <Play className="w-3.5 h-3.5 fill-black text-black ml-0.5" />
+                </div>
+                <span className="text-[9px] font-bold text-[#DFB982] tracking-wider uppercase">360° Video</span>
+              </button>
+            )}
+
+            {galleryImages.map((img, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => {
+                  setActiveMedia('image');
+                  setActiveImageIndex(idx);
+                }}
+                className={`w-20 h-20 rounded-xl overflow-hidden border-2 bg-white p-1 flex items-center justify-center flex-shrink-0 cursor-pointer transition-all ${
+                  activeMedia === 'image' && activeImageIndex === idx
+                    ? 'border-[#0F5B46] ring-2 ring-[#0F5B46]/30 scale-105'
+                    : 'border-[#E8DCCF] opacity-70 hover:opacity-100 hover:border-gray-400'
+                }`}
+              >
+                <img
+                  src={img}
+                  alt=""
+                  className="w-full h-full object-contain"
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = 'none';
+                  }}
+                />
+              </button>
+            ))}
+          </div>
 
           {videoData && (
             <div className="mt-4 rounded-2xl overflow-hidden border border-[#DFB982]/60 bg-[#160E10] shadow-lg">
               <div
-                onClick={() => setVideoModalOpen(true)}
-                className="relative aspect-[16/9] sm:aspect-[4/3] w-full bg-black overflow-hidden cursor-pointer group"
+                className="relative aspect-[16/9] sm:aspect-[4/3] w-full bg-black overflow-hidden group"
               >
                 <SeamlessLoopVideo
                   src={videoData.videoUrl}
                   poster={videoData.poster}
                   title={videoData.title}
                   autoPlay={true}
-                  isMuted={true}
+                  isMuted={videoMuted}
                   enableObserver={true}
                   observerThreshold={0.15}
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-contain"
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/30 pointer-events-none" />
 
                 {/* Badges & Live Loop Indicator */}
-                <div className="absolute top-3 left-3 flex items-center gap-2 pointer-events-none">
+                <div className="absolute top-3 left-3 flex items-center gap-2 pointer-events-none z-10">
                   <span className="bg-[#DFB982] text-black text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider shadow">
                     360° Studio Reel
                   </span>
@@ -325,17 +389,40 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                   </span>
                 </div>
 
+                {/* Sound Toggle Button */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setVideoMuted(!videoMuted);
+                  }}
+                  className="absolute top-3 right-3 z-20 w-8 h-8 rounded-full bg-black/60 hover:bg-black/85 backdrop-blur-md text-white border border-white/20 transition-all cursor-pointer shadow-md flex items-center justify-center active:scale-90"
+                  title={videoMuted ? 'Click to Unmute' : 'Click to Mute'}
+                  aria-label={videoMuted ? 'Unmute video audio' : 'Mute video audio'}
+                >
+                  {videoMuted ? (
+                    <VolumeX className="w-4 h-4 text-white/90" />
+                  ) : (
+                    <Volume2 className="w-4 h-4 text-emerald-400" />
+                  )}
+                </button>
+
                 {/* Center Hover Trigger */}
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <button
+                  type="button"
+                  onClick={() => setVideoModalOpen(true)}
+                  className="absolute inset-0 flex items-center justify-center cursor-pointer group-hover:bg-black/20 transition-colors"
+                  title="Expand to Full Screen Cinema View"
+                >
                   <div className="w-12 h-12 rounded-full bg-black/50 group-hover:bg-black/80 border border-white/20 text-white flex items-center justify-center transition-all group-hover:scale-110 shadow-lg">
                     <Play className="w-5 h-5 fill-white ml-0.5" />
                   </div>
-                </div>
+                </button>
 
                 {/* Bottom Bar */}
                 <div className="absolute bottom-3 inset-x-3 flex items-center justify-between text-white text-xs pointer-events-none">
                   <span className="text-[11px] font-medium text-gray-200 drop-shadow">
-                    Click for Full Screen & Audio
+                    Click to Open Full Screen Cinema View
                   </span>
                   <span className="bg-black/70 px-2 py-0.5 rounded text-[10px] font-mono text-[#DFB982]">
                     HD 1080p
@@ -873,7 +960,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                 autoPlay={true}
                 isMuted={videoMuted}
                 enableObserver={false}
-                className="w-full h-full object-cover"
+                className="w-full h-full object-contain"
+                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
               />
               {/* Audio Toggle */}
               <button

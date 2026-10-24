@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Heart, Star, ShoppingBag, ShieldCheck, Truck, RefreshCw, Check, Play } from 'lucide-react';
+import { X, Heart, Star, ShoppingBag, ShieldCheck, Truck, RefreshCw, Check, Play, Volume2, VolumeX } from 'lucide-react';
 import { Product, ProductVariation } from '../types';
 import { useCart } from '../context/CartContext';
 import { useWishlist } from '../context/WishlistContext';
@@ -32,6 +32,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
   const [added, setAdded] = useState(false);
   const [imageError, setImageError] = useState(false);
   const [showVideo, setShowVideo] = useState(false);
+  const [videoMuted, setVideoMuted] = useState(true);
 
   useEffect(() => {
     if (initialVariation) {
@@ -101,19 +102,35 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
         <div className="md:w-1/2 p-6 bg-[#FAF7F2] flex flex-col justify-between">
           <div className="relative aspect-square rounded-xl overflow-hidden bg-white border border-[#E8DCCF] flex items-center justify-center p-3">
             {showVideo && hasVideo ? (
-              <div className="w-full h-full bg-black flex items-center justify-center relative overflow-hidden rounded-lg">
+              <div className="w-full h-full bg-white flex items-center justify-center relative overflow-hidden rounded-lg">
                 <SeamlessLoopVideo
                   src={product.videoUrl!}
                   poster={activeImage}
                   title={product.name}
                   autoPlay={true}
-                  isMuted={true}
+                  isMuted={videoMuted}
                   enableObserver={false}
-                  className="w-full h-full object-cover"
+                  onError={() => setShowVideo(false)}
+                  className="w-full h-full object-contain"
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                 />
-                <div className="absolute top-2 left-2 bg-[#DFB982] text-black text-[9px] font-bold px-2 py-0.5 rounded shadow uppercase tracking-wider">
+                <div className="absolute top-2 left-2 bg-[#DFB982] text-black text-[9px] font-bold px-2 py-0.5 rounded shadow uppercase tracking-wider pointer-events-none">
                   360° Video Reel
                 </div>
+                {/* User Sound Toggle Button */}
+                <button
+                  type="button"
+                  onClick={() => setVideoMuted(!videoMuted)}
+                  className="absolute bottom-2.5 right-2.5 z-20 w-7 h-7 rounded-full bg-black/60 hover:bg-black/85 backdrop-blur-md text-white border border-white/20 transition-all cursor-pointer shadow-md flex items-center justify-center active:scale-90"
+                  title={videoMuted ? 'Click to Unmute' : 'Click to Mute'}
+                  aria-label={videoMuted ? 'Unmute video audio' : 'Mute video audio'}
+                >
+                  {videoMuted ? (
+                    <VolumeX className="w-3.5 h-3.5 text-white/90" />
+                  ) : (
+                    <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                  )}
+                </button>
               </div>
             ) : imageError || !activeImage || !isGenuineImageUrl(activeImage) ? (
               <div className="w-full h-full flex flex-col items-center justify-center text-center p-4 bg-[#FAF7F2] text-gray-400">

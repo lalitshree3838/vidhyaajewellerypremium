@@ -53,6 +53,26 @@ const AutoplayingReelVideo: React.FC<AutoplayingReelVideoProps> = ({
   posterImage,
   title
 }) => {
+  const [hasError, setHasError] = useState(false);
+
+  if (hasError) {
+    return (
+      <div className="absolute inset-0 w-full h-full overflow-hidden bg-black select-none pointer-events-none">
+        {posterImage && isGenuineImageUrl(posterImage) ? (
+          <img
+            src={posterImage}
+            alt={title}
+            className="w-full h-full object-cover select-none"
+          />
+        ) : (
+          <div className="w-full h-full bg-[#181113] flex items-center justify-center">
+            <Sparkles className="w-8 h-8 text-[#DFB982]/50" />
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="absolute inset-0 w-full h-full overflow-hidden bg-black select-none pointer-events-none">
       <SeamlessLoopVideo
@@ -63,6 +83,7 @@ const AutoplayingReelVideo: React.FC<AutoplayingReelVideoProps> = ({
         autoPlay={true}
         enableObserver={true}
         observerThreshold={0.1}
+        onError={() => setHasError(true)}
         className="w-full h-full object-cover pointer-events-none select-none block"
         style={{
           width: '100%',
@@ -84,7 +105,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
   const { addToCart, openCart } = useCart();
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // Compute video reels exclusively from products with verified user-uploaded videos
+  // Compute video reels from database products with verified user-uploaded videos, combined with catalog videos
   const videoReels: VideoReelItem[] = useMemo(() => {
     const active = products
       .filter((p) => Boolean(p.videoUrl && isGenuineVideoUrl(p.videoUrl)))
@@ -105,11 +126,10 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
         };
       });
 
-    if (active.length > 0) return active;
-
-    // Fallback to verified catalog products with existing uploaded videos
-    return INITIAL_PRODUCTS
-      .filter((p) => Boolean(p.videoUrl && isGenuineVideoUrl(p.videoUrl)))
+    // Merge active with any initial products having videos so full video catalog is always rich, without duplicates
+    const seenIds = new Set(active.map((r) => r.productId));
+    const catalogReels: VideoReelItem[] = INITIAL_PRODUCTS
+      .filter((p) => Boolean(p.videoUrl && isGenuineVideoUrl(p.videoUrl) && !seenIds.has(p.id)))
       .map((p) => {
         const genuinePoster = (p.images || []).find(isGenuineImageUrl) || '';
         return {
@@ -126,6 +146,8 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
           productId: p.id
         };
       });
+
+    return [...active, ...catalogReels];
   }, [products]);
 
   // Active Lightbox State
@@ -470,8 +492,8 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
                     isMuted={isMuted}
                     enableObserver={false}
                     onError={() => setVideoHasError(true)}
-                    className="w-full h-full max-h-[550px] md:max-h-[640px] object-cover pointer-events-none select-none"
-                    style={{ width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }}
+                    className="w-full h-full max-h-[550px] md:max-h-[640px] object-contain pointer-events-none select-none"
+                    style={{ width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none' }}
                   />
 
                   {/* Play / Pause indicator overlay if user pauses */}

@@ -105,30 +105,28 @@ export function isGenuineVideoUrl(url?: string | null): boolean {
   const trimmed = url.trim();
   if (!trimmed) return false;
 
-  // Reject dummy/sample videos from Google sample buckets, demo placeholders, or Big Buck Bunny
+  // Reject only specific known dummy test buckets / public demo placeholders
   if (
-    trimmed.includes('commondatastorage.googleapis.com') ||
-    trimmed.includes('gtv-videos-bucket') ||
-    trimmed.includes('placeholder') ||
-    trimmed.includes('sample') ||
-    trimmed.includes('dummy') ||
-    trimmed.includes('demo') ||
-    trimmed.includes('ForBigger') ||
+    trimmed.includes('commondatastorage.googleapis.com/gtv-videos-bucket') ||
+    trimmed.includes('w3schools.com/html/mov_bbb') ||
+    trimmed.includes('BigBuckBunny') ||
+    trimmed.includes('ForBiggerBlazes') ||
+    trimmed.includes('ForBiggerEscapes') ||
+    trimmed.includes('ForBiggerFun') ||
+    trimmed.includes('ForBiggerJoy') ||
+    trimmed.includes('ForBiggerMeltdowns') ||
     trimmed.includes('WeAreGoingOnBullrun')
   ) {
     return false;
   }
 
-  // Allow valid user uploaded video URLs (e.g. data URLs, blob, Firebase storage, or direct uploads)
+  // Allow all genuine video formats, blob previews, data URLs, Firebase storage, and local uploaded paths
   return (
     trimmed.startsWith('data:video/') ||
     trimmed.startsWith('blob:') ||
-    trimmed.startsWith('/uploads/') ||
-    trimmed.startsWith('/videos/uploads/') ||
-    trimmed.startsWith('/products/uploads/') ||
-    trimmed.includes('firebasestorage.googleapis.com') ||
-    trimmed.includes('firebasestorage.app') ||
-    trimmed.startsWith('https://')
+    trimmed.startsWith('/') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('http://')
   );
 }
 

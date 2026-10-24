@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { Heart, Star, ShoppingBag, Eye, Check } from 'lucide-react';
+import { Heart, Star, ShoppingBag, Eye, Check, Volume2, VolumeX, Play } from 'lucide-react';
 import { Product, ProductVariation } from '../types';
 import { useCart } from '../context/CartContext';
 import { useWishlist } from '../context/WishlistContext';
-import { isGenuineImageUrl, isGenuineProduct } from '../lib/sampleData';
+import { isGenuineImageUrl, isGenuineProduct, isGenuineVideoUrl } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 import { JEWELLERY_PLACEHOLDER_IMAGE } from '../lib/storageService';
+import { SeamlessLoopVideo } from './SeamlessLoopVideo';
 
 interface ProductCardProps {
   product: Product;
@@ -34,6 +35,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const [addedToast, setAddedToast] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
+  const [videoError, setVideoError] = useState(false);
+  const [isSoundMuted, setIsSoundMuted] = useState(true);
+  const [showVideo, setShowVideo] = useState(true);
 
   // Active displayed image: variation image if available, else product image
   const displayImage = selectedVariation?.image?.trim() || product.images?.[0]?.trim() || '';
@@ -43,6 +47,10 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const currentMrp = product.mrp > 0 ? product.mrp : product.price;
   const discountPercent = calculateDiscountPercent(currentMrp, currentPrice);
   const hasDiscount = currentMrp > currentPrice && discountPercent > 0;
+
+  // Video presence check with actual saved URL from database
+  const hasVideo = Boolean(product.videoUrl && isGenuineVideoUrl(product.videoUrl) && !videoError);
+  const isDisplayingVideo = hasVideo && showVideo;
 
   // Elegant luxury jewellery placeholder if image is missing or cannot be loaded (never homepage banner)
   const fallbackImage = JEWELLERY_PLACEHOLDER_IMAGE;
@@ -85,6 +93,10 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     e.stopPropagation();
     setSelectedVariation(variation);
     setImageError(false);
+    // When customer chooses a specific color/finish variation, show that variation's photo
+    if (variation.image && isGenuineImageUrl(variation.image)) {
+      setShowVideo(false);
+    }
   };
 
   return (
@@ -92,7 +104,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       onClick={() => onSelectProduct(product)}
       className="group bg-white rounded-xl overflow-hidden border border-[#E8DCCF]/70 hover:border-[#D4AF37]/60 hover:shadow-xl transition-all duration-300 flex flex-col cursor-pointer"
     >
-      {/* Image Container with Consistent Aspect Ratio & Object-Contain */}
+      {/* Image / Video Container with Consistent 4:5 Aspect Ratio & Object-Contain */}
       <div className="relative aspect-[4/5] bg-white overflow-hidden flex items-center justify-center p-3 border-b border-[#F4EBE1]/60">
         {/* Loading placeholder skeleton */}
         {!imageLoaded && (
@@ -101,22 +113,67 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </div>
         )}
 
-        <img
-          src={effectiveImage}
-          alt={product.name}
-          className={`w-full h-full object-contain object-center group-hover:scale-105 transition-transform duration-500 ease-out ${
-            imageLoaded ? 'opacity-100' : 'opacity-0'
-          }`}
-          loading="lazy"
-          onLoad={() => setImageLoaded(true)}
-          onError={() => {
-            setImageError(true);
-            setImageLoaded(true);
-          }}
-        />
+        {isDisplayingVideo ? (
+          <div className="relative w-full h-full flex items-center justify-center overflow-hidden bg-white">
+            <SeamlessLoopVideo
+              src={product.videoUrl!}
+              poster={effectiveImage}
+              title={product.name}
+              autoPlay={true}
+              isMuted={isSoundMuted}
+              enableObserver={true}
+              observerThreshold={0.15}
+              onError={() => {
+                setVideoError(true);
+                setImageLoaded(true);
+              }}
+              onLoadedData={() => setImageLoaded(true)}
+              className="w-full h-full object-contain object-center group-hover:scale-105 transition-transform duration-500 ease-out"
+              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+            />
+
+            {/* User-controlled Sound Toggle Button */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsSoundMuted((prev) => !prev);
+              }}
+              className="absolute top-12 right-3 z-20 w-7 h-7 rounded-full bg-black/60 hover:bg-black/85 backdrop-blur-md text-white border border-white/20 transition-all cursor-pointer shadow-md flex items-center justify-center active:scale-90"
+              title={isSoundMuted ? 'Click to Unmute video' : 'Click to Mute video'}
+              aria-label={isSoundMuted ? 'Unmute video audio' : 'Mute video audio'}
+            >
+              {isSoundMuted ? (
+                <VolumeX className="w-3.5 h-3.5 text-white/90" />
+              ) : (
+                <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+              )}
+            </button>
+          </div>
+        ) : (
+          <img
+            src={effectiveImage}
+            alt={product.name}
+            className={`w-full h-full object-contain object-center group-hover:scale-105 transition-transform duration-500 ease-out ${
+              imageLoaded ? 'opacity-100' : 'opacity-0'
+            }`}
+            loading="lazy"
+            onLoad={() => setImageLoaded(true)}
+            onError={() => {
+              setImageError(true);
+              setImageLoaded(true);
+            }}
+          />
+        )}
 
         {/* Badges */}
-        <div className="absolute top-3 left-3 flex flex-col gap-1 z-10">
+        <div className="absolute top-3 left-3 flex flex-col gap-1 z-10 pointer-events-none">
+          {hasVideo && (
+            <span className="bg-[#0F5C4D] text-[#FAF7F2] text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded shadow-sm flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse" />
+              <span>360° Reel</span>
+            </span>
+          )}
           {product.isBestseller && (
             <span className="bg-[#802336] text-[#FAF7F2] text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded shadow-sm">
               Bestseller
@@ -133,6 +190,22 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             </span>
           )}
         </div>
+
+        {/* Video / Photo Switcher if user switched to variation image */}
+        {hasVideo && !showVideo && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowVideo(true);
+            }}
+            className="absolute top-12 left-3 z-10 bg-black/70 hover:bg-black text-[#DFB982] text-[10px] font-semibold px-2 py-0.5 rounded-md backdrop-blur-xs flex items-center gap-1 shadow cursor-pointer transition-all"
+            title="Resume 360° Video Demonstration"
+          >
+            <Play className="w-2.5 h-2.5 fill-[#DFB982]" />
+            <span>Play Video</span>
+          </button>
+        )}
 
         {/* Wishlist Button */}
         <button
