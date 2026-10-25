@@ -456,7 +456,8 @@ app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
       maskedNumber,
       phoneNumber: e164,
       expiresIn: 300,
-      provider: smsResult.provider
+      provider: smsResult.provider,
+      devOtp: (smsResult as any).devOtp
     });
   } catch (err: any) {
     console.error('[Send OTP Diagnostic]', { errorCode: 'INTERNAL_ERROR', message: err?.message || 'Error' });

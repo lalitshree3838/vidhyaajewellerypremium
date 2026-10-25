@@ -3,9 +3,10 @@ import path from 'path';
 
 export interface SendSmsResult {
   success: boolean;
-  provider: 'fast2sms' | 'twofactor' | 'msg91' | 'twilio' | 'none';
+  provider: 'fast2sms' | 'twofactor' | 'msg91' | 'twilio' | 'dev_preview' | 'none';
   errorCode?: string;
   message: string;
+  devOtp?: string;
 }
 
 export interface SmsGatewayConfig {
@@ -293,8 +294,27 @@ export async function dispatchRealSms(phoneInput: string, otp: string): Promise<
       }
     }
   }
+ 
+  // 5. Development & Preview Gateway Fallback:
+  // If no external SMS carrier credentials (Twilio/Fast2SMS) are configured,
+  // provide dynamic OTP dispatch so developer & preview testing works seamlessly.
+  const isProduction = process.env.NODE_ENV === 'production' && !process.env.VITE_DEV_SERVER;
+  if (!isProduction) {
+    console.log('[Dev Preview SMS Gateway]', {
+      destination: e164Number,
+      otp,
+      note: 'Dynamic OTP generated. In production, configure Twilio or Fast2SMS in Admin Settings.'
+    });
 
-  // If phone is not India and Twilio was not configured:
+    return {
+      success: true,
+      provider: 'dev_preview',
+      message: `Verification code generated for ${e164Number}. (Preview Mode OTP: ${otp})`,
+      devOtp: otp,
+    };
+  }
+
+  // Live Production without configured SMS gateway
   if (!isIndia) {
     return {
       success: false,
@@ -304,17 +324,16 @@ export async function dispatchRealSms(phoneInput: string, otp: string): Promise<
     };
   }
 
-  // No SMS provider configured for domestic India either
   console.warn('[SMS Gateway Diagnostic]', {
     provider: 'none',
-    errorCode: 'NO_SMS_PROVIDER_CONFIGURED',
+    errorCode: 'GATEWAY_SETUP_REQUIRED',
     message: 'No SMS gateway credentials configured on server, and Firebase Phone is not enabled.'
   });
 
   return {
     success: false,
     provider: 'none',
-    errorCode: 'NO_SMS_PROVIDER_CONFIGURED',
+    errorCode: 'GATEWAY_SETUP_REQUIRED',
     message: 'No active SMS provider is configured on the server. Please enable Phone Auth in the Firebase Console or configure SMS Gateway credentials (Twilio / Fast2SMS) in Admin Settings to receive real SMS messages on mobile devices.',
   };
 }

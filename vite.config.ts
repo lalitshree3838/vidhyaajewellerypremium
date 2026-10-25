@@ -536,7 +536,8 @@ const otpDevPlugin = (): Plugin => ({
             maskedNumber,
             phoneNumber: e164,
             expiresIn: 300,
-            provider: smsResult.provider
+            provider: smsResult.provider,
+            devOtp: (smsResult as any).devOtp
           }));
         } catch {
           res.statusCode = 400;

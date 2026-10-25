@@ -20,7 +20,8 @@ export interface SendOtpResponse {
   maskedNumber: string;
   e164: string;
   expiresIn: number;
-  provider?: 'firebase' | 'fast2sms' | 'twofactor' | 'twilio' | 'msg91' | 'gateway';
+  provider?: 'firebase' | 'fast2sms' | 'twofactor' | 'twilio' | 'msg91' | 'gateway' | 'dev_preview';
+  devOtp?: string;
 }
 
 export interface VerifyOtpResponse {
@@ -201,7 +202,8 @@ export async function sendMobileOtp(
       maskedNumber,
       e164,
       expiresIn: data.expiresIn || 300,
-      provider: data.provider || 'gateway'
+      provider: data.provider || 'gateway',
+      devOtp: data.devOtp
     };
   } catch (gatewayErr: any) {
     throw new Error(gatewayErr?.message || 'Failed to send OTP via SMS. Please check your international phone number and network.');

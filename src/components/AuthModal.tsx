@@ -446,10 +446,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             }`}
           >
             <Phone className="w-3.5 h-3.5 text-[#802336]" />
-            <span>Mobile OTP</span>
-            <span className="hidden sm:inline-block bg-[#DFB982]/30 text-[#802336] text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase">
-              Worldwide
-            </span>
+            <span>Login with Mobile Number</span>
           </button>
 
           <button
@@ -466,7 +463,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             }`}
           >
             <Mail className="w-3.5 h-3.5" />
-            <span>Email & Password</span>
+            <span>Login with Email</span>
           </button>
         </div>
 
@@ -612,6 +609,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <p className="text-[11px] text-gray-400 text-center leading-relaxed">
                     A real 6-digit SMS verification code will be dispatched to your phone. Standard carrier SMS rates apply.
                   </p>
+
+                  {/* Switch back to Email button */}
+                  <div className="text-center pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMethod('email');
+                        setError(null);
+                        setSuccessMsg(null);
+                      }}
+                      className="text-xs text-[#802336] hover:text-[#3B1E22] font-semibold hover:underline cursor-pointer"
+                    >
+                      ✉️ Switch back to Login with Email
+                    </button>
+                  </div>
                 </form>
               ) : (
                 /* Step 2: 6-Digit OTP Verification Field */
@@ -703,6 +715,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         <span>Resend OTP via SMS</span>
                       </button>
                     )}
+                  </div>
+
+                  {/* Switch back to Email button */}
+                  <div className="text-center pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMethod('email');
+                        setError(null);
+                        setSuccessMsg(null);
+                      }}
+                      className="text-xs text-[#802336] hover:text-[#3B1E22] font-semibold hover:underline cursor-pointer"
+                    >
+                      ✉️ Switch back to Login with Email
+                    </button>
                   </div>
                 </form>
               )}
@@ -892,6 +919,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     className="text-xs text-[#802336] hover:text-[#3B1E22] font-semibold hover:underline cursor-pointer"
                   >
                     ← Back to Sign In
+                  </button>
+                </div>
+              )}
+
+              {/* Quick Switch to Mobile Number Login */}
+              {emailMode !== 'forgot' && (
+                <div className="text-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMethod('mobile');
+                      setError(null);
+                      setSuccessMsg(null);
+                    }}
+                    className="text-xs text-[#802336] hover:text-[#3B1E22] font-semibold hover:underline cursor-pointer"
+                  >
+                    📱 Or Login with Mobile Number (Worldwide SMS OTP)
                   </button>
                 </div>
               )}
