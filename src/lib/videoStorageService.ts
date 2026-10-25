@@ -1,5 +1,5 @@
-import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { initializeApp, getApps, getApp } from 'firebase/app';
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { storage } from './firebase';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 export function getAdminSessionToken(): string {
@@ -141,8 +141,6 @@ export async function uploadJewelleryVideo(
   // Try Firebase Storage first if storage bucket is configured
   if (firebaseConfig.storageBucket) {
     try {
-      const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-      const storage = getStorage(app);
       const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
       const storagePath = `jewellery_videos/${Date.now()}_${cleanName}`;
       const storageRef = ref(storage, storagePath);

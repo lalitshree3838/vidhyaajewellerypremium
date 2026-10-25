@@ -179,7 +179,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     setSubmitting(true);
     try {
-      const res = await sendMobileOtp(phoneNumber, selectedCountry.code);
+      const res = await sendMobileOtp(phoneNumber, selectedCountry.code, 'auth-recaptcha-container');
       setActiveSessionE164(res.e164);
       setMaskedPhoneDisplay(res.maskedNumber);
       setMobileStep('verify_otp');
@@ -201,7 +201,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setSuccessMsg(null);
     setSubmitting(true);
     try {
-      const res = await sendMobileOtp(phoneNumber, selectedCountry.code);
+      const res = await sendMobileOtp(phoneNumber, selectedCountry.code, 'auth-recaptcha-container');
       setResendCooldown(30);
       setOtpDigits(['', '', '', '', '', '']);
       setSuccessMsg(`A fresh verification code was dispatched to ${res.maskedNumber}`);
@@ -585,6 +585,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         )}
                       </div>
                     )}
+                  </div>
+
+                  {/* Visible reCAPTCHA Container */}
+                  <div className="flex flex-col items-center justify-center my-1.5">
+                    <div id="auth-recaptcha-container" className="min-h-[78px] flex items-center justify-center"></div>
                   </div>
 
                   {/* Send OTP Button */}

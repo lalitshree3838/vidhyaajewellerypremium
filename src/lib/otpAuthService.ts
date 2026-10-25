@@ -1,7 +1,4 @@
 import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  updateProfile,
   signInWithPhoneNumber,
   RecaptchaVerifier,
   ConfirmationResult,
@@ -20,8 +17,7 @@ export interface SendOtpResponse {
   maskedNumber: string;
   e164: string;
   expiresIn: number;
-  provider?: 'firebase' | 'fast2sms' | 'twofactor' | 'twilio' | 'msg91' | 'gateway' | 'dev_preview';
-  devOtp?: string;
+  provider: 'firebase';
 }
 
 export interface VerifyOtpResponse {
@@ -36,11 +32,16 @@ let activeConfirmationResult: ConfirmationResult | null = null;
 let activeRecaptchaVerifier: RecaptchaVerifier | null = null;
 let activeSessionPhone = '';
 
+/**
+ * Reset and clear active Firebase Phone Auth sessions and reCAPTCHA verifiers
+ */
 export function clearOtpSession(): void {
   if (activeRecaptchaVerifier) {
     try {
       activeRecaptchaVerifier.clear();
-    } catch {}
+    } catch (e) {
+      console.warn('[reCAPTCHA Diagnostic] Clear warning:', e);
+    }
     activeRecaptchaVerifier = null;
   }
   activeConfirmationResult = null;
@@ -48,9 +49,15 @@ export function clearOtpSession(): void {
 }
 
 /**
- * Initialize or retrieve invisible reCAPTCHA verifier for Firebase Phone Authentication
+ * Initialize functional reCAPTCHA verifier for Firebase Phone Authentication directly in browser
+ * @param containerId DOM element ID where reCAPTCHA will be rendered
+ * @param isVisible whether to render visible checkbox ('normal') or 'invisible'
  */
-export async function getRecaptchaVerifier(containerId = 'firebase-recaptcha-container'): Promise<RecaptchaVerifier> {
+export async function getRecaptchaVerifier(
+  containerId = 'firebase-recaptcha-container',
+  isVisible = true
+): Promise<RecaptchaVerifier> {
+  // Clear previous verifier to prevent duplicate widget ID collision
   if (activeRecaptchaVerifier) {
     try {
       activeRecaptchaVerifier.clear();
@@ -58,7 +65,7 @@ export async function getRecaptchaVerifier(containerId = 'firebase-recaptcha-con
     activeRecaptchaVerifier = null;
   }
 
-  // Ensure DOM container exists in DOM tree
+  // Ensure DOM container exists
   let el = document.getElementById(containerId);
   if (!el) {
     el = document.createElement('div');
@@ -66,50 +73,48 @@ export async function getRecaptchaVerifier(containerId = 'firebase-recaptcha-con
     document.body.appendChild(el);
   }
 
+  // Clear previous widget DOM nodes
   el.innerHTML = '';
-  // Must NOT be display: none for Google reCAPTCHA iframe execution
   el.style.display = 'block';
-  el.style.position = 'fixed';
-  el.style.bottom = '10px';
-  el.style.right = '10px';
-  el.style.zIndex = '99999';
-  el.style.pointerEvents = 'auto';
 
   try {
     const verifier = new RecaptchaVerifier(auth, containerId, {
-      size: 'invisible',
+      size: isVisible ? 'normal' : 'invisible',
       callback: () => {
-        console.log('[reCAPTCHA Diagnostic] Invisible verification check passed.');
+        console.log('[reCAPTCHA Diagnostic] Verification challenge completed.');
       },
       'expired-callback': () => {
-        console.warn('[reCAPTCHA Diagnostic] Verification token expired, resetting verifier.');
-        try {
-          verifier.clear();
-        } catch {}
-        activeRecaptchaVerifier = null;
+        console.warn('[reCAPTCHA Diagnostic] reCAPTCHA token expired. Please re-verify.');
       }
     });
 
     await verifier.render();
     activeRecaptchaVerifier = verifier;
     return verifier;
-  } catch (recaptchaErr: any) {
-    console.warn('[reCAPTCHA Diagnostic]', {
-      errorCode: recaptchaErr?.code || 'CAPTCHA_INIT_ERROR',
-      message: recaptchaErr?.message || 'reCAPTCHA initialization failed'
-    });
-    throw new Error(`reCAPTCHA check unavailable: ${recaptchaErr?.message || 'Please refresh page'}`);
+  } catch (err: any) {
+    console.warn('[reCAPTCHA Diagnostic] Normal render warning, trying fallback:', err);
+    // Fallback to invisible verifier if normal rendering has container constraints
+    try {
+      const fallback = new RecaptchaVerifier(auth, containerId, {
+        size: 'invisible'
+      });
+      await fallback.render();
+      activeRecaptchaVerifier = fallback;
+      return fallback;
+    } catch (fallbackErr: any) {
+      throw new Error(`reCAPTCHA initialization failed: ${fallbackErr?.message || err?.message || 'Please refresh page'}`);
+    }
   }
 }
 
 /**
- * Send real 6-digit SMS OTP to international or Indian mobile numbers worldwide
- * 1st: Attempts Firebase Phone Authentication (Google Telecom SMS worldwide network)
- * 2nd: Seamlessly routes to server SMS Gateway (Twilio for international, Fast2SMS / 2Factor / MSG91 for India)
+ * Send real SMS verification code directly from the browser using Firebase Web SDK
+ * Works 100% on static hosting (e.g. Hostinger) without any backend server dependency
  */
 export async function sendMobileOtp(
   rawInput: string,
-  countryCode: CountryCode = 'IN'
+  countryCode: CountryCode = 'IN',
+  containerId = 'firebase-recaptcha-container'
 ): Promise<SendOtpResponse> {
   const validation = validateInternationalPhone(rawInput, countryCode);
   if (!validation.isValid) {
@@ -120,132 +125,81 @@ export async function sendMobileOtp(
   const maskedNumber = maskPhoneNumber(e164);
   const countryInfo = getCountryByCode(validation.country);
 
-  let firebaseErrorCode = '';
-  let firebaseErrorMessage = '';
-
-  // 1. Primary Route: Firebase Phone Authentication (signInWithPhoneNumber)
   try {
-    const verifier = await getRecaptchaVerifier();
+    // Initialize visible reCAPTCHA verifier for reliable execution on all browsers & mobile devices
+    const verifier = await getRecaptchaVerifier(containerId, true);
+
+    // Call Firebase Auth signInWithPhoneNumber directly from the browser
     const confirmation = await signInWithPhoneNumber(auth, e164, verifier);
     activeConfirmationResult = confirmation;
     activeSessionPhone = e164;
 
-    console.log('[Auth Diagnostic]', {
-      provider: 'firebase_phone',
-      status: 'SMS_DISPATCHED_TO_CARRIER',
-      destinationCountry: countryInfo.name
-    });
+    console.log('[Firebase Phone Auth] Real SMS OTP dispatched directly via Firebase to:', maskedNumber);
 
     return {
       success: true,
-      message: `SMS verification code dispatched via Google telecom network to ${maskedNumber}`,
+      message: `Verification code sent via SMS to ${maskedNumber}`,
       maskedNumber,
       e164,
       expiresIn: 300,
       provider: 'firebase'
     };
   } catch (firebaseErr: any) {
-    firebaseErrorCode = firebaseErr?.code || 'auth/unknown';
-    firebaseErrorMessage = firebaseErr?.message || 'Firebase phone authentication failed.';
+    console.error('[Firebase Phone Auth Error]', firebaseErr);
 
-    console.warn('[Auth Diagnostic]', {
-      provider: 'firebase_phone',
-      errorCode: firebaseErrorCode,
-      errorMessage: firebaseErrorMessage
-    });
-
+    // Clean up active verifier so customer can retry
     if (activeRecaptchaVerifier) {
       try { activeRecaptchaVerifier.clear(); } catch {}
       activeRecaptchaVerifier = null;
     }
-  }
 
-  // 2. Secondary Fallback Route: Server SMS Gateway (/api/auth/send-otp)
-  try {
-    const res = await fetch('/api/auth/send-otp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phoneNumber: e164, mobile: e164 }),
-    });
+    const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'your domain';
+    const code = firebaseErr?.code || 'auth/unknown';
+    const rawMsg = firebaseErr?.message || '';
 
-    const data = await res.json().catch(() => ({}));
+    switch (code) {
+      case 'auth/operation-not-allowed':
+        throw new Error(
+          `Firebase SMS Region Policy Restriction (OPERATION_NOT_ALLOWED): While Phone sign-in is enabled, SMS delivery to ${countryInfo.name} (${countryInfo.dialCode}) is restricted by your project's SMS Region Policy. In Firebase Console (project: gen-lang-client-0706507905), go to Authentication > Settings (tab at top) > SMS region policy, select 'Allow specific regions', and add ${countryInfo.name} (${countryInfo.dialCode}) to the allowlist.`
+        );
 
-    console.warn('[Auth Diagnostic]', {
-      provider: data.provider || 'none',
-      httpStatus: res.status,
-      errorCode: data.errorCode || (res.ok ? 'SUCCESS' : 'GATEWAY_ERROR')
-    });
+      case 'auth/unauthorized-domain':
+        throw new Error(
+          `Domain authorization error: '${currentHost}' is not in Firebase Authorized Domains. In Firebase Console (project: gen-lang-client-0706507905), go to Authentication > Settings > Authorized domains and add '${currentHost}'.`
+        );
 
-    if (!res.ok || !data.success) {
-      const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'your domain';
-      let userFacingError = data.error;
+      case 'auth/internal-error':
+        throw new Error(
+          `reCAPTCHA validation failed or domain '${currentHost}' is not authorized. In Firebase Console, confirm '${currentHost}' is listed under Authentication > Settings > Authorized domains.`
+        );
 
-      if (!userFacingError || userFacingError.includes('Failed to dispatch SMS')) {
-        switch (firebaseErrorCode) {
-          case 'auth/operation-not-allowed':
-            userFacingError = `Phone Authentication is disabled in Firebase Console (OPERATION_NOT_ALLOWED). To enable SMS to ${countryInfo.name} (${e164}), open Firebase Console (project: gen-lang-client-0706507905) > Authentication > Sign-in method, select 'Phone', toggle Enable, and click Save.`;
-            break;
-          case 'auth/unauthorized-domain':
-            userFacingError = `Domain authorization error: '${currentHost}' is not in Firebase Authorized Domains. Add '${currentHost}' in Firebase Console > Authentication > Settings > Authorized domains.`;
-            break;
-          case 'auth/internal-error':
-            userFacingError = `reCAPTCHA validation failed or domain '${currentHost}' is not authorized. In Firebase Console > Authentication > Settings > Authorized domains, verify '${currentHost}' is added.`;
-            break;
-          case 'auth/captcha-check-failed':
-            userFacingError = 'Google reCAPTCHA verification could not be completed. Please refresh the page and try again.';
-            break;
-          case 'auth/quota-exceeded':
-            userFacingError = 'Daily SMS verification limit reached for this Firebase project. Free tier includes 10 SMS/day. Upgrade to Firebase Blaze plan or register test phone numbers in Firebase Console.';
-            break;
-          case 'auth/too-many-requests':
-            userFacingError = 'Too many SMS requests for this number. For your protection, requests are temporarily throttled. Please wait a few moments.';
-            break;
-          case 'auth/invalid-phone-number':
-            userFacingError = `Carrier rejected '${e164}'. Please check the national phone format for ${countryInfo.name}.`;
-            break;
-          case 'auth/billing-not-enabled':
-            userFacingError = `International SMS delivery to ${countryInfo.name} requires the Firebase Blaze pay-as-you-go billing plan for global telecom carrier delivery.`;
-            break;
-          case 'auth/app-not-authorized':
-            userFacingError = `Firebase app unauthorized: Check that domain '${currentHost}' and API key are authorized in Google Cloud Console.`;
-            break;
-          case 'auth/network-request-failed':
-            userFacingError = 'Network connection failure while communicating with Firebase. Please check your internet connection.';
-            break;
-          default:
-            if (res.status === 404) {
-              userFacingError = `Backend SMS endpoint '/api/auth/send-otp' returned 404 (static hosting). On Hostinger static web hosting, SMS delivery runs via Firebase Phone Authentication: please enable 'Phone' in Firebase Console (Authentication > Sign-in method) and add '${currentHost}' to Authorized Domains.`;
-            } else if (firebaseErrorCode && firebaseErrorCode !== 'auth/unknown') {
-              userFacingError = `Firebase Phone Auth [${firebaseErrorCode}]: ${firebaseErrorMessage}`;
-            } else {
-              userFacingError = `SMS delivery to ${e164} is pending carrier activation. Please enable Phone provider in Firebase Console > Authentication > Sign-in method, or configure SMS gateway credentials in Admin Settings.`;
-            }
-            break;
-        }
-      }
+      case 'auth/captcha-check-failed':
+        throw new Error('reCAPTCHA verification failed or timed out. Please check the "I\'m not a robot" box and try again.');
 
-      throw new Error(userFacingError);
+      case 'auth/quota-exceeded':
+        throw new Error('Daily SMS verification quota reached for this Firebase project. The free Spark tier includes 10 SMS/day. Please upgrade to the Blaze plan or add phone numbers for testing in Firebase Console.');
+
+      case 'auth/too-many-requests':
+        throw new Error('Too many SMS requests for this phone number. For your security, requests are temporarily throttled. Please wait a few moments.');
+
+      case 'auth/invalid-phone-number':
+        throw new Error(`Carrier rejected '${e164}'. Please check the national phone format for ${countryInfo.name}.`);
+
+      case 'auth/billing-not-enabled':
+        throw new Error(`International SMS delivery to ${countryInfo.name} requires the Firebase Blaze pay-as-you-go billing plan for global telecom carrier delivery.`);
+
+      case 'auth/network-request-failed':
+        throw new Error('Network connection error communicating with Firebase. Please check your internet connection.');
+
+      default:
+        throw new Error(rawMsg || `Failed to dispatch SMS to ${e164}. (${code})`);
     }
-
-    activeConfirmationResult = null;
-    activeSessionPhone = e164;
-
-    return {
-      success: true,
-      message: data.message || `SMS OTP dispatched via telecom network to ${maskedNumber}`,
-      maskedNumber,
-      e164,
-      expiresIn: data.expiresIn || 300,
-      provider: data.provider || 'gateway',
-      devOtp: data.devOtp
-    };
-  } catch (gatewayErr: any) {
-    throw new Error(gatewayErr?.message || `Failed to dispatch SMS to ${e164}. Please verify Phone Auth in Firebase Console.`);
   }
 }
 
 /**
- * Verify 6-digit OTP code received on customer's mobile phone
+ * Verify 6-digit OTP code directly using Firebase ConfirmationResult
+ * Authenticates the user in Firebase Auth and updates Firestore user profile in browser
  */
 export async function verifyMobileOtp(
   rawInput: string,
@@ -260,61 +214,44 @@ export async function verifyMobileOtp(
     throw new Error('Please enter all 6 digits of the verification code received on your mobile.');
   }
 
-  // Case A: Verified via Firebase Phone Auth confirmation session
-  if (activeConfirmationResult && activeSessionPhone === e164) {
-    try {
-      const credential = await activeConfirmationResult.confirm(cleanOtp);
-      const user = credential.user;
-      await syncMobileUserProfile(user, e164);
-      clearOtpSession();
-      console.log('[Auth Diagnostic]', { provider: 'firebase_phone', status: 'VERIFICATION_SUCCESS' });
-      return {
-        success: true,
-        verified: true,
-        mobile: e164,
-        user
-      };
-    } catch (err: any) {
-      const code = err?.code || '';
-      console.warn('[Auth Diagnostic]', { provider: 'firebase_phone', errorCode: code, errorMessage: err?.message });
-      if (code === 'auth/invalid-verification-code') {
-        throw new Error('Invalid verification code. Please check the 6-digit OTP received on your phone and try again.');
-      }
-      if (code === 'auth/code-expired') {
-        throw new Error('The OTP code has expired. Please click Resend OTP to receive a fresh verification code.');
-      }
-      throw new Error(err.message || 'OTP verification failed. Please try again.');
+  if (!activeConfirmationResult || activeSessionPhone !== e164) {
+    throw new Error('No active OTP verification session found. Please request a new verification code.');
+  }
+
+  try {
+    // Verify OTP directly against Firebase Auth
+    const credential = await activeConfirmationResult.confirm(cleanOtp);
+    const user = credential.user;
+
+    // Sync verified phone number into Firestore user profile directly from browser
+    await syncMobileUserProfile(user, e164);
+    clearOtpSession();
+
+    console.log('[Firebase Phone Auth] Mobile verification success:', e164, 'UID:', user.uid);
+
+    return {
+      success: true,
+      verified: true,
+      mobile: e164,
+      user
+    };
+  } catch (err: any) {
+    const code = err?.code || '';
+    console.warn('[Firebase Phone Auth] Verification error:', code, err?.message);
+
+    if (code === 'auth/invalid-verification-code') {
+      throw new Error('Invalid verification code. Please check the 6-digit OTP received via SMS and try again.');
     }
+    if (code === 'auth/code-expired') {
+      throw new Error('This verification code has expired. Please click Resend OTP to receive a new code.');
+    }
+    throw new Error(err?.message || 'OTP verification failed. Please try again.');
   }
-
-  // Case B: Verified via SMS Gateway backend endpoint
-  const res = await fetch('/api/auth/verify-otp', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phoneNumber: e164, mobile: e164, otp: cleanOtp }),
-  });
-
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.success) {
-    console.warn('[Auth Diagnostic]', { provider: 'sms_gateway', status: 'VERIFICATION_FAILED', errorCode: data.error || 'INVALID_CODE' });
-    throw new Error(data.error || 'Verification failed. Please check the OTP and try again.');
-  }
-
-  console.log('[Auth Diagnostic]', { provider: 'sms_gateway', status: 'VERIFICATION_SUCCESS' });
-  const user = await completeMobileAuth(e164);
-  clearOtpSession();
-
-  return {
-    success: true,
-    verified: true,
-    mobile: e164,
-    user: user || undefined
-  };
 }
 
 /**
  * Sync or create customer profile in Firestore with verified phone number
- * Preserves existing accounts and never merges solely on unverified data
+ * Runs directly from browser using client-side Firestore SDK
  */
 async function syncMobileUserProfile(user: User, e164Phone: string): Promise<void> {
   try {
@@ -322,7 +259,6 @@ async function syncMobileUserProfile(user: User, e164Phone: string): Promise<voi
     const snap = await getDoc(userDocRef);
 
     if (!snap.exists()) {
-      // Check if another customer profile already had this verified phone number
       let existingProfile: Partial<UserProfile> | null = null;
       try {
         const usersRef = collection(db, 'users');
@@ -334,7 +270,6 @@ async function syncMobileUserProfile(user: User, e164Phone: string): Promise<voi
         }
       } catch {}
 
-      const cleanDigits = e164Phone.replace(/\D/g, '');
       const profile: Partial<UserProfile> = {
         id: user.uid,
         email: user.email || existingProfile?.email || '',
@@ -347,7 +282,6 @@ async function syncMobileUserProfile(user: User, e164Phone: string): Promise<voi
       };
       await saveUserProfile(user.uid, profile);
     } else {
-      // Profile exists, ensure verified phone is recorded
       const currentData = snap.data();
       if (!currentData?.phone || currentData.phone !== e164Phone) {
         await saveUserProfile(user.uid, {
@@ -357,36 +291,6 @@ async function syncMobileUserProfile(user: User, e164Phone: string): Promise<voi
       }
     }
   } catch (err) {
-    console.warn('[Auth Diagnostic] Profile sync warning:', err);
-  }
-}
-
-/**
- * Establish authenticated session for customer verified via backend gateway OTP
- */
-export async function completeMobileAuth(e164Phone: string): Promise<User | null> {
-  const cleanDigits = e164Phone.replace(/\D/g, '');
-  const syntheticEmail = `${cleanDigits}@phone.vidhyaajewellery.com`;
-  const syntheticPass = `Vidhyaa#MobileAuth_${cleanDigits}_SecureKey99!`;
-
-  try {
-    const cred = await signInWithEmailAndPassword(auth, syntheticEmail, syntheticPass);
-    await syncMobileUserProfile(cred.user, e164Phone);
-    return cred.user;
-  } catch (err: any) {
-    if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
-      try {
-        const newCred = await createUserWithEmailAndPassword(auth, syntheticEmail, syntheticPass);
-        await updateProfile(newCred.user, {
-          displayName: `Patron (${maskPhoneNumber(e164Phone)})`
-        });
-        await syncMobileUserProfile(newCred.user, e164Phone);
-        return newCred.user;
-      } catch (createErr) {
-        console.warn('[Auth Diagnostic] Account creation fallback warning:', createErr);
-        return auth.currentUser;
-      }
-    }
-    return auth.currentUser;
+    console.warn('[Firebase Phone Auth] Profile sync notice:', err);
   }
 }

@@ -201,7 +201,7 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
 
     setLoading(true);
     try {
-      const result = await sendMobileOtp(phoneNumber, selectedCountry.code);
+      const result = await sendMobileOtp(phoneNumber, selectedCountry.code, 'promo-recaptcha-container');
       setActiveSessionE164(result.e164);
       setMaskedPhoneDisplay(result.maskedNumber || maskPhoneNumber(result.e164));
       setMobileStep('verify_otp');
@@ -252,7 +252,7 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
     setLoading(true);
     try {
       const phoneToSend = activeSessionE164 || phoneNumber;
-      const result = await sendMobileOtp(phoneToSend, selectedCountry.code);
+      const result = await sendMobileOtp(phoneToSend, selectedCountry.code, 'promo-recaptcha-container');
       setActiveSessionE164(result.e164);
       setMaskedPhoneDisplay(result.maskedNumber || maskPhoneNumber(result.e164));
       setResendCooldown(30);
@@ -467,6 +467,11 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
                             )}
                           </div>
                         )}
+                      </div>
+
+                      {/* Visible reCAPTCHA Container */}
+                      <div className="flex flex-col items-center justify-center my-1.5">
+                        <div id="promo-recaptcha-container" className="min-h-[78px] flex items-center justify-center"></div>
                       </div>
 
                       <button
