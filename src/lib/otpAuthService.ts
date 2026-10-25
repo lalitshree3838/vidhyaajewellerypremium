@@ -177,19 +177,53 @@ export async function sendMobileOtp(
     });
 
     if (!res.ok || !data.success) {
-      let userFacingError = data.error || 'Failed to dispatch SMS to your phone.';
+      const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'your domain';
+      let userFacingError = data.error;
 
-      if (firebaseErrorCode === 'auth/operation-not-allowed') {
-        userFacingError = `SMS delivery to ${countryInfo.name} unavailable: Phone Authentication is disabled in Firebase Console (OPERATION_NOT_ALLOWED). Please enable Phone Provider in Firebase Console > Authentication > Sign-in method.`;
-      } else if (firebaseErrorCode === 'auth/unauthorized-domain') {
-        userFacingError = `SMS delivery unavailable: Current domain is not in Firebase Authorized Domains. Add this domain to Firebase Console > Authentication > Settings > Authorized Domains.`;
-      } else if (firebaseErrorCode === 'auth/quota-exceeded') {
-        userFacingError = 'Daily SMS verification quota exceeded for this project. Please retry later or contact support.';
-      } else if (firebaseErrorCode === 'auth/invalid-phone-number') {
-        userFacingError = `Carrier rejected phone format for ${countryInfo.name} (${e164}). Please verify your number.`;
-      } else if (firebaseErrorCode === 'auth/billing-not-enabled') {
-        userFacingError = 'International SMS delivery requires Firebase Blaze pay-as-you-go billing plan for telecom carrier routes outside test quotas.';
+      if (!userFacingError || userFacingError.includes('Failed to dispatch SMS')) {
+        switch (firebaseErrorCode) {
+          case 'auth/operation-not-allowed':
+            userFacingError = `Phone Authentication is disabled in Firebase Console (OPERATION_NOT_ALLOWED). To enable SMS to ${countryInfo.name} (${e164}), open Firebase Console (project: gen-lang-client-0706507905) > Authentication > Sign-in method, select 'Phone', toggle Enable, and click Save.`;
+            break;
+          case 'auth/unauthorized-domain':
+            userFacingError = `Domain authorization error: '${currentHost}' is not in Firebase Authorized Domains. Add '${currentHost}' in Firebase Console > Authentication > Settings > Authorized domains.`;
+            break;
+          case 'auth/internal-error':
+            userFacingError = `reCAPTCHA validation failed or domain '${currentHost}' is not authorized. In Firebase Console > Authentication > Settings > Authorized domains, verify '${currentHost}' is added.`;
+            break;
+          case 'auth/captcha-check-failed':
+            userFacingError = 'Google reCAPTCHA verification could not be completed. Please refresh the page and try again.';
+            break;
+          case 'auth/quota-exceeded':
+            userFacingError = 'Daily SMS verification limit reached for this Firebase project. Free tier includes 10 SMS/day. Upgrade to Firebase Blaze plan or register test phone numbers in Firebase Console.';
+            break;
+          case 'auth/too-many-requests':
+            userFacingError = 'Too many SMS requests for this number. For your protection, requests are temporarily throttled. Please wait a few moments.';
+            break;
+          case 'auth/invalid-phone-number':
+            userFacingError = `Carrier rejected '${e164}'. Please check the national phone format for ${countryInfo.name}.`;
+            break;
+          case 'auth/billing-not-enabled':
+            userFacingError = `International SMS delivery to ${countryInfo.name} requires the Firebase Blaze pay-as-you-go billing plan for global telecom carrier delivery.`;
+            break;
+          case 'auth/app-not-authorized':
+            userFacingError = `Firebase app unauthorized: Check that domain '${currentHost}' and API key are authorized in Google Cloud Console.`;
+            break;
+          case 'auth/network-request-failed':
+            userFacingError = 'Network connection failure while communicating with Firebase. Please check your internet connection.';
+            break;
+          default:
+            if (res.status === 404) {
+              userFacingError = `Backend SMS endpoint '/api/auth/send-otp' returned 404 (static hosting). On Hostinger static web hosting, SMS delivery runs via Firebase Phone Authentication: please enable 'Phone' in Firebase Console (Authentication > Sign-in method) and add '${currentHost}' to Authorized Domains.`;
+            } else if (firebaseErrorCode && firebaseErrorCode !== 'auth/unknown') {
+              userFacingError = `Firebase Phone Auth [${firebaseErrorCode}]: ${firebaseErrorMessage}`;
+            } else {
+              userFacingError = `SMS delivery to ${e164} is pending carrier activation. Please enable Phone provider in Firebase Console > Authentication > Sign-in method, or configure SMS gateway credentials in Admin Settings.`;
+            }
+            break;
+        }
       }
+
       throw new Error(userFacingError);
     }
 
@@ -206,7 +240,7 @@ export async function sendMobileOtp(
       devOtp: data.devOtp
     };
   } catch (gatewayErr: any) {
-    throw new Error(gatewayErr?.message || 'Failed to send OTP via SMS. Please check your international phone number and network.');
+    throw new Error(gatewayErr?.message || `Failed to dispatch SMS to ${e164}. Please verify Phone Auth in Firebase Console.`);
   }
 }
 
