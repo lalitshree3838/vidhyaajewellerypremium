@@ -694,25 +694,40 @@ const otpDevPlugin = (): Plugin => ({
       req.on('data', (chunk) => { body += chunk; });
       req.on('end', async () => {
         try {
-          const { mobile } = JSON.parse(body || '{}');
-          const cleanMobile = (mobile || '').toString().replace(/\D/g, '').slice(-10);
-          if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
+          const { mobile, phoneNumber } = JSON.parse(body || '{}');
+          const raw = (phoneNumber || mobile || '').toString().trim();
+          if (!raw) {
             res.statusCode = 400;
             res.setHeader('Content-Type', 'application/json');
-            return res.end(JSON.stringify({ error: 'Please enter a valid 10-digit Indian mobile number to test.' }));
+            return res.end(JSON.stringify({ error: 'Phone number is required.' }));
+          }
+
+          let e164 = raw;
+          if (!e164.startsWith('+')) {
+            const digits = e164.replace(/\D/g, '');
+            if (digits.length === 10) e164 = `+91${digits}`;
+            else e164 = `+${digits}`;
+          }
+
+          if (e164.length < 8 || e164.length > 18) {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/json');
+            return res.end(JSON.stringify({ error: 'Please enter a valid international mobile phone number (e.g., +14155552671 or +919876543210).' }));
           }
 
           const testOtp = Math.floor(100000 + Math.random() * 900000).toString();
-          const result = await dispatchRealSms(cleanMobile, testOtp);
+          const result = await dispatchRealSms(e164, testOtp);
 
           res.statusCode = result.success ? 200 : 502;
           res.setHeader('Content-Type', 'application/json');
+          const masked = e164.length > 6 ? `${e164.slice(0, 4)}••••${e164.slice(-2)}` : e164;
           return res.end(JSON.stringify({
             success: result.success,
             provider: result.provider,
             errorCode: result.errorCode,
             message: result.message,
-            maskedMobile: `+91 ${cleanMobile.slice(0, 2)}•••••${cleanMobile.slice(7)}`
+            maskedMobile: masked,
+            phoneNumber: e164
           }));
         } catch {
           res.statusCode = 400;
