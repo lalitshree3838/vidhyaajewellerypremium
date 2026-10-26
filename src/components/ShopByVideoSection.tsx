@@ -46,12 +46,14 @@ interface AutoplayingReelVideoProps {
   videoUrl: string;
   posterImage?: string;
   title: string;
+  isMuted?: boolean;
 }
 
 const AutoplayingReelVideo: React.FC<AutoplayingReelVideoProps> = ({
   videoUrl,
   posterImage,
-  title
+  title,
+  isMuted = true
 }) => {
   const [hasError, setHasError] = useState(false);
 
@@ -79,7 +81,7 @@ const AutoplayingReelVideo: React.FC<AutoplayingReelVideoProps> = ({
         src={videoUrl}
         poster={posterImage && isGenuineImageUrl(posterImage) ? posterImage : undefined}
         title={title}
-        isMuted={true}
+        isMuted={isMuted}
         autoPlay={true}
         enableObserver={true}
         observerThreshold={0.05}
@@ -155,6 +157,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
   const [activeReelIndex, setActiveReelIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [isMuted, setIsMuted] = useState<boolean>(true);
+  const [unmutedReelId, setUnmutedReelId] = useState<string | null>(null);
   const [videoHasError, setVideoHasError] = useState<boolean>(false);
   const [addedReelId, setAddedReelId] = useState<string | null>(null);
 
@@ -366,26 +369,47 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
             >
               {/* 9:16 Portrait Continuous Autoplaying Background Video Container */}
               <div className="relative aspect-[9/16] w-full overflow-hidden bg-black select-none">
-                {/* Autoplaying continuous looping background video (muted, no controls, object-fit: cover) */}
+                {/* Autoplaying continuous looping background video (muted by default, object-fit: cover) */}
                 <AutoplayingReelVideo
                   videoUrl={reel.videoUrl}
                   posterImage={reel.posterImage}
                   title={reel.title}
+                  isMuted={unmutedReelId !== reel.id}
                 />
 
                 {/* Subtle luxury gradient overlay for text legibility */}
                 <div className="absolute inset-0 bg-gradient-to-t from-[#241C1A]/90 via-black/20 to-black/30 pointer-events-none" />
 
-                {/* Top Tags Bar */}
-                <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between z-10 pointer-events-none">
-                  <span className="bg-white/90 backdrop-blur-md text-[#802336] text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider shadow-xs border border-[#E8DCCF]">
-                    {reel.category}
-                  </span>
+                {/* Top Tags & Audio Toggle Bar */}
+                <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between z-10">
+                  <div className="flex items-center gap-1.5 pointer-events-none">
+                    <span className="bg-white/90 backdrop-blur-md text-[#802336] text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider shadow-xs border border-[#E8DCCF]">
+                      {reel.category}
+                    </span>
 
-                  <span className="bg-black/50 backdrop-blur-md text-white text-[10px] font-mono px-2 py-0.5 rounded-full flex items-center gap-1 border border-white/20">
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
-                    <span>{reel.duration}</span>
-                  </span>
+                    <span className="bg-black/50 backdrop-blur-md text-white text-[10px] font-mono px-2 py-0.5 rounded-full flex items-center gap-1 border border-white/20">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
+                      <span>{reel.duration}</span>
+                    </span>
+                  </div>
+
+                  {/* Intuitive Sound Toggle Button on Card */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setUnmutedReelId((prev) => (prev === reel.id ? null : reel.id));
+                    }}
+                    className="w-8 h-8 rounded-full bg-black/60 hover:bg-black/90 backdrop-blur-md text-white flex items-center justify-center transition-all cursor-pointer border border-white/25 shadow-md active:scale-90"
+                    title={unmutedReelId === reel.id ? 'Click to Mute' : 'Click to Unmute Sound'}
+                    aria-label={unmutedReelId === reel.id ? 'Mute video sound' : 'Unmute video sound'}
+                  >
+                    {unmutedReelId === reel.id ? (
+                      <Volume2 className="w-4 h-4 text-emerald-400" />
+                    ) : (
+                      <VolumeX className="w-4 h-4 text-white/90" />
+                    )}
+                  </button>
                 </div>
 
                 {/* Overlay Text inside 9:16 Frame */}

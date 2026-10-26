@@ -10,7 +10,11 @@ import {
   Truck,
   LogOut,
   Settings,
-  ShoppingBag
+  ShoppingBag,
+  Phone,
+  ShieldAlert,
+  CheckCircle2,
+  Save
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Order, Address } from '../types';
@@ -31,11 +35,50 @@ export const AccountView: React.FC<AccountViewProps> = ({
   onTrackOrder,
   onOpenAuth
 }) => {
-  const { user, userProfile, isAdmin, signOut, saveAddress, deleteAddress } = useAuth();
+  const { user, userProfile, isAdmin, signOut, saveAddress, deleteAddress, updateUserProfileData } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'orders' | 'addresses' | 'profile'>('orders');
   const [orders, setOrders] = useState<Order[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
+
+  // Profile Mobile Number State
+  const [profilePhone, setProfilePhone] = useState(userProfile?.phone || '');
+  const [profileCountryCode, setProfileCountryCode] = useState(userProfile?.phoneCountryCode || '+91');
+  const [savingPhone, setSavingPhone] = useState(false);
+  const [phoneMessage, setPhoneMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  useEffect(() => {
+    if (userProfile?.phone) {
+      setProfilePhone(userProfile.phone);
+    }
+    if (userProfile?.phoneCountryCode) {
+      setProfileCountryCode(userProfile.phoneCountryCode);
+    }
+  }, [userProfile]);
+
+  const handleSavePhone = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPhoneMessage(null);
+    const cleanNumber = profilePhone.trim().replace(/\D/g, '');
+    if (profilePhone.trim() && cleanNumber.length < 7) {
+      setPhoneMessage({ type: 'error', text: 'Please enter a valid mobile phone number.' });
+      return;
+    }
+    setSavingPhone(true);
+    try {
+      await updateUserProfileData({
+        phone: profilePhone.trim() || undefined,
+        phoneCountryCode: profileCountryCode,
+        phone_verified: false
+      });
+      setPhoneMessage({ type: 'success', text: 'Mobile number updated successfully!' });
+      setTimeout(() => setPhoneMessage(null), 3500);
+    } catch (err: any) {
+      setPhoneMessage({ type: 'error', text: err?.message || 'Failed to update mobile number.' });
+    } finally {
+      setSavingPhone(false);
+    }
+  };
 
   // New address form
   const [showAddAddress, setShowAddAddress] = useState(false);
@@ -171,6 +214,17 @@ export const AccountView: React.FC<AccountViewProps> = ({
         >
           <MapPin className="w-4 h-4" />
           <span>Saved Addresses ({userProfile?.savedAddresses?.length || 0})</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('profile')}
+          className={`pb-2 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
+            activeTab === 'profile'
+              ? 'border-[#802336] text-[#802336]'
+              : 'border-transparent text-gray-500 hover:text-black'
+          }`}
+        >
+          <UserIcon className="w-4 h-4" />
+          <span>My Profile & Mobile</span>
         </button>
       </div>
 
@@ -393,6 +447,134 @@ export const AccountView: React.FC<AccountViewProps> = ({
                 </button>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Profile & Mobile Number Tab */}
+      {activeTab === 'profile' && (
+        <div className="bg-white rounded-3xl border border-[#E8DCCF] p-6 sm:p-8 shadow-xs max-w-2xl space-y-6 animate-fadeIn">
+          <div>
+            <h3 className="font-serif text-xl font-bold text-[#3B1E22]">
+              Customer Profile Details
+            </h3>
+            <p className="text-xs text-gray-500">
+              Manage your patron account details and optional mobile contact number.
+            </p>
+          </div>
+
+          {phoneMessage && (
+            <div
+              className={`p-3.5 rounded-xl text-xs font-semibold flex items-center gap-2 ${
+                phoneMessage.type === 'success'
+                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                  : 'bg-red-50 text-red-800 border border-red-200'
+              }`}
+            >
+              {phoneMessage.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              ) : (
+                <ShieldAlert className="w-4 h-4 text-red-600 shrink-0" />
+              )}
+              <span>{phoneMessage.text}</span>
+            </div>
+          )}
+
+          <div className="space-y-4 text-xs">
+            {/* Registered Email */}
+            <div>
+              <label className="block font-bold uppercase tracking-wider text-gray-700 mb-1">
+                Account Email
+              </label>
+              <input
+                type="text"
+                disabled
+                value={user.email || 'Email patron'}
+                className="w-full px-3.5 py-2.5 border border-gray-200 bg-gray-50 rounded-xl text-gray-600 font-medium cursor-not-allowed"
+              />
+              <p className="text-[10px] text-gray-400 mt-1">
+                Used for email + password login and official order confirmations.
+              </p>
+            </div>
+
+            {/* Display Name */}
+            <div>
+              <label className="block font-bold uppercase tracking-wider text-gray-700 mb-1">
+                Full Name
+              </label>
+              <input
+                type="text"
+                disabled
+                value={user.displayName || userProfile?.displayName || 'Patron'}
+                className="w-full px-3.5 py-2.5 border border-gray-200 bg-gray-50 rounded-xl text-gray-600 font-medium cursor-not-allowed"
+              />
+            </div>
+
+            {/* Optional Mobile Number with Country Code */}
+            <form onSubmit={handleSavePhone} className="space-y-3 pt-2 border-t border-gray-100">
+              <div className="flex items-center justify-between">
+                <label className="block font-bold uppercase tracking-wider text-gray-700">
+                  Mobile Number (Optional)
+                </label>
+                {/* Verification Status Badge */}
+                {userProfile?.phone && (
+                  <span
+                    className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      userProfile.phone_verified
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-amber-100 text-amber-800'
+                    }`}
+                  >
+                    {userProfile.phone_verified ? '✓ Verified' : 'Not verified'}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex gap-2">
+                {/* Country Calling Code Selector */}
+                <select
+                  value={profileCountryCode}
+                  onChange={(e) => setProfileCountryCode(e.target.value)}
+                  className="px-3 py-2.5 border border-[#E8DCCF] rounded-xl font-bold bg-[#FAF7F2] text-xs focus:ring-1 focus:ring-[#802336] focus:outline-none"
+                >
+                  <option value="+91">🇮🇳 India (+91)</option>
+                  <option value="+971">🇦🇪 UAE (+971)</option>
+                  <option value="+1">🇺🇸 USA / Canada (+1)</option>
+                  <option value="+44">🇬🇧 UK (+44)</option>
+                  <option value="+61">🇦🇺 Australia (+61)</option>
+                  <option value="+65">🇸🇬 Singapore (+65)</option>
+                  <option value="+60">🇲🇾 Malaysia (+60)</option>
+                  <option value="+966">🇸🇦 Saudi Arabia (+966)</option>
+                  <option value="+974">🇶🇦 Qatar (+974)</option>
+                </select>
+
+                <div className="relative flex-1">
+                  <Phone className="w-4 h-4 absolute left-3 top-3 text-gray-400" />
+                  <input
+                    type="tel"
+                    placeholder="Enter 10-digit mobile number"
+                    value={profilePhone}
+                    onChange={(e) => setProfilePhone(e.target.value)}
+                    className="w-full pl-9 pr-3.5 py-2.5 border border-[#E8DCCF] rounded-xl text-xs font-medium focus:ring-1 focus:ring-[#802336] focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <p className="text-[11px] text-gray-500">
+                Optional contact number for courier delivery updates and WhatsApp support. Login remains via Email & Password.
+              </p>
+
+              <div className="pt-2">
+                <button
+                  type="submit"
+                  disabled={savingPhone}
+                  className="btn-teak-green px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-2 shadow-xs cursor-pointer disabled:opacity-50"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>{savingPhone ? 'Saving...' : 'Save Mobile Number'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -218,6 +218,7 @@ export interface Order {
   orderStatus: OrderStatus;
   trackingNumber?: string;
   courierName?: string;
+  giftItem?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -249,6 +250,13 @@ export interface StoreSettings {
   contactEmail: string;
   contactAddress: string;
   announcementText: string;
+  // House of Parati-inspired Scrolling Offer Bar & Gift Rewards
+  scrollingOfferBarEnabled?: boolean;
+  offerTier1MinAmount?: number; // default: 1500
+  offerTier1GiftName?: string; // default: "Gold Imitation Jhoomki"
+  offerTier2MinAmount?: number; // default: 2000
+  offerTier2GiftName?: string; // default: "Gold Imitation Bangles"
+  customOfferMessages?: string[];
   updatedAt: string;
 }
 
@@ -257,6 +265,8 @@ export interface UserProfile {
   email: string;
   displayName: string;
   phone?: string;
+  phoneCountryCode?: string;
+  phone_verified?: boolean;
   role: 'customer' | 'admin';
   savedAddresses: Address[];
   createdAt: string;

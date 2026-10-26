@@ -24,7 +24,8 @@ import {
   CreditCard,
   Lock,
   Loader2,
-  ExternalLink
+  ExternalLink,
+  Gift
 } from 'lucide-react';
 import { Address, Order, OrderItem, StoreSettings } from '../types';
 import { useCart } from '../context/CartContext';
@@ -231,6 +232,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         orderStatus: 'Pending',
         trackingNumber: `BD${Math.floor(100000000 + Math.random() * 900000000)}IN`,
         courierName: 'BlueDart Express',
+        giftItem: subtotal >= 2000 ? 'Gold Imitation Bangles' : subtotal >= 1500 ? 'Gold Imitation Jhoomki' : undefined,
         notes: upiMethod === 'phone'
           ? `Paid via UPI Mobile Number: ${upiMobileNumber}`
           : upiMethod === 'qr'
@@ -765,6 +767,36 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                   </span>
                 </div>
               ))}
+
+              {/* House of Parati Style Complimentary Gift Item in Checkout */}
+              {subtotal >= 1500 && (
+                <div className="flex items-center justify-between p-3.5 rounded-xl border border-[#DFB982] bg-[#174A3A] text-white shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-lg bg-white/10 flex items-center justify-center border border-[#DFB982]/50 text-[#DFB982]">
+                      <Gift className="w-6 h-6 text-[#DFB982]" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-serif text-sm font-bold text-white">
+                          {subtotal >= 2000 ? 'Gold Imitation Bangles' : 'Gold Imitation Jhoomki'}
+                        </h4>
+                        <span className="bg-[#DFB982] text-[#174A3A] text-[9px] font-extrabold px-2 py-0.5 rounded-full uppercase">
+                          Free Gift
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-[#DFB982] mt-0.5">
+                        ✦ Exclusive Atelier Gift for shopping above ₹{subtotal >= 2000 ? '2,000' : '1,500'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-sm font-bold text-[#DFB982]">₹0 FREE</span>
+                    <span className="block text-[10px] text-gray-300 line-through">
+                      ₹{subtotal >= 2000 ? '950' : '550'}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Pricing Breakdown */}

@@ -8,7 +8,8 @@ import {
   Truck,
   ShieldCheck,
   Tag,
-  Check
+  Check,
+  Gift
 } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { isGenuineImageUrl } from '../lib/sampleData';
@@ -98,6 +99,80 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onCheckout, onViewShop }
 
           {/* Cart Items List */}
           <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
+            {/* House of Parati Style Gift Qualification Indicator */}
+            {items.length > 0 && (
+              <>
+                {subtotal >= 2000 ? (
+                  <div className="bg-[#174A3A] text-white p-3.5 rounded-2xl border border-[#DFB982]/60 shadow-md space-y-1.5 animate-fadeIn">
+                    <div className="flex items-center justify-between">
+                      <span className="flex items-center gap-1.5 text-xs font-bold text-[#DFB982] uppercase tracking-wider">
+                        <Sparkles className="w-4 h-4 text-[#DFB982] animate-bounce" />
+                        FREE REWARD UNLOCKED!
+                      </span>
+                      <span className="bg-[#DFB982] text-[#174A3A] text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase shadow-xs">
+                        Tier 2 Gift
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center shrink-0 border border-white/20">
+                        <Gift className="w-4 h-4 text-[#DFB982]" />
+                      </div>
+                      <p className="text-xs font-semibold leading-tight text-white">
+                        Qualified for <span className="text-[#DFB982] font-bold">Gold Imitation Bangles</span> as a free gift with your order!
+                      </p>
+                    </div>
+                    <p className="text-[10px] text-[#DFB982]/85 pl-10">
+                      ✦ Automatically packed with your delivery at ₹0
+                    </p>
+                  </div>
+                ) : subtotal >= 1500 ? (
+                  <div className="bg-[#174A3A] text-white p-3.5 rounded-2xl border border-[#DFB982]/60 shadow-md space-y-2 animate-fadeIn">
+                    <div className="flex items-center justify-between">
+                      <span className="flex items-center gap-1.5 text-xs font-bold text-[#DFB982] uppercase tracking-wider">
+                        <Sparkles className="w-4 h-4 text-[#DFB982]" />
+                        FREE REWARD UNLOCKED!
+                      </span>
+                      <span className="bg-[#DFB982] text-[#174A3A] text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase shadow-xs">
+                        Tier 1 Gift
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center shrink-0 border border-white/20">
+                        <Gift className="w-4 h-4 text-[#DFB982]" />
+                      </div>
+                      <p className="text-xs font-semibold leading-tight text-white">
+                        Qualified for a <span className="text-[#DFB982] font-bold">Gold Imitation Jhoomki</span> free gift!
+                      </p>
+                    </div>
+                    <div className="pt-2 border-t border-white/15 text-[11px] text-white/90 flex items-center justify-between">
+                      <span>✦ Add <strong>₹{(2000 - subtotal).toLocaleString('en-IN')}</strong> more to unlock <strong>Gold Imitation Bangles Gift</strong>!</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-[#FAF7F2] p-3 rounded-2xl border border-[#DFB982]/60 text-xs space-y-2 shadow-xs">
+                    <div className="flex items-center justify-between text-[#174A3A]">
+                      <span className="font-bold flex items-center gap-1.5 text-xs">
+                        <Gift className="w-3.5 h-3.5 text-[#174A3A]" />
+                        Exclusive Free Gift Offers
+                      </span>
+                      <span className="text-[11px] font-bold text-[#802336]">
+                        Add ₹{(1500 - subtotal).toLocaleString('en-IN')} for Gift
+                      </span>
+                    </div>
+                    <div className="w-full bg-[#E8DCCF] h-2 rounded-full overflow-hidden">
+                      <div
+                        className="bg-[#174A3A] h-full rounded-full transition-all duration-500"
+                        style={{ width: `${Math.min(100, Math.round((subtotal / 1500) * 100))}%` }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-gray-600 leading-tight">
+                      ✦ Shop above <strong>₹1,500</strong> for a <strong>Gold Imitation Jhoomki</strong> or above <strong>₹2,000</strong> for <strong>Gold Imitation Bangles</strong>!
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+
             {items.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-3">
                 <div className="w-16 h-16 rounded-full bg-[#F4EBE1] flex items-center justify-center text-[#802336]">

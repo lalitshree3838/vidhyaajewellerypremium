@@ -37,6 +37,7 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   saveAddress: (address: Address) => Promise<void>;
   deleteAddress: (addressId: string) => Promise<void>;
+  updateUserProfileData: (data: Partial<UserProfile>) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -240,6 +241,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await saveUserProfile(user.uid, { savedAddresses: updated });
   };
 
+  const updateUserProfileData = async (data: Partial<UserProfile>) => {
+    if (!user) return;
+    if (userProfile) {
+      const updatedProfile = { ...userProfile, ...data };
+      setUserProfile(updatedProfile);
+    }
+    await saveUserProfile(user.uid, data);
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -257,7 +267,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         logoutAdminSession,
         signOut,
         saveAddress,
-        deleteAddress
+        deleteAddress,
+        updateUserProfileData
       }}
     >
       {children}

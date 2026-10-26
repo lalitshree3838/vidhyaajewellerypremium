@@ -62,6 +62,14 @@ if (!fs.existsSync(uploadsDir)) {
 }
 app.use('/products/uploads', express.static(uploadsDir));
 
+// Serve category showcase images statically
+const categoriesDir = path.join(__dirname, 'public', 'categories');
+if (!fs.existsSync(categoriesDir)) {
+  fs.mkdirSync(categoriesDir, { recursive: true });
+}
+app.use('/categories', express.static(categoriesDir));
+app.use(express.static(path.join(__dirname, 'public')));
+
 // Serve uploaded jewellery videos statically
 const videoUploadsDir = path.join(__dirname, 'public', 'videos', 'uploads');
 if (!fs.existsSync(videoUploadsDir)) {

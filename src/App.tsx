@@ -163,7 +163,7 @@ function MainApp() {
         return;
       }
 
-      if (pathname.startsWith('/category/') || pathname.startsWith('/collection/')) {
+      if (pathname.startsWith('/category/') || pathname.startsWith('/collection/') || pathname.startsWith('/collections/')) {
         const parts = pathname.split('/').filter(Boolean);
         const segment = parts[1];
         if (segment) {
@@ -190,6 +190,10 @@ function MainApp() {
       window.history.pushState({}, '', '/admin/login');
     } else if (view === 'home' && window.location.pathname !== '/') {
       window.history.pushState({}, '', '/');
+    } else if (view === 'collections' || view === 'collection') {
+      setCurrentView('shop');
+      setCurrentParam(param || 'all');
+      window.history.pushState({}, '', `/collections/${param || 'all'}`);
     } else if (view === 'shop') {
       if (param && param !== 'all') {
         const isCat = [
@@ -202,14 +206,17 @@ function MainApp() {
           'pendant-sets',
           'mangalsutra',
           'earrings-cuffs',
+          'kada-bangles',
           'bangles-kangan-kada-bracelets',
           'bangles-bracelets',
           'rings',
+          'devotional-jewellery',
           'devotional-rings',
           'mla-jewellery',
           'elegent-everyday',
           'best-sellers',
           'watches',
+          'oxidised-jewellery',
           'kangan-kada-bracelet',
           'kangan-kada-and-bracelet',
           'kangan-kada',
@@ -258,6 +265,7 @@ function MainApp() {
         <Header
           currentView={currentView}
           categories={categories}
+          storeSettings={storeSettings}
           onNavigate={handleNavigate}
           onOpenSearch={() => setSearchOpen(true)}
           onOpenAuth={() => setAuthOpen(true)}

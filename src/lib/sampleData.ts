@@ -36,8 +36,7 @@ const BANNED_SAMPLE_IMAGES = [
   'category_bangles',
   'category_bracelets',
   'category_chains',
-  'category_pendants',
-  '/categories/'
+  'category_pendants'
 ];
 
 export function isGenuineImageUrl(url?: string | null): boolean {
@@ -63,6 +62,11 @@ export function isGenuineImageUrl(url?: string | null): boolean {
     if (trimmed.includes(banned)) {
       return false;
     }
+  }
+
+  // Allow official category showcase images in /categories/
+  if (trimmed.startsWith('/categories/')) {
+    return true;
   }
 
   // Check against verified uploaded jewellery files
@@ -431,6 +435,35 @@ export const INITIAL_CATEGORIES: Category[] = [
     ctaSubtitle: 'Personalized caseback engraving and custom strap sizing available.',
     ctaButtonText: 'Enquire on WhatsApp',
     ctaButtonLink: 'https://wa.me/917302187770',
+    ctaBgColor: '#FAF7F2'
+  },
+  {
+    id: 'oxidised-jewellery',
+    name: 'Oxidised Jewellery',
+    slug: 'oxidised-jewellery',
+    subtitle: 'Antique 92.5 Sterling Finish & Temple Chokers',
+    description: 'Beautiful oxidised silver jewellery, including antique chokers, floral jhumkas, and heritage traditional designs.',
+    image: '/categories/oxidised_jewellery_category.jpg',
+    heroBannerUrl: '/categories/oxidised_jewellery_category.jpg',
+    subcategories: ['All Oxidised', 'Oxidised Chokers', 'Oxidised Earrings', 'German Silver', 'Temple Designs'],
+    active: true,
+    order: 7,
+    seoTitle: 'Oxidised Jewellery | Antique Silver Chokers & Jhumkas',
+    seoDescription: 'Shop handcrafted oxidised jewellery, German silver chokers, tribal motifs, and temple jhumkas with insured express dispatch.',
+    seoKeywords: 'oxidised jewellery, silver oxidised, german silver, temple oxidised, vidhyaa jewellery',
+    sectionsOrder: ['banner', 'description', 'gallery', 'videos', 'featured_products', 'products', 'custom_story', 'cta'],
+    hiddenSections: [],
+    galleryImages: [],
+    videos: [],
+    promoBanners: [],
+    featuredProductIds: [],
+    customStoryTitle: 'Timeless Antique Oxidised Heritage',
+    customStoryBody: 'Our oxidised collection captures the rustic grandeur of vintage Indian metalwork, combining German silver and 92.5 antique sterling silver finishes with peacock, elephant, and lotus motifs.',
+    customStoryImage: '/categories/oxidised_jewellery_category.jpg',
+    ctaTitle: 'Explore Oxidised Silver Heirlooms',
+    ctaSubtitle: 'Handcrafted with hypoallergenic base metals for all-day skin comfort.',
+    ctaButtonText: 'Shop Oxidised Jewellery',
+    ctaButtonLink: '#products',
     ctaBgColor: '#FAF7F2'
   }
 ];
@@ -1858,5 +1891,10 @@ export const INITIAL_STORE_SETTINGS: StoreSettings = {
   contactEmail: 'care@vidhyaajewellery.com',
   contactAddress: 'Vidhya Villa, 152/9, Solani Puram (West), Near IIT Roorkee, Roorkee, District Haridwar, Uttarakhand, India',
   announcementText: 'ROYAL HERITAGE ATELIER • CERTIFIED 92.5 STERLING SILVER • INSURED EXPRESS DISPATCH',
+  scrollingOfferBarEnabled: true,
+  offerTier1MinAmount: 1500,
+  offerTier1GiftName: 'Gold Imitation Jhoomki',
+  offerTier2MinAmount: 2000,
+  offerTier2GiftName: 'Gold Imitation Bangles',
   updatedAt: new Date().toISOString()
 };

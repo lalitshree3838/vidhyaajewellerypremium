@@ -21,12 +21,14 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
 import { useWishlist } from '../context/WishlistContext';
-import { Category } from '../types';
+import { Category, StoreSettings } from '../types';
 import { SHOP_BY_CATEGORY_ITEMS, SHOP_BY_COLLECTION_ITEMS } from '../lib/navigationConfig';
+import { ScrollingOfferBar } from './ScrollingOfferBar';
 
 interface HeaderProps {
   currentView: string;
   categories?: Category[];
+  storeSettings?: StoreSettings;
   onNavigate: (view: string, param?: string) => void;
   onOpenSearch: () => void;
   onOpenAuth: () => void;
@@ -35,6 +37,7 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   currentView,
   categories = [],
+  storeSettings,
   onNavigate,
   onOpenSearch,
   onOpenAuth
@@ -93,6 +96,9 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="sticky top-0 z-40 bg-[#FAF7F2]/95 backdrop-blur-md border-b border-[#E8DCCF] transition-all">
+      {/* Premium Teak-Green Continuous Scrolling Offer Bar (House of Parati Style) */}
+      <ScrollingOfferBar storeSettings={storeSettings} onOfferClick={() => openCart()} />
+
       {/* Top Announcement Bar */}
       <div className="bg-[#0F5C4D] text-[#F4EBE1] text-xs font-medium py-2 px-4 transition-colors border-b border-[#0A4338]/40">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-1 text-center sm:text-left">

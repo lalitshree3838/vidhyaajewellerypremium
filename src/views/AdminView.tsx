@@ -2151,6 +2151,93 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 />
               </div>
 
+              {/* House of Parati Style Scrolling Offer Bar & Gift Offer Config */}
+              <div className="p-4 bg-[#FAF7F2] border border-[#DFB982]/60 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#174A3A]" />
+                    <h4 className="font-serif text-sm font-bold text-[#174A3A] uppercase tracking-wider">
+                      Teak-Green Scrolling Offer Bar & Gifts (House of Parati Style)
+                    </h4>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={settingsForm.scrollingOfferBarEnabled !== false}
+                      onChange={(e) =>
+                        setSettingsForm({ ...settingsForm, scrollingOfferBarEnabled: e.target.checked })
+                      }
+                      className="w-4 h-4 rounded text-[#174A3A] focus:ring-[#174A3A]"
+                    />
+                    <span className="text-xs font-semibold text-gray-700">Enable Offer Bar</span>
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block font-bold uppercase tracking-wider text-gray-700 mb-1">
+                      Tier 1 Gift Threshold (INR) *
+                    </label>
+                    <input
+                      type="number"
+                      value={settingsForm.offerTier1MinAmount ?? 1500}
+                      onChange={(e) =>
+                        setSettingsForm({ ...settingsForm, offerTier1MinAmount: Number(e.target.value) })
+                      }
+                      className="w-full px-3 py-2 border border-[#E8DCCF] rounded-xl font-bold bg-white"
+                    />
+                    <p className="text-[10px] text-gray-500 mt-0.5">e.g. ₹1,500</p>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold uppercase tracking-wider text-gray-700 mb-1">
+                      Tier 1 Free Gift Name *
+                    </label>
+                    <input
+                      type="text"
+                      value={settingsForm.offerTier1GiftName || 'Gold Imitation Jhoomki'}
+                      onChange={(e) =>
+                        setSettingsForm({ ...settingsForm, offerTier1GiftName: e.target.value })
+                      }
+                      className="w-full px-3 py-2 border border-[#E8DCCF] rounded-xl font-bold bg-white"
+                    />
+                    <p className="text-[10px] text-gray-500 mt-0.5">e.g. Gold Imitation Jhoomki</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block font-bold uppercase tracking-wider text-gray-700 mb-1">
+                      Tier 2 Gift Threshold (INR) *
+                    </label>
+                    <input
+                      type="number"
+                      value={settingsForm.offerTier2MinAmount ?? 2000}
+                      onChange={(e) =>
+                        setSettingsForm({ ...settingsForm, offerTier2MinAmount: Number(e.target.value) })
+                      }
+                      className="w-full px-3 py-2 border border-[#E8DCCF] rounded-xl font-bold bg-white"
+                    />
+                    <p className="text-[10px] text-gray-500 mt-0.5">e.g. ₹2,000</p>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold uppercase tracking-wider text-gray-700 mb-1">
+                      Tier 2 Free Gift Name *
+                    </label>
+                    <input
+                      type="text"
+                      value={settingsForm.offerTier2GiftName || 'Gold Imitation Bangles'}
+                      onChange={(e) =>
+                        setSettingsForm({ ...settingsForm, offerTier2GiftName: e.target.value })
+                      }
+                      className="w-full px-3 py-2 border border-[#E8DCCF] rounded-xl font-bold bg-white"
+                    />
+                    <p className="text-[10px] text-gray-500 mt-0.5">e.g. Gold Imitation Bangles</p>
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block font-bold uppercase tracking-wider text-gray-700 mb-1">

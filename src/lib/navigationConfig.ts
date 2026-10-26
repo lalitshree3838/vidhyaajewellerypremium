@@ -57,7 +57,13 @@ export function filterProductsByNavSlug(products: Product[], slug: string): Prod
 
     // 2. Categories with specialized mapping
     if (f === 'necklace' || f === 'necklaces') {
-      return (pCatId === 'necklaces' || pCatId === 'necklace') && !text.includes('choker');
+      return (
+        pCatId === 'necklaces' ||
+        pCatId === 'necklace' ||
+        text.includes('necklace') ||
+        text.includes('choker') ||
+        text.includes('haar')
+      );
     }
     if (f === 'chocker-set' || f === 'choker-set' || f === 'choker' || f === 'chokers') {
       return text.includes('choker') || pCatId === 'chocker-set' || pCatId === 'choker-set';
@@ -75,6 +81,9 @@ export function filterProductsByNavSlug(products: Product[], slug: string): Prod
       return pCatId === 'earrings-cuffs' || text.includes('earring') || text.includes('jhumka') || text.includes('cuff');
     }
     if (
+      f === 'kada-bangles' ||
+      f === 'kada-and-bangles' ||
+      f === 'kadas-bangles' ||
       f === 'bangles-kangan-kada-bracelets' ||
       f === 'kangan-kada-bracelet' ||
       f === 'kangan-kada-and-bracelet' ||
@@ -94,11 +103,28 @@ export function filterProductsByNavSlug(products: Product[], slug: string): Prod
         /\b(bangle|bangles|kangan|kada|kadas|bracelet|bracelets)\b/.test(text)
       );
     }
-    if (f === 'rings' || f === 'devotional-rings' || f === 'ring') {
+    if (f === 'devotional-jewellery' || f === 'devotional' || f === 'devotional-rings') {
+      return (
+        pCatId === 'devotional-rings' ||
+        text.includes('ganesha') ||
+        text.includes('devotional') ||
+        text.includes('mandala') ||
+        text.includes('temple')
+      );
+    }
+    if (f === 'rings' || f === 'ring') {
       return (
         pCatId === 'rings' ||
         pCatId === 'devotional-rings' ||
         (/\b(ring|rings)\b/.test(text) && !/\bearring\b/.test(text))
+      );
+    }
+    if (f === 'oxidised-jewellery' || f === 'oxidised' || f === 'oxidise' || f === 'oxidise-sets') {
+      return (
+        pCatId === 'oxidised-jewellery' ||
+        text.includes('oxidised') ||
+        text.includes('oxidise') ||
+        text.includes('german silver')
       );
     }
     if (f === 'mla-jewellery' || f === 'mala' || f === 'mala-jewellery') {
@@ -157,6 +183,57 @@ export function filterProductsByNavSlug(products: Product[], slug: string): Prod
  */
 export function getNavHeadingInfo(slug: string): { title: string; subtitle: string; isCategory: boolean } {
   const f = (slug || 'all').toLowerCase();
+
+  // Explicit handling for the 7 primary storefront categories
+  if (f === 'necklaces' || f === 'necklace') {
+    return {
+      title: 'Necklaces',
+      subtitle: 'Handcrafted 22K micro gold plated choker sets, rani haar, and royal bridal necklaces.',
+      isCategory: true,
+    };
+  }
+  if (f === 'kada-bangles' || f === 'kada-and-bangles' || f === 'kadas-bangles' || f === 'bangles-kangan-kada-bracelets' || f === 'kangan-kada-bracelet') {
+    return {
+      title: 'Kada & Bangles',
+      subtitle: 'Handcrafted 22K micro gold openable kadas, traditional wedding kangans, and royal bracelets.',
+      isCategory: true,
+    };
+  }
+  if (f === 'rings' || f === 'ring') {
+    return {
+      title: 'Rings',
+      subtitle: 'Elegant artificial jewellery cocktail rings, emerald cuts, and solitaire statement designs.',
+      isCategory: true,
+    };
+  }
+  if (f === 'mangalsutra') {
+    return {
+      title: 'Mangalsutra',
+      subtitle: 'Sacred American diamond sunburst pendants and traditional black bead bridal heirlooms.',
+      isCategory: true,
+    };
+  }
+  if (f === 'devotional-jewellery' || f === 'devotional' || f === 'devotional-rings') {
+    return {
+      title: 'Devotional Jewellery',
+      subtitle: 'Sacred Lord Ganesha temple blessing rings and auspicious spiritual jewellery designs.',
+      isCategory: true,
+    };
+  }
+  if (f === 'watches' || f === 'watch') {
+    return {
+      title: 'Watches',
+      subtitle: "Stylish women's luxury watches and royal artisan jewellery timepieces.",
+      isCategory: true,
+    };
+  }
+  if (f === 'oxidised-jewellery' || f === 'oxidised' || f === 'oxidise-sets') {
+    return {
+      title: 'Oxidised Jewellery',
+      subtitle: 'Handcrafted antique oxidised silver necklaces, traditional jhumkas, and ethnic jewellery.',
+      isCategory: true,
+    };
+  }
 
   const foundCat = SHOP_BY_CATEGORY_ITEMS.find((c) => c.id === f);
   if (foundCat) {

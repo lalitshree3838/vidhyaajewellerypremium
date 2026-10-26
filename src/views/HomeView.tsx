@@ -168,10 +168,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
         </div>
       </section>
 
-      {/* 2. Category Section with Circular Cards */}
+      {/* 2. Jewellery Category Section - 7 Circular Category Cards */}
       <div id="shop-by-category" />
-      <section id="categories-section" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center max-w-2xl mx-auto mb-10">
+      <section id="categories-section" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
+        <div className="text-center max-w-2xl mx-auto mb-8 sm:mb-10">
           <span className="text-xs font-bold tracking-[0.25em] text-[#0F4C4A] uppercase">
             Curated For You
           </span>
@@ -181,145 +181,105 @@ export const HomeView: React.FC<HomeViewProps> = ({
           <div className="w-16 h-0.5 bg-[#DFB982] mx-auto mt-3"></div>
         </div>
 
-        {/* Square/Portrait Category Cards Grid - Curated Categories & Collections */}
         {(() => {
-          const categoryCards = [
+          const storefrontCategories = [
             {
-              name: 'Necklaces & Choker Sets',
-              subtitle: 'Heritage 22K Micro Gold Plated & Temple Sets',
-              image: '/products/pink_pearl_rani_haar_1150.jpg',
-              onClick: () => onNavigate('shop', 'necklaces')
+              name: 'Necklaces',
+              slug: 'necklaces',
+              image: '/categories/necklaces_category.jpg',
+              subtitle: 'Heritage Chokers & Sets'
             },
             {
-              name: 'Statement & Cocktail Rings',
-              subtitle: 'Pink Emerald Cut & Marquise Solitaires',
-              image: '/products/pink_emerald_cocktail_ring_1900.jpg',
-              onClick: () => onNavigate('shop', 'rings')
+              name: 'Kada & Bangles',
+              slug: 'kada-bangles',
+              image: '/categories/kada_bangles_category.jpg',
+              subtitle: 'Openable Kadas & Bangles'
             },
             {
-              name: 'Devotional Temple Rings',
-              subtitle: 'Lord Ganesha Blessings • Mandala Filigree',
-              image: '/products/lord_ganesha_ring_300.jpg',
-              onClick: () => onNavigate('shop', 'devotional-rings')
+              name: 'Rings',
+              slug: 'rings',
+              image: '/categories/rings_category.jpg',
+              subtitle: 'Solitaire & Cocktail Rings'
             },
             {
-              name: 'Rajwada Polki & Jadau',
-              subtitle: 'Uncut Polki Glass & 24K Gold Foil Jadau',
-              image: '/products/polki_rajwada_dome_ring_900.jpg',
-              onClick: () => onNavigate('shop', 'ragwada-collections')
+              name: 'Mangalsutra',
+              slug: 'mangalsutra',
+              image: '/categories/mangalsutra_category.jpg',
+              subtitle: 'Sunburst & Black Bead Sets'
             },
             {
-              name: 'American Diamond Rings',
-              subtitle: 'Dual Solitaires & Marquise Petal Coronet',
-              image: '/products/ad_floral_cocktail_ring_750.jpg',
-              onClick: () => onNavigate('shop', 'rings')
+              name: 'Devotional Jewellery',
+              slug: 'devotional-jewellery',
+              image: '/categories/devotional_category.jpg',
+              subtitle: 'Ganesha Temple Heirlooms'
             },
             {
-              name: 'Royal Rajwada Choker Sets',
-              subtitle: '22K Gold Polish Chokers with Maang Tikka',
-              image: '/products/rajwada_choker_set_green_2100.jpg',
-              onClick: () => onNavigate('shop', 'chocker-set')
+              name: 'Watches',
+              slug: 'watches',
+              image: '/categories/watches_category.jpg',
+              subtitle: 'Luxury Royal Timepieces'
             },
             {
-              name: 'Rose Gold Diamond Cascades',
-              subtitle: 'Artisan Diamond Waterfall Fringe & Studs',
-              image: '/products/rose_gold_diamond_set_2000.jpg',
-              onClick: () => onNavigate('shop', 'necklace')
-            },
-            {
-              name: 'Pink Crystal Pearl Beaded Chokers',
-              subtitle: 'Cascading Pink Beads & Kundan Pendant',
-              image: '/products/pink_beaded_choker_set_1250.jpg',
-              onClick: () => onNavigate('shop', 'necklaces')
-            },
-            {
-              name: 'Royal Sapphire Doublet Rings',
-              subtitle: 'Sapphire Doublet Petals & Baguette Wheel',
-              image: '/products/sapphire_wheel_cocktail_ring_1650.jpg',
-              onClick: () => onNavigate('shop', 'statement-rings')
+              name: 'Oxidised Jewellery',
+              slug: 'oxidised-jewellery',
+              image: '/categories/oxidised_jewellery_category.jpg',
+              subtitle: 'Antique Silver Heirlooms'
             }
-          ].filter(
-            (card) => Boolean(card.image && isGenuineImageUrl(card.image) && !failedImageUrls.has(card.image))
-          );
-
-          if (categoryCards.length === 0) return null;
+          ];
 
           return (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-3.5 sm:gap-5 lg:gap-6">
-              {categoryCards.map((card) => (
-                <div
-                  key={card.name}
-                  onClick={card.onClick}
-                  className="group relative rounded-2xl md:rounded-3xl overflow-hidden aspect-[4/5] sm:aspect-square shadow-md hover:shadow-2xl border border-[#3B1E22]/15 cursor-pointer transition-all duration-300 bg-[#1A0E11]"
-                >
-                  <img
-                    src={card.image}
-                    alt={card.name}
-                    className="w-full h-full object-cover group-hover:scale-108 transition-transform duration-700 ease-out"
-                    loading="lazy"
-                    onError={() => handleImageError(card.image)}
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/45 to-transparent group-hover:via-black/55 transition-colors" />
-
-                  <div className="absolute inset-x-0 bottom-0 p-3.5 sm:p-4 md:p-5 text-center flex flex-col items-center justify-end z-10">
-                    <h3 className="font-serif text-sm sm:text-base lg:text-lg xl:text-xl font-bold text-white group-hover:text-[#DFB982] transition-colors leading-tight line-clamp-1 drop-shadow-sm">
-                      {card.name}
-                    </h3>
-                    <p className="text-[10px] sm:text-[11px] md:text-xs text-[#E8DCCF]/95 line-clamp-1 mt-1 font-normal tracking-wide">
-                      {card.subtitle}
-                    </p>
-                    <div className="mt-2 sm:mt-2.5 inline-flex items-center gap-1.5 text-[10px] sm:text-xs font-semibold text-[#DFB982] group-hover:text-[#F7E7CE] tracking-widest uppercase transition-colors">
-                      <span>EXPLORE</span>
-                      <ArrowRight className="w-3 sm:w-3.5 h-3 sm:h-3.5 group-hover:translate-x-1 transition-transform" />
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          );
-        })()}
-
-        {/* Round Category Icons - Circular Category Navigation Row */}
-        {(() => {
-          const roundItems = [
-            { name: 'Necklaces', img: '/products/pink_pearl_rani_haar_1150.jpg', cat: 'necklaces' },
-            { name: 'Choker Sets', img: '/products/rajwada_choker_set_green_2100.jpg', cat: 'chocker-set' },
-            { name: 'Statement Rings', img: '/products/pink_emerald_cocktail_ring_1900.jpg', cat: 'rings' },
-            { name: 'Devotional Rings', img: '/products/lord_ganesha_ring_300.jpg', cat: 'devotional-rings' },
-            { name: 'Rajwada Polki', img: '/products/polki_rajwada_dome_ring_900.jpg', cat: 'ragwada-collections' },
-            { name: 'AD Rings', img: '/products/ad_floral_cocktail_ring_750.jpg', cat: 'rings' },
-            { name: 'Sapphire Rings', img: '/products/sapphire_wheel_cocktail_ring_1650.jpg', cat: 'statement-rings' },
-            { name: 'Cushion Solitaires', img: '/products/cushion_solitaire_winged_ring_1850.jpg', cat: 'rings' },
-            { name: 'Oval Solitaires', img: '/products/oval_solitaire_infinity_ring_1150.jpg', cat: 'rings' },
-            { name: 'Rose Gold Sets', img: '/products/rose_gold_diamond_set_2000.jpg', cat: 'necklace' },
-            { name: 'Pearl Rani Haar', img: '/products/pink_beaded_choker_set_1250.jpg', cat: 'necklaces' }
-          ].filter(
-            (item) => Boolean(item.img && isGenuineImageUrl(item.img) && !failedImageUrls.has(item.img))
-          );
-
-          if (roundItems.length === 0) return null;
-
-          return (
-            <div className="mt-10 sm:mt-12 pt-8 border-t border-[#E8DCCF]/80">
-              <div className="flex items-center justify-start lg:justify-center gap-4 sm:gap-6 md:gap-7 overflow-x-auto pb-4 pt-1 px-2 no-scrollbar">
-                {roundItems.map((item) => (
+            <div>
+              {/* Desktop View: All 7 Categories in a Single Balanced Horizontal Row */}
+              <div className="hidden lg:grid lg:grid-cols-7 gap-4 xl:gap-6 max-w-6xl mx-auto items-start">
+                {storefrontCategories.map((cat) => (
                   <button
-                    key={item.name}
-                    onClick={() => onNavigate('shop', item.cat)}
-                    className="flex flex-col items-center gap-2 group cursor-pointer flex-shrink-0 transition-transform active:scale-95"
-                    title={`Explore ${item.name}`}
+                    key={cat.slug}
+                    type="button"
+                    onClick={() => onNavigate('collections', cat.slug)}
+                    className="flex flex-col items-center group cursor-pointer text-center focus:outline-none transition-transform active:scale-95"
+                    title={`Explore ${cat.name}`}
                   >
-                    <div className="w-16 h-16 sm:w-20 sm:h-20 lg:w-[82px] lg:h-[82px] rounded-full p-1 border-2 border-[#D4AF37]/70 group-hover:border-[#802336] transition-all overflow-hidden shadow-sm group-hover:scale-108 bg-[#181113] flex items-center justify-center">
-                      <img
-                        src={item.img}
-                        alt={item.name}
-                        className="w-full h-full object-cover rounded-full group-hover:scale-105 transition-transform duration-300"
-                        loading="lazy"
-                        onError={() => handleImageError(item.img)}
-                      />
+                    <div className="w-28 h-28 xl:w-32 xl:h-32 rounded-full p-1.5 border-2 border-[#DFB982]/80 bg-gradient-to-b from-[#FFFDF9] via-[#FAF6F0] to-[#F5ECE0] shadow-sm group-hover:border-[#802336] group-hover:shadow-xl group-hover:scale-105 transition-all duration-300 flex items-center justify-center">
+                      <div className="w-full h-full rounded-full overflow-hidden bg-[#FAF7F2] relative aspect-square">
+                        <img
+                          src={cat.image}
+                          alt={cat.name}
+                          className="w-full h-full object-cover object-center group-hover:scale-110 transition-transform duration-500 ease-out"
+                          loading="lazy"
+                          onError={() => handleImageError(cat.image)}
+                        />
+                      </div>
                     </div>
-                    <span className="text-[11px] sm:text-xs font-semibold text-[#3B1E22] group-hover:text-[#802336] transition-colors text-center whitespace-nowrap leading-tight">
-                      {item.name}
+                    <span className="font-serif text-sm xl:text-[15px] font-semibold text-[#241C1A] group-hover:text-[#802336] transition-colors text-center leading-snug mt-3">
+                      {cat.name}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              {/* Mobile & Tablet View: Smooth Touch-Friendly Horizontal Scroll */}
+              <div className="flex lg:hidden overflow-x-auto gap-4 sm:gap-6 pb-4 pt-1 px-4 sm:px-6 scrollbar-none snap-x snap-mandatory touch-pan-x -mx-4 sm:-mx-6">
+                {storefrontCategories.map((cat) => (
+                  <button
+                    key={cat.slug}
+                    type="button"
+                    onClick={() => onNavigate('collections', cat.slug)}
+                    className="flex-shrink-0 w-24 sm:w-28 flex flex-col items-center snap-center group cursor-pointer text-center focus:outline-none transition-transform active:scale-95"
+                    title={`Explore ${cat.name}`}
+                  >
+                    <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full p-1 sm:p-1.5 border-2 border-[#DFB982]/80 bg-gradient-to-b from-[#FFFDF9] via-[#FAF6F0] to-[#F5ECE0] shadow-sm group-hover:border-[#802336] group-hover:shadow-md transition-all duration-300 flex items-center justify-center">
+                      <div className="w-full h-full rounded-full overflow-hidden bg-[#FAF7F2] relative aspect-square">
+                        <img
+                          src={cat.image}
+                          alt={cat.name}
+                          className="w-full h-full object-cover object-center group-hover:scale-110 transition-transform duration-500 ease-out"
+                          loading="lazy"
+                          onError={() => handleImageError(cat.image)}
+                        />
+                      </div>
+                    </div>
+                    <span className="font-serif text-xs sm:text-sm font-semibold text-[#241C1A] group-hover:text-[#802336] transition-colors text-center leading-tight mt-2.5">
+                      {cat.name}
                     </span>
                   </button>
                 ))}
