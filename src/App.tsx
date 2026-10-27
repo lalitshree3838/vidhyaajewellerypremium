@@ -11,6 +11,7 @@ import { Product, ProductVariation, Category, StoreSettings, Order } from './typ
 import {
   initCatalogIfEmpty,
   fetchProducts,
+  subscribeToProducts,
   fetchCategories,
   fetchStoreSettings,
   getCachedProducts,
@@ -128,17 +129,31 @@ function MainApp() {
   };
 
   useEffect(() => {
-    // Check initial catalog in background without blocking live data load
-    initCatalogIfEmpty().catch(() => {});
     loadData();
 
+    // Subscribe to live Firestore products collection updates
+    const unsubscribe = subscribeToProducts(
+      (liveProds) => {
+        if (Array.isArray(liveProds) && liveProds.length > 0) {
+          setProducts(liveProds);
+        }
+      },
+      (err) => {
+        console.warn('[Storefront] Firestore real-time notice:', err?.message || err);
+      }
+    );
+
     const handleProductsUpdated = (e: any) => {
-      if (e.detail && Array.isArray(e.detail)) {
+      if (e.detail && Array.isArray(e.detail) && e.detail.length > 0) {
         setProducts(e.detail);
       }
     };
     window.addEventListener('vidhyaa_products_updated', handleProductsUpdated);
-    return () => window.removeEventListener('vidhyaa_products_updated', handleProductsUpdated);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('vidhyaa_products_updated', handleProductsUpdated);
+    };
   }, []);
 
   useEffect(() => {

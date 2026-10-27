@@ -69,6 +69,11 @@ export function isGenuineImageUrl(url?: string | null): boolean {
     return true;
   }
 
+  // Allow all uploaded products in /products/ or /assets/
+  if (trimmed.startsWith('/products/') || trimmed.startsWith('/assets/') || trimmed.startsWith('/uploads/')) {
+    return true;
+  }
+
   // Check against verified uploaded jewellery files
   for (const filename of GENUINE_PRODUCT_IMAGE_FILENAMES) {
     if (trimmed === `/products/${filename}` || trimmed.endsWith(`/${filename}`)) {
@@ -76,18 +81,17 @@ export function isGenuineImageUrl(url?: string | null): boolean {
     }
   }
 
-  // Allow genuine user uploads stored in /products/uploads/ or /uploads/
-  if (trimmed.startsWith('/products/uploads/') || trimmed.startsWith('/uploads/')) {
-    return true;
-  }
-
   // Allow genuine user uploads in base64 data format
   if (trimmed.startsWith('data:image/')) {
     return true;
   }
 
-  // Allow uploads stored in Firebase Cloud Storage
-  if (trimmed.includes('firebasestorage.googleapis.com') || trimmed.includes('firebasestorage.app')) {
+  // Allow uploads stored in Firebase Cloud Storage or Google Cloud Storage
+  if (
+    trimmed.includes('firebasestorage.googleapis.com') ||
+    trimmed.includes('firebasestorage.app') ||
+    trimmed.includes('storage.googleapis.com')
+  ) {
     return true;
   }
 
@@ -97,7 +101,7 @@ export function isGenuineImageUrl(url?: string | null): boolean {
   }
 
   // Allow external web URLs (https://, http://) as long as not a banned placeholder
-  if (trimmed.startsWith('https://') || trimmed.startsWith('http://')) {
+  if (trimmed.startsWith('https://') || trimmed.startsWith('http://') || trimmed.startsWith('/')) {
     return true;
   }
 

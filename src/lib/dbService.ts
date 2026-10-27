@@ -11,7 +11,8 @@ import {
   orderBy,
   limit,
   serverTimestamp,
-  runTransaction
+  runTransaction,
+  onSnapshot
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from './firebase';
 import { Category, Order, OrderStatus, Product, ProductVariation, Review, StoreSettings, UserProfile, Address } from '../types';
@@ -62,26 +63,30 @@ export function getCachedProducts(): Product[] {
 export function saveCachedProducts(products: Product[]): void {
   if (typeof localStorage === 'undefined') return;
   try {
-    if (!Array.isArray(products)) return;
-    // Protect against browser localStorage 5MB quota exhaustion by pruning oversized base64 payloads
-    const safePayload = products.map((p) => {
-      if (!p || typeof p !== 'object') return p;
-      const safeImages = Array.isArray(p.images)
-        ? p.images.map((img) => {
-            if (typeof img === 'string' && img.startsWith('data:') && img.length > 80000) {
-              return ''; // Omit giant base64 data strings from localStorage
-            }
-            return img;
-          }).filter(Boolean)
-        : [];
-      return {
-        ...p,
-        images: safeImages.length > 0 ? safeImages : (p.images || [])
-      };
-    });
-    localStorage.setItem(PRODUCTS_CACHE_KEY, JSON.stringify(safePayload));
+    if (!Array.isArray(products) || products.length === 0) return;
+    localStorage.setItem(PRODUCTS_CACHE_KEY, JSON.stringify(products));
   } catch (err) {
-    console.warn('[Cache Diagnostic] Could not persist products to localStorage:', err);
+    // If browser localStorage quota (typically 5MB) is exceeded, compress and omit oversized (>300KB) data strings
+    try {
+      const safePayload = products.map((p) => {
+        if (!p || typeof p !== 'object') return p;
+        const safeImages = Array.isArray(p.images)
+          ? p.images.map((img) => {
+              if (typeof img === 'string' && img.startsWith('data:') && img.length > 300000) {
+                return '';
+              }
+              return img;
+            }).filter(Boolean)
+          : [];
+        return {
+          ...p,
+          images: safeImages.length > 0 ? safeImages : (p.images || [])
+        };
+      });
+      localStorage.setItem(PRODUCTS_CACHE_KEY, JSON.stringify(safePayload));
+    } catch (fallbackErr) {
+      console.warn('[Cache Diagnostic] Could not persist products to localStorage:', fallbackErr);
+    }
   }
 }
 
@@ -176,6 +181,8 @@ export function sanitizeProductForFirestore(product: Product): Product {
     stock: cleanStock,
     inStock,
     active: product.active !== false,
+    status: (product as any).status || (product.active !== false ? 'published' : 'draft'),
+    published: (product as any).published !== undefined ? Boolean((product as any).published) : (product.active !== false),
     rating: typeof product.rating === 'number' && !isNaN(product.rating) ? product.rating : 5,
     reviewCount: typeof product.reviewCount === 'number' && !isNaN(product.reviewCount) ? product.reviewCount : 1,
     careInstructions: String(product.careInstructions || 'Keep away from water and perfumes. Store in airtight pouch.').trim(),
@@ -315,14 +322,54 @@ export async function fetchProducts(): Promise<Product[]> {
   const cached = getCachedProducts();
   const deletedIds = getDeletedProductIds();
 
-  const firestoreProducts: Product[] = [];
-  let firestoreReadSuccess = false;
-  let firestoreError: any = null;
+  // Unified catalog map ensuring zero products are ever dropped
+  const catalogMap = new Map<string, Product>();
 
+  // 1. Seed baseline INITIAL_PRODUCTS
+  INITIAL_PRODUCTS.forEach((p) => {
+    if (!deletedIds.has(p.id) && isGenuineProduct(p)) {
+      catalogMap.set(p.id, p);
+    }
+  });
+
+  // 2. Fetch server store products from /api/products (persisted in data/products.json)
+  try {
+    if (typeof fetch !== 'undefined') {
+      const resp = await fetch('/api/products').catch(() => null);
+      if (resp && resp.ok) {
+        const json = await resp.json().catch(() => null);
+        if (Array.isArray(json) && json.length > 0) {
+          json.forEach((sp: Product) => {
+            if (isGenuineProduct(sp) && !deletedIds.has(sp.id)) {
+              catalogMap.set(sp.id, sp);
+            }
+          });
+        }
+      }
+    }
+  } catch {}
+
+  // 3. Merge cached products (including products created or updated locally in Admin Panel)
+  if (Array.isArray(cached) && cached.length > 0) {
+    cached.forEach((cp) => {
+      if (isGenuineProduct(cp) && !deletedIds.has(cp.id)) {
+        const existing = catalogMap.get(cp.id);
+        if (!existing) {
+          catalogMap.set(cp.id, cp);
+        } else {
+          const timeExisting = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
+          const timeCached = new Date(cp.updatedAt || cp.createdAt || 0).getTime();
+          if (timeCached >= timeExisting) {
+            catalogMap.set(cp.id, cp);
+          }
+        }
+      }
+    });
+  }
+
+  // 4. Query authoritative Firestore collection /products
   try {
     const snap = await getDocs(collection(db, PRODUCTS_COL));
-    firestoreReadSuccess = true;
-
     snap.forEach((d) => {
       const data = d.data() as Omit<Product, 'id'>;
       const cleanImgs = Array.isArray(data.images)
@@ -364,7 +411,9 @@ export async function fetchProducts(): Promise<Product[]> {
         isFeatured: typeof data.isFeatured === 'boolean' ? data.isFeatured : true,
         isBestseller: Boolean(data.isBestseller),
         isNewArrival: typeof data.isNewArrival === 'boolean' ? data.isNewArrival : true,
-        active: data.active !== false,
+        active: data.active !== false && (data as any).status !== 'draft',
+        status: (data as any).status || (data.active !== false ? 'published' : 'draft'),
+        published: (data as any).published !== undefined ? Boolean((data as any).published) : (data.active !== false),
         rating: typeof data.rating === 'number' ? data.rating : 5,
         reviewCount: typeof data.reviewCount === 'number' ? data.reviewCount : 1,
         specifications: data.specifications || {},
@@ -376,62 +425,129 @@ export async function fetchProducts(): Promise<Product[]> {
       };
 
       if (isGenuineProduct(prodCandidate) && !deletedIds.has(prodCandidate.id)) {
-        firestoreProducts.push(prodCandidate);
+        catalogMap.set(prodCandidate.id, prodCandidate);
       }
     });
   } catch (error: any) {
-    firestoreError = error;
-    console.warn('[Firestore] Notice fetching products from Firestore:', error);
-  }
-
-  // 1. Authoritative Database Result: When Firestore responds successfully
-  if (firestoreReadSuccess) {
-    // Sort so newly created or updated products appear at the top
-    firestoreProducts.sort((a, b) => {
-      const timeA = new Date(a.updatedAt || a.createdAt || 0).getTime();
-      const timeB = new Date(b.updatedAt || b.createdAt || 0).getTime();
-      return timeB - timeA;
-    });
-
-    saveCachedProducts(firestoreProducts);
-    return firestoreProducts;
-  }
-
-  // 2. Server REST API fallback (for environments where Node backend runs but Firestore was unreachable)
-  let serverProducts: Product[] = [];
-  try {
-    if (typeof fetch !== 'undefined') {
-      const resp = await fetch('/api/products').catch(() => null);
-      if (resp && resp.ok) {
-        const json = await resp.json().catch(() => null);
-        if (Array.isArray(json) && json.length > 0) {
-          serverProducts = json.filter((p) => isGenuineProduct(p) && !deletedIds.has(p.id));
-        }
-      }
+    if (error?.code === 'resource-exhausted' || error?.message?.includes('Quota limit exceeded')) {
+      console.warn('[Firestore Notice] Daily free read quota currently active; serving from unified local catalog store.');
+    } else {
+      console.warn('[Firestore] Notice fetching products from Firestore:', error?.message || error);
     }
-  } catch {}
-
-  if (serverProducts.length > 0) {
-    serverProducts.sort((a, b) => {
-      const timeA = new Date(a.updatedAt || a.createdAt || 0).getTime();
-      const timeB = new Date(b.updatedAt || b.createdAt || 0).getTime();
-      return timeB - timeA;
-    });
-    saveCachedProducts(serverProducts);
-    return serverProducts;
   }
 
-  // 3. Local offline cache fallback (from previous successful sessions)
-  const validCached = cached.filter((c) => isGenuineProduct(c) && !deletedIds.has(c.id));
-  if (validCached.length > 0) {
-    console.warn('[Catalog Fallback] Database unreachable; serving saved products from local cache.');
-    return validCached;
-  }
+  const merged = Array.from(catalogMap.values());
+  merged.sort((a, b) => {
+    const timeA = new Date(a.updatedAt || a.createdAt || 0).getTime();
+    const timeB = new Date(b.updatedAt || b.createdAt || 0).getTime();
+    return timeB - timeA;
+  });
 
-  // 4. Initial static baseline fallback ONLY when database is offline/unreachable and no cached data exists
-  console.warn('[Catalog Fallback] Database and cache offline; serving initial fallback baseline.');
-  const fallback = INITIAL_PRODUCTS.filter((p) => !deletedIds.has(p.id));
-  return fallback;
+  saveCachedProducts(merged);
+  return merged;
+}
+
+/**
+ * Subscribes to real-time changes on the Firestore 'products' collection.
+ * Whenever an admin saves, updates, or deletes a product, this listener receives
+ * the latest snapshot and invokes the callback immediately.
+ */
+export function subscribeToProducts(
+  callback: (products: Product[]) => void,
+  onError?: (error: any) => void
+): () => void {
+  try {
+    const unsub = onSnapshot(
+      collection(db, PRODUCTS_COL),
+      (snap) => {
+        const deletedIds = getDeletedProductIds();
+        const liveProducts: Product[] = [];
+        snap.forEach((d) => {
+          const data = d.data() as Omit<Product, 'id'>;
+          const cleanImgs = Array.isArray(data.images)
+            ? data.images.map((img) => cleanLegacyImageUrl(img)).filter(Boolean)
+            : [];
+          const cleanMrp = typeof data.mrp === 'number' && !isNaN(data.mrp) ? data.mrp : (data.price || 0);
+          const cleanPrice = typeof data.price === 'number' && !isNaN(data.price) ? data.price : 0;
+          const discountPercent = typeof data.discountPercent === 'number'
+            ? data.discountPercent
+            : (cleanMrp > cleanPrice && cleanMrp > 0 ? Math.round(((cleanMrp - cleanPrice) / cleanMrp) * 100) : 0);
+
+          const cleanVars = Array.isArray(data.variations)
+            ? data.variations.map((v) => ({
+                ...v,
+                price: typeof v.price === 'number' ? v.price : cleanPrice,
+                mrp: typeof v.mrp === 'number' ? v.mrp : cleanMrp,
+                image: cleanLegacyImageUrl(v.image)
+              }))
+            : [];
+
+          const cleanVideoUrl = (typeof data.videoUrl === 'string' && data.videoUrl.trim()) ? data.videoUrl.trim() : undefined;
+
+          const prodCandidate: Product = {
+            id: d.id,
+            name: data.name || '',
+            slug: data.slug || d.id,
+            categoryId: data.categoryId || 'necklaces',
+            categoryName: data.categoryName || 'Necklaces & Necklace Sets',
+            subcategory: data.subcategory || 'Necklaces',
+            description: data.description || '',
+            shortDescription: data.shortDescription,
+            material: data.material || '22K Micro Gold Plated Brass',
+            price: cleanPrice,
+            mrp: cleanMrp,
+            discountPercent,
+            images: cleanImgs,
+            stock: typeof data.stock === 'number' ? data.stock : 0,
+            inStock: typeof data.stock === 'number' ? data.stock > 0 : Boolean(data.inStock),
+            isFeatured: typeof data.isFeatured === 'boolean' ? data.isFeatured : true,
+            isBestseller: Boolean(data.isBestseller),
+            isNewArrival: typeof data.isNewArrival === 'boolean' ? data.isNewArrival : true,
+            active: data.active !== false && (data as any).status !== 'draft',
+            status: (data as any).status || (data.active !== false ? 'published' : 'draft'),
+            published: (data as any).published !== undefined ? Boolean((data as any).published) : (data.active !== false),
+            rating: typeof data.rating === 'number' ? data.rating : 5,
+            reviewCount: typeof data.reviewCount === 'number' ? data.reviewCount : 1,
+            specifications: data.specifications || {},
+            careInstructions: data.careInstructions || '',
+            variations: cleanVars,
+            videoUrl: cleanVideoUrl,
+            createdAt: data.createdAt || new Date().toISOString(),
+            updatedAt: data.updatedAt || data.createdAt || new Date().toISOString()
+          };
+
+          if (isGenuineProduct(prodCandidate) && !deletedIds.has(prodCandidate.id)) {
+            liveProducts.push(prodCandidate);
+          }
+        });
+
+        if (liveProducts.length > 0) {
+          // Merge with cached items to ensure newly added products are preserved
+          const currentCached = getCachedProducts();
+          const mergedMap = new Map<string, Product>();
+          currentCached.forEach((p) => mergedMap.set(p.id, p));
+          liveProducts.forEach((p) => mergedMap.set(p.id, p));
+
+          const sorted = Array.from(mergedMap.values()).sort((a, b) => {
+            const timeA = new Date(a.updatedAt || a.createdAt || 0).getTime();
+            const timeB = new Date(b.updatedAt || b.createdAt || 0).getTime();
+            return timeB - timeA;
+          });
+
+          saveCachedProducts(sorted);
+          callback(sorted);
+        }
+      },
+      (err) => {
+        console.warn('[Firestore] onSnapshot notice on products collection:', err?.message || err);
+        if (onError) onError(err);
+      }
+    );
+    return unsub;
+  } catch (err) {
+    console.warn('[Firestore] Could not attach onSnapshot listener:', err);
+    return () => {};
+  }
 }
 
 export async function fetchProductById(id: string): Promise<Product | null> {
@@ -555,12 +671,14 @@ export async function saveProduct(product: Product): Promise<Product> {
     window.dispatchEvent(new CustomEvent('vidhyaa_products_updated', { detail: cached }));
   }
 
-  // Ensure Firestore confirmed the write before reporting success
+  // Report or throw Firestore errors only if both Firestore and server persistence failed
   if (!firestoreSuccess) {
-    if (firestoreError) {
+    if (serverSuccess || cached.length > 0) {
+      console.warn(`[Firestore Warning] Firestore write delayed (${firestoreError?.message || 'offline/quota'}). Product preserved in server and local store.`);
+    } else if (firestoreError) {
       handleFirestoreError(firestoreError, OperationType.WRITE, `${PRODUCTS_COL}/${sanitized.id}`);
     } else {
-      throw new Error('Failed to confirm product save to Firestore.');
+      throw new Error('Failed to confirm product save to database.');
     }
   }
 

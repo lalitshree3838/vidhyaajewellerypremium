@@ -32,6 +32,8 @@ export interface Product {
   isBestseller?: boolean;
   isNewArrival?: boolean;
   active: boolean;
+  status?: 'published' | 'draft' | string;
+  published?: boolean;
   rating: number;
   reviewCount: number;
   specifications: Record<string, string>;

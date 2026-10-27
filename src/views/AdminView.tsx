@@ -455,19 +455,40 @@ export const AdminView: React.FC<AdminViewProps> = ({
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingProduct) return;
+    if (savingProduct) return; // Prevent duplicate submission
+
     setSaveProductError(null);
     setSaveProductSuccess(null);
 
-    // Validate title
+    // 1. Validate Product Name / Title
     if (!editingProduct.name || !editingProduct.name.trim()) {
       setSaveProductError('Design Title is required.');
       return;
     }
 
-    // Validate that prices are non-negative and selling price does not exceed MRP
-    const priceCheck = validatePrices(editingProduct.mrp, editingProduct.price);
+    // 2. Validate Category
+    if (!editingProduct.categoryId || !editingProduct.categoryId.trim()) {
+      setSaveProductError('Jewellery Category must be selected.');
+      return;
+    }
+
+    // 3. Validate Prices
+    const sellingPrice = Number(editingProduct.price);
+    const originalMrp = Number(editingProduct.mrp) || sellingPrice;
+    if (isNaN(sellingPrice) || sellingPrice <= 0) {
+      setSaveProductError('Selling price must be greater than ₹0.');
+      return;
+    }
+    const priceCheck = validatePrices(originalMrp, sellingPrice);
     if (!priceCheck.valid) {
       setSaveProductError(priceCheck.error || 'Selling price cannot exceed Original MRP.');
+      return;
+    }
+
+    // 4. Validate Stock
+    const stockQty = Number(editingProduct.stock);
+    if (isNaN(stockQty) || stockQty < 0) {
+      setSaveProductError('Stock Quantity must be a valid non-negative number (0 or greater).');
       return;
     }
 
@@ -476,25 +497,37 @@ export const AdminView: React.FC<AdminViewProps> = ({
       let productImages = [...(editingProduct.images || [])];
       let variationsList = [...(editingProduct.variations || [])];
 
-      // Automatically upload and attach selected file if user selected a photo but didn't separately click "Add Image"
+      // 5. Automatically upload and attach selected file if user picked a photo
       if (selectedFileForUpload) {
+        setImageUploadStatus({
+          type: 'success',
+          message: 'Uploading image to Firebase Storage...'
+        });
+
         try {
           const uploadedUrl = await uploadProductImageToStorage(
             selectedFileForUpload.file,
-            editingProduct.name
+            editingProduct.name.trim()
           );
-          if (!productImages.includes(uploadedUrl)) {
-            productImages.push(uploadedUrl);
+
+          if (uploadedUrl) {
+            if (!productImages.includes(uploadedUrl)) {
+              productImages.unshift(uploadedUrl); // Prepend so it becomes primary
+            }
+            if (variationsList.length > 0) {
+              variationsList[0] = { ...variationsList[0], image: uploadedUrl };
+            }
+            if (selectedFileForUpload.previewUrl) {
+              URL.revokeObjectURL(selectedFileForUpload.previewUrl);
+            }
+            setSelectedFileForUpload(null);
+            if (fileInputRef.current) fileInputRef.current.value = '';
           }
-          if (variationsList.length > 0) {
-            variationsList[0] = { ...variationsList[0], image: uploadedUrl };
-          }
-          if (selectedFileForUpload.previewUrl) {
-            URL.revokeObjectURL(selectedFileForUpload.previewUrl);
-          }
-          setSelectedFileForUpload(null);
-        } catch (uploadErr) {
-          console.warn('[AdminView] Auto-upload error during product save:', uploadErr);
+        } catch (uploadErr: any) {
+          console.warn('[AdminView] Image upload error during product save:', uploadErr);
+          setSaveProductError('Image upload failed: ' + (uploadErr?.message || String(uploadErr)));
+          setSavingProduct(false);
+          return;
         }
       }
 
@@ -505,8 +538,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
         }
       }
 
-      const sellingPrice = Number(editingProduct.price) || 0;
-      const originalMrp = Number(editingProduct.mrp) || sellingPrice;
       const discount = calculateDiscountPercent(originalMrp, sellingPrice);
 
       const updatedVariations = variationsList.map((v) => ({
@@ -514,6 +545,8 @@ export const AdminView: React.FC<AdminViewProps> = ({
         price: sellingPrice,
         mrp: originalMrp
       }));
+
+      const isItemActive = editingProduct.active !== false;
 
       const updated: Product = {
         ...editingProduct,
@@ -524,16 +557,20 @@ export const AdminView: React.FC<AdminViewProps> = ({
           .replace(/[^a-z0-9]+/g, '-')
           .replace(/^-+|-+$/g, '') || `prod-${Date.now()}`,
         discountPercent: discount,
-        stock: Number(editingProduct.stock) >= 0 ? Number(editingProduct.stock) : 0,
-        inStock: Number(editingProduct.stock) > 0,
+        stock: stockQty,
+        inStock: stockQty > 0,
         price: sellingPrice,
         mrp: originalMrp,
         variations: updatedVariations,
-        active: editingProduct.active !== false,
+        active: isItemActive,
+        status: isItemActive ? 'published' : 'draft',
+        published: isItemActive,
         updatedAt: new Date().toISOString()
       };
 
+      // Save directly to the exact Firestore 'products' collection
       const saved = await saveProduct(updated);
+
       setLocalProducts((prev) => {
         const idx = prev.findIndex((p) => p.id === saved.id);
         if (idx !== -1) {
@@ -543,17 +580,18 @@ export const AdminView: React.FC<AdminViewProps> = ({
         }
         return [saved, ...prev];
       });
-      setSaveProductSuccess(`✓ Product "${saved.name}" successfully saved to database!`);
+
+      setSaveProductSuccess(`✓ Product "${saved.name}" successfully saved and published!`);
 
       // Refresh parent database data
       await onRefreshData();
 
-      // Close modal after brief confirmation so admin sees backend confirmed
+      // Close modal after confirmation so admin sees backend confirmed
       setTimeout(() => {
         setEditingProduct(null);
         setIsCreatingNewProduct(false);
         setSaveProductSuccess(null);
-      }, 700);
+      }, 1000);
     } catch (e: any) {
       console.error('Failed to save product in AdminView:', e);
       setSaveProductError('Failed to save product to database: ' + (e?.message || String(e)));

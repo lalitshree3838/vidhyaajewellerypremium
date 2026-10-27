@@ -76,7 +76,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   };
 
   const genuineProducts = useMemo(() => {
-    return products.filter((p: Product) => isGenuineProduct(p));
+    return products.filter((p: Product) => isGenuineProduct(p) && p.active !== false && (p as any).status !== 'draft');
   }, [products]);
 
   const filteredProducts = useMemo(() => {
@@ -87,9 +87,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
       const newItems = genuineProducts.filter((p) => p.isNewArrival);
       if (newItems.length > 0) return newItems;
     } else {
-      // 'featured' tab: display featured products or recent active products
+      // 'featured' tab: prioritize featured products, backfilled with newest active catalog pieces so new additions are always visible
       const feat = genuineProducts.filter((p) => p.isFeatured);
-      if (feat.length > 0) return feat;
+      if (feat.length >= 8) return feat;
+      const seenIds = new Set(feat.map((p) => p.id));
+      const remaining = genuineProducts.filter((p) => !seenIds.has(p.id));
+      return [...feat, ...remaining];
     }
     return genuineProducts;
   }, [genuineProducts, activeTab]);

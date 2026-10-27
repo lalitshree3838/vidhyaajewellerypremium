@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Heart, Star, ShoppingBag, Eye, Check, Volume2, VolumeX, Play } from 'lucide-react';
 import { Product, ProductVariation } from '../types';
 import { useCart } from '../context/CartContext';
@@ -39,9 +39,26 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const [isSoundMuted, setIsSoundMuted] = useState(true);
   const [showVideo, setShowVideo] = useState(true);
 
-  // Active displayed image: variation image if available, else product image
-  const displayImage = selectedVariation?.image?.trim() || product.images?.[0]?.trim() || '';
+  // Synchronize variation when product changes
+  useEffect(() => {
+    if (product.variations && product.variations.length > 0) {
+      setSelectedVariation(product.variations[0]);
+    } else {
+      setSelectedVariation(undefined);
+    }
+  }, [product.id]);
+
+  // Active displayed image: prioritize non-empty variation image if valid, otherwise primary product image
+  const primaryProductImage = (Array.isArray(product.images) ? product.images.find((img) => Boolean(img && img.trim())) : '')?.trim() || '';
+  const variationImage = selectedVariation?.image?.trim();
+  const displayImage = (variationImage && isGenuineImageUrl(variationImage)) ? variationImage : primaryProductImage;
   const secondaryImage = product.images?.[1]?.trim() || displayImage;
+
+  // Reset image error status when the product or displayed image changes
+  useEffect(() => {
+    setImageError(false);
+    setImageLoaded(false);
+  }, [product.id, displayImage]);
 
   const currentPrice = product.price;
   const currentMrp = product.mrp > 0 ? product.mrp : product.price;
