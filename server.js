@@ -191,140 +191,51 @@ function getSmsStatusSummary() {
   const isTwilioActive = Boolean(config.twilioAccountSid && config.twilioAuthToken && config.twilioPhoneNumber);
   const isMsg91Active = Boolean(config.msg91AuthKey && config.msg91TemplateId);
   let activeProvider = "None Configured (Setup Required)";
-  if (isFast2SmsActive) activeProvider = "Fast2SMS India";
+  if (isTwilioActive) activeProvider = "Twilio Worldwide SMS";
+  else if (isFast2SmsActive) activeProvider = "Fast2SMS India";
   else if (isTwoFactorActive) activeProvider = "2Factor.in India";
-  else if (isTwilioActive) activeProvider = "Twilio SMS";
   else if (isMsg91Active) activeProvider = "MSG91 Enterprise";
   return {
     configured: isFast2SmsActive || isTwoFactorActive || isTwilioActive || isMsg91Active,
     activeProvider,
+    internationalSupported: isTwilioActive,
     providers: {
+      twilio: {
+        configured: isTwilioActive,
+        description: "Worldwide international SMS delivery (180+ countries)",
+        senderNumber: config.twilioPhoneNumber ? `${config.twilioPhoneNumber.slice(0, 3)}\u2022\u2022\u2022\u2022${config.twilioPhoneNumber.slice(-2)}` : ""
+      },
       fast2sms: {
         configured: isFast2SmsActive,
+        description: "Domestic India (+91) OTP route",
         maskedKey: isFast2SmsActive ? `${config.fast2smsApiKey.slice(0, 4)}\u2022\u2022\u2022\u2022${config.fast2smsApiKey.slice(-3)}` : ""
       },
       twofactor: {
         configured: isTwoFactorActive,
+        description: "Domestic India (+91) OTP route",
         maskedKey: isTwoFactorActive ? `${config.twofactorApiKey.slice(0, 4)}\u2022\u2022\u2022\u2022${config.twofactorApiKey.slice(-3)}` : ""
       },
-      twilio: {
-        configured: isTwilioActive,
-        senderNumber: config.twilioPhoneNumber ? `${config.twilioPhoneNumber.slice(0, 3)}\u2022\u2022\u2022\u2022${config.twilioPhoneNumber.slice(-2)}` : ""
-      },
       msg91: {
-        configured: isMsg91Active
+        configured: isMsg91Active,
+        description: "Domestic India (+91) DLT transactional route"
       }
     }
   };
 }
-async function dispatchRealSms(mobile, otp) {
-  const cleanMobile = mobile.replace(/\D/g, "").slice(-10);
+async function dispatchRealSms(phoneInput, otp) {
+  const cleanInput = (phoneInput || "").trim();
   const config = getStoredSmsConfig();
-  const fast2smsKey = (config.fast2smsApiKey || "").trim();
-  if (fast2smsKey) {
-    try {
-      const getUrl = `https://www.fast2sms.com/dev/bulkV2?authorization=${encodeURIComponent(fast2smsKey)}&route=otp&variables_values=${encodeURIComponent(otp)}&numbers=${encodeURIComponent(cleanMobile)}`;
-      const getRes = await fetch(getUrl, {
-        method: "GET",
-        headers: {
-          "authorization": fast2smsKey,
-          "cache-control": "no-cache"
-        }
-      });
-      const getData = await getRes.json().catch(() => null);
-      if (getData && (getData.return === true || getData.status_code === 200)) {
-        console.log("[SMS Gateway Diagnostic]", { provider: "fast2sms", method: "GET", status: "DISPATCHED_TO_CARRIER" });
-        return {
-          success: true,
-          provider: "fast2sms",
-          message: "OTP dispatched successfully via Fast2SMS telecom gateway."
-        };
-      }
-      const postRes = await fetch("https://www.fast2sms.com/dev/bulkV2", {
-        method: "POST",
-        headers: {
-          "authorization": fast2smsKey,
-          "Content-Type": "application/json",
-          "cache-control": "no-cache"
-        },
-        body: JSON.stringify({
-          route: "otp",
-          variables_values: otp,
-          numbers: cleanMobile
-        })
-      });
-      const postData = await postRes.json().catch(() => null);
-      if (postData && (postData.return === true || postData.status_code === 200)) {
-        console.log("[SMS Gateway Diagnostic]", { provider: "fast2sms", method: "POST", status: "DISPATCHED_TO_CARRIER" });
-        return {
-          success: true,
-          provider: "fast2sms",
-          message: "OTP dispatched successfully via Fast2SMS telecom gateway."
-        };
-      }
-      const errMsg = Array.isArray(postData?.message) ? postData.message[0] : postData?.message || (Array.isArray(getData?.message) ? getData.message[0] : getData?.message) || "Fast2SMS delivery rejected by carrier.";
-      console.warn("[SMS Provider Diagnostic]", { provider: "fast2sms", statusCode: postRes.status, errorCode: "CARRIER_REJECTED" });
-      return {
-        success: false,
-        provider: "fast2sms",
-        errorCode: "FAST2SMS_DELIVERY_FAILED",
-        message: errMsg
-      };
-    } catch (err) {
-      console.error("[SMS Provider Diagnostic]", { provider: "fast2sms", errorCode: "NETWORK_ERROR", message: err?.message || "Connection failure" });
+  let e164Number = cleanInput;
+  if (!e164Number.startsWith("+")) {
+    const digitsOnly = e164Number.replace(/\D/g, "");
+    if (digitsOnly.length === 10) {
+      e164Number = `+91${digitsOnly}`;
+    } else {
+      e164Number = `+${digitsOnly}`;
     }
   }
-  const twofactorKey = (config.twofactorApiKey || "").trim();
-  if (twofactorKey) {
-    try {
-      const url = `https://2factor.in/API/V1/${encodeURIComponent(twofactorKey)}/SMS/+91${encodeURIComponent(cleanMobile)}/${encodeURIComponent(otp)}/OTP1`;
-      const res = await fetch(url, { method: "GET" });
-      const data = await res.json().catch(() => null);
-      if (data && (data.Status === "Success" || res.ok)) {
-        console.log("[SMS Gateway Diagnostic]", { provider: "twofactor", status: "DISPATCHED_TO_CARRIER" });
-        return {
-          success: true,
-          provider: "twofactor",
-          message: "OTP dispatched successfully via 2Factor Indian telecom route."
-        };
-      }
-      console.warn("[SMS Provider Diagnostic]", { provider: "twofactor", statusCode: res.status, errorCode: data?.Details || data?.Status || "DISPATCH_FAILED" });
-      return {
-        success: false,
-        provider: "twofactor",
-        errorCode: "TWOFACTOR_DELIVERY_FAILED",
-        message: data?.Details || "2Factor.in OTP dispatch failed."
-      };
-    } catch (err) {
-      console.error("[SMS Provider Diagnostic]", { provider: "twofactor", errorCode: "NETWORK_ERROR", message: err?.message || "Connection failure" });
-    }
-  }
-  const msg91Key = (config.msg91AuthKey || "").trim();
-  const msg91TemplateId = (config.msg91TemplateId || "").trim();
-  if (msg91Key && msg91TemplateId) {
-    try {
-      const url = `https://control.msg91.com/api/v5/otp?template_id=${encodeURIComponent(msg91TemplateId)}&mobile=91${cleanMobile}&authkey=${encodeURIComponent(msg91Key)}&otp=${encodeURIComponent(otp)}`;
-      const res = await fetch(url, { method: "POST" });
-      const data = await res.json().catch(() => null);
-      if (data && (data.type === "success" || res.ok)) {
-        console.log("[SMS Gateway Diagnostic]", { provider: "msg91", status: "DISPATCHED_TO_CARRIER" });
-        return {
-          success: true,
-          provider: "msg91",
-          message: "OTP dispatched successfully via MSG91 gateway."
-        };
-      }
-      console.warn("[SMS Provider Diagnostic]", { provider: "msg91", statusCode: res.status, errorCode: data?.type || "DISPATCH_FAILED" });
-      return {
-        success: false,
-        provider: "msg91",
-        errorCode: "MSG91_DELIVERY_FAILED",
-        message: data?.message || "MSG91 dispatch failed."
-      };
-    } catch (err) {
-      console.error("[SMS Provider Diagnostic]", { provider: "msg91", errorCode: "NETWORK_ERROR", message: err?.message || "Connection failure" });
-    }
-  }
+  const isIndia = e164Number.startsWith("+91");
+  const indian10Digit = isIndia ? e164Number.slice(3).replace(/\D/g, "").slice(-10) : "";
   const twilioSid = (config.twilioAccountSid || "").trim();
   const twilioToken = (config.twilioAuthToken || "").trim();
   const twilioFrom = (config.twilioPhoneNumber || "").trim();
@@ -332,9 +243,9 @@ async function dispatchRealSms(mobile, otp) {
     try {
       const url = `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`;
       const bodyParams = new URLSearchParams({
-        To: `+91${cleanMobile}`,
+        To: e164Number,
         From: twilioFrom,
-        Body: `Your VIDHYAA Jewellery verification code is: ${otp}. Valid for 5 minutes. Do not share this code.`
+        Body: `Your VIDHYAA Jewellery Studio verification code is: ${otp}. Valid for 5 minutes. Do not share this OTP.`
       });
       const authHeader = "Basic " + Buffer.from(`${twilioSid}:${twilioToken}`).toString("base64");
       const res = await fetch(url, {
@@ -347,34 +258,155 @@ async function dispatchRealSms(mobile, otp) {
       });
       const data = await res.json().catch(() => null);
       if (res.ok && !data?.error_code) {
-        console.log("[SMS Gateway Diagnostic]", { provider: "twilio", status: "DISPATCHED_TO_CARRIER" });
+        console.log("[SMS Gateway Diagnostic]", { provider: "twilio", status: "DISPATCHED_TO_CARRIER", destination: e164Number.slice(0, 4) + "\u2022\u2022\u2022\u2022" });
         return {
           success: true,
           provider: "twilio",
-          message: "OTP dispatched successfully via Twilio gateway."
+          message: `OTP dispatched successfully to ${e164Number} via Twilio international carrier.`
         };
       }
       console.warn("[SMS Provider Diagnostic]", { provider: "twilio", statusCode: res.status, errorCode: data?.error_code || "DISPATCH_FAILED" });
-      return {
-        success: false,
-        provider: "twilio",
-        errorCode: "TWILIO_DELIVERY_FAILED",
-        message: data?.message || "Twilio SMS dispatch failed."
-      };
+      if (!isIndia) {
+        return {
+          success: false,
+          provider: "twilio",
+          errorCode: "TWILIO_DELIVERY_FAILED",
+          message: data?.message || "Twilio SMS dispatch failed."
+        };
+      }
     } catch (err) {
       console.error("[SMS Provider Diagnostic]", { provider: "twilio", errorCode: "NETWORK_ERROR", message: err?.message || "Connection failure" });
+      if (!isIndia) {
+        return {
+          success: false,
+          provider: "twilio",
+          errorCode: "NETWORK_ERROR",
+          message: "Failed to connect to Twilio SMS gateway."
+        };
+      }
     }
+  }
+  if (isIndia && indian10Digit.length === 10) {
+    const fast2smsKey = (config.fast2smsApiKey || "").trim();
+    if (fast2smsKey) {
+      try {
+        const getUrl = `https://www.fast2sms.com/dev/bulkV2?authorization=${encodeURIComponent(fast2smsKey)}&route=otp&variables_values=${encodeURIComponent(otp)}&numbers=${encodeURIComponent(indian10Digit)}`;
+        const getRes = await fetch(getUrl, {
+          method: "GET",
+          headers: {
+            "authorization": fast2smsKey,
+            "cache-control": "no-cache"
+          }
+        });
+        const getData = await getRes.json().catch(() => null);
+        if (getData && (getData.return === true || getData.status_code === 200)) {
+          console.log("[SMS Gateway Diagnostic]", { provider: "fast2sms", method: "GET", status: "DISPATCHED_TO_CARRIER" });
+          return {
+            success: true,
+            provider: "fast2sms",
+            message: "OTP dispatched successfully via Fast2SMS telecom gateway."
+          };
+        }
+        const postRes = await fetch("https://www.fast2sms.com/dev/bulkV2", {
+          method: "POST",
+          headers: {
+            "authorization": fast2smsKey,
+            "Content-Type": "application/json",
+            "cache-control": "no-cache"
+          },
+          body: JSON.stringify({
+            route: "otp",
+            variables_values: otp,
+            numbers: indian10Digit
+          })
+        });
+        const postData = await postRes.json().catch(() => null);
+        if (postData && (postData.return === true || postData.status_code === 200)) {
+          console.log("[SMS Gateway Diagnostic]", { provider: "fast2sms", method: "POST", status: "DISPATCHED_TO_CARRIER" });
+          return {
+            success: true,
+            provider: "fast2sms",
+            message: "OTP dispatched successfully via Fast2SMS telecom gateway."
+          };
+        }
+        const errMsg = Array.isArray(postData?.message) ? postData.message[0] : postData?.message || (Array.isArray(getData?.message) ? getData.message[0] : getData?.message) || "Fast2SMS delivery rejected by carrier.";
+        console.warn("[SMS Provider Diagnostic]", { provider: "fast2sms", statusCode: postRes.status, errorCode: "CARRIER_REJECTED" });
+      } catch (err) {
+        console.error("[SMS Provider Diagnostic]", { provider: "fast2sms", errorCode: "NETWORK_ERROR", message: err?.message || "Connection failure" });
+      }
+    }
+    const twofactorKey = (config.twofactorApiKey || "").trim();
+    if (twofactorKey) {
+      try {
+        const url = `https://2factor.in/API/V1/${encodeURIComponent(twofactorKey)}/SMS/+91${encodeURIComponent(indian10Digit)}/${encodeURIComponent(otp)}/OTP1`;
+        const res = await fetch(url, { method: "GET" });
+        const data = await res.json().catch(() => null);
+        if (data && (data.Status === "Success" || res.ok)) {
+          console.log("[SMS Gateway Diagnostic]", { provider: "twofactor", status: "DISPATCHED_TO_CARRIER" });
+          return {
+            success: true,
+            provider: "twofactor",
+            message: "OTP dispatched successfully via 2Factor Indian telecom route."
+          };
+        }
+        console.warn("[SMS Provider Diagnostic]", { provider: "twofactor", statusCode: res.status, errorCode: data?.Details || data?.Status || "DISPATCH_FAILED" });
+      } catch (err) {
+        console.error("[SMS Provider Diagnostic]", { provider: "twofactor", errorCode: "NETWORK_ERROR", message: err?.message || "Connection failure" });
+      }
+    }
+    const msg91Key = (config.msg91AuthKey || "").trim();
+    const msg91TemplateId = (config.msg91TemplateId || "").trim();
+    if (msg91Key && msg91TemplateId) {
+      try {
+        const url = `https://control.msg91.com/api/v5/otp?template_id=${encodeURIComponent(msg91TemplateId)}&mobile=91${indian10Digit}&authkey=${encodeURIComponent(msg91Key)}&otp=${encodeURIComponent(otp)}`;
+        const res = await fetch(url, { method: "POST" });
+        const data = await res.json().catch(() => null);
+        if (data && (data.type === "success" || res.ok)) {
+          console.log("[SMS Gateway Diagnostic]", { provider: "msg91", status: "DISPATCHED_TO_CARRIER" });
+          return {
+            success: true,
+            provider: "msg91",
+            message: "OTP dispatched successfully via MSG91 gateway."
+          };
+        }
+        console.warn("[SMS Provider Diagnostic]", { provider: "msg91", statusCode: res.status, errorCode: data?.type || "DISPATCH_FAILED" });
+      } catch (err) {
+        console.error("[SMS Provider Diagnostic]", { provider: "msg91", errorCode: "NETWORK_ERROR", message: err?.message || "Connection failure" });
+      }
+    }
+  }
+  const isProduction = process.env.NODE_ENV === "production" && !process.env.VITE_DEV_SERVER;
+  if (!isProduction) {
+    console.log("[Dev Preview SMS Gateway]", {
+      destination: e164Number,
+      otp,
+      note: "Dynamic OTP generated. In production, configure Twilio or Fast2SMS in Admin Settings."
+    });
+    return {
+      success: true,
+      provider: "dev_preview",
+      message: `Verification code generated for ${e164Number}. (Preview Mode OTP: ${otp})`,
+      devOtp: otp
+    };
+  }
+  if (!isIndia) {
+    return {
+      success: false,
+      provider: "none",
+      errorCode: "NO_INTERNATIONAL_SMS_PROVIDER",
+      message: `International SMS delivery to ${e164Number} requires Phone Authentication in the Firebase Console (which routes via Google Telecom globally) or Twilio configured on the server.`
+    };
   }
   console.warn("[SMS Gateway Diagnostic]", {
     provider: "none",
-    errorCode: "NO_SMS_PROVIDER_CONFIGURED",
+    errorCode: "GATEWAY_SETUP_REQUIRED",
     message: "No SMS gateway credentials configured on server, and Firebase Phone is not enabled."
   });
   return {
     success: false,
     provider: "none",
-    errorCode: "NO_SMS_PROVIDER_CONFIGURED",
-    message: "No active SMS provider is configured. Please enable Phone Auth in the Firebase Console or configure Fast2SMS/2Factor credentials in Admin Settings to receive real SMS messages on mobile devices."
+    errorCode: "GATEWAY_SETUP_REQUIRED",
+    message: "No active SMS provider is configured on the server. Please enable Phone Auth in the Firebase Console or configure SMS Gateway credentials (Twilio / Fast2SMS) in Admin Settings to receive real SMS messages on mobile devices."
   };
 }
 
@@ -752,6 +784,12 @@ if (!fs4.existsSync(uploadsDir)) {
   fs4.mkdirSync(uploadsDir, { recursive: true });
 }
 app.use("/products/uploads", express.static(uploadsDir));
+var categoriesDir = path4.join(__dirname2, "public", "categories");
+if (!fs4.existsSync(categoriesDir)) {
+  fs4.mkdirSync(categoriesDir, { recursive: true });
+}
+app.use("/categories", express.static(categoriesDir));
+app.use(express.static(path4.join(__dirname2, "public")));
 var videoUploadsDir = path4.join(__dirname2, "public", "videos", "uploads");
 if (!fs4.existsSync(videoUploadsDir)) {
   fs4.mkdirSync(videoUploadsDir, { recursive: true });
@@ -1026,22 +1064,32 @@ app.post("/api/videos/upload", (req, res) => {
 var otpSessions = /* @__PURE__ */ new Map();
 app.post("/api/auth/send-otp", async (req, res) => {
   try {
-    const { mobile } = req.body || {};
-    if (!mobile || typeof mobile !== "string") {
-      return res.status(400).json({ error: "Mobile number is required." });
+    const { mobile, phoneNumber } = req.body || {};
+    const raw = (phoneNumber || mobile || "").toString().trim();
+    if (!raw) {
+      return res.status(400).json({ error: "Mobile phone number is required." });
     }
-    const cleanMobile = mobile.replace(/\D/g, "").slice(-10);
-    if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
-      return res.status(400).json({ error: "Please enter a valid 10-digit Indian mobile number." });
+    let e164 = raw;
+    if (!e164.startsWith("+")) {
+      const digits = e164.replace(/\D/g, "");
+      if (digits.length === 10) {
+        e164 = `+91${digits}`;
+      } else {
+        e164 = `+${digits}`;
+      }
     }
-    const existing = otpSessions.get(cleanMobile);
+    if (e164.length < 8 || e164.length > 18) {
+      return res.status(400).json({ error: "Please enter a valid international mobile phone number." });
+    }
+    const sessionKey = e164;
+    const existing = otpSessions.get(sessionKey);
     const now = Date.now();
     if (existing && now - existing.lastSentAt < 25e3) {
       const waitSec = Math.ceil((25e3 - (now - existing.lastSentAt)) / 1e3);
       return res.status(429).json({ error: `Please wait ${waitSec}s before requesting a new OTP.` });
     }
     const otp = Math.floor(1e5 + Math.random() * 9e5).toString();
-    const smsResult = await dispatchRealSms(cleanMobile, otp);
+    const smsResult = await dispatchRealSms(e164, otp);
     if (!smsResult.success) {
       return res.status(502).json({
         success: false,
@@ -1050,20 +1098,22 @@ app.post("/api/auth/send-otp", async (req, res) => {
         provider: smsResult.provider
       });
     }
-    otpSessions.set(cleanMobile, {
+    otpSessions.set(sessionKey, {
       otp,
       expiresAt: now + 5 * 60 * 1e3,
       // 5 minutes validity
       attempts: 0,
       lastSentAt: now
     });
-    const maskedNumber = `+91 ${cleanMobile.slice(0, 2)}\u2022\u2022\u2022\u2022\u2022${cleanMobile.slice(7)}`;
+    const maskedNumber = e164.length > 6 ? `${e164.slice(0, 4)}\u2022\u2022\u2022\u2022${e164.slice(-2)}` : e164;
     return res.status(200).json({
       success: true,
       message: smsResult.message || `SMS OTP dispatched to your mobile number (${maskedNumber})`,
       maskedNumber,
+      phoneNumber: e164,
       expiresIn: 300,
-      provider: smsResult.provider
+      provider: smsResult.provider,
+      devOtp: smsResult.devOtp
     });
   } catch (err) {
     console.error("[Send OTP Diagnostic]", { errorCode: "INTERNAL_ERROR", message: err?.message || "Error" });
@@ -1071,35 +1121,41 @@ app.post("/api/auth/send-otp", async (req, res) => {
   }
 });
 app.post("/api/auth/verify-otp", (req, res) => {
-  const { mobile, otp } = req.body || {};
-  if (!mobile || !otp) {
-    return res.status(400).json({ error: "Mobile number and OTP are required." });
+  const { mobile, phoneNumber, otp } = req.body || {};
+  const raw = (phoneNumber || mobile || "").toString().trim();
+  if (!raw || !otp) {
+    return res.status(400).json({ error: "Phone number and OTP code are required." });
   }
-  const cleanMobile = mobile.toString().replace(/\D/g, "").slice(-10);
+  let e164 = raw;
+  if (!e164.startsWith("+")) {
+    const digits = e164.replace(/\D/g, "");
+    if (digits.length === 10) e164 = `+91${digits}`;
+    else e164 = `+${digits}`;
+  }
   const cleanOtp = otp.toString().trim();
-  const session = otpSessions.get(cleanMobile);
+  const session = otpSessions.get(e164);
   const now = Date.now();
   if (!session) {
     return res.status(400).json({ error: "No OTP requested or session expired. Please request a new OTP." });
   }
   if (now > session.expiresAt) {
-    otpSessions.delete(cleanMobile);
+    otpSessions.delete(e164);
     return res.status(400).json({ error: "OTP has expired. Please request a new OTP." });
   }
   if (session.attempts >= 5) {
-    otpSessions.delete(cleanMobile);
+    otpSessions.delete(e164);
     return res.status(429).json({ error: "Too many incorrect attempts. Please request a fresh OTP." });
   }
   if (session.otp !== cleanOtp) {
     session.attempts += 1;
     return res.status(400).json({ error: "Invalid OTP. Please check the 6-digit code and try again." });
   }
-  otpSessions.delete(cleanMobile);
-  console.log(`[Authentication] Mobile +91 ${cleanMobile} successfully verified.`);
+  otpSessions.delete(e164);
+  console.log(`[Authentication] Mobile ${e164} successfully verified.`);
   return res.status(200).json({
     success: true,
     verified: true,
-    mobile: cleanMobile,
+    phoneNumber: e164,
     timestamp: (/* @__PURE__ */ new Date()).toISOString()
   });
 });
@@ -1151,19 +1207,30 @@ app.post("/api/admin/test-sms", async (req, res) => {
   if (!check.valid && token !== "vidhyaa-admin-authorized") {
     return res.status(401).json({ error: "Unauthorized: Admin authentication required." });
   }
-  const { mobile } = req.body || {};
-  const cleanMobile = (mobile || "").replace(/\D/g, "").slice(-10);
-  if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
-    return res.status(400).json({ error: "Please enter a valid 10-digit Indian mobile number to test." });
+  const { mobile, phoneNumber } = req.body || {};
+  const raw = (phoneNumber || mobile || "").toString().trim();
+  if (!raw) {
+    return res.status(400).json({ error: "Phone number is required." });
+  }
+  let e164 = raw;
+  if (!e164.startsWith("+")) {
+    const digits = e164.replace(/\D/g, "");
+    if (digits.length === 10) e164 = `+91${digits}`;
+    else e164 = `+${digits}`;
+  }
+  if (e164.length < 8 || e164.length > 18) {
+    return res.status(400).json({ error: "Please enter a valid international mobile phone number (e.g., +14155552671 or +919876543210)." });
   }
   const testOtp = Math.floor(1e5 + Math.random() * 9e5).toString();
-  const result = await dispatchRealSms(cleanMobile, testOtp);
+  const result = await dispatchRealSms(e164, testOtp);
+  const masked = e164.length > 6 ? `${e164.slice(0, 4)}\u2022\u2022\u2022\u2022${e164.slice(-2)}` : e164;
   return res.status(result.success ? 200 : 502).json({
     success: result.success,
     provider: result.provider,
     errorCode: result.errorCode,
     message: result.message,
-    maskedMobile: `+91 ${cleanMobile.slice(0, 2)}\u2022\u2022\u2022\u2022\u2022${cleanMobile.slice(7)}`
+    maskedMobile: masked,
+    phoneNumber: e164
   });
 });
 app.get("/api/payments/cashfree/status", (_req, res) => {

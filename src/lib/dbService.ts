@@ -269,39 +269,18 @@ export function unmarkCategoryDeleted(id: string): void {
   } catch {}
 }
 
-// Initialize catalog and ensure baseline products exist in Firestore
+// Initialize catalog only if Firestore is completely empty (zero products)
 export async function initCatalogIfEmpty(): Promise<void> {
   try {
     const productsSnap = await getDocs(collection(db, PRODUCTS_COL));
-    const deletedIds = getDeletedProductIds();
-
     if (productsSnap.empty) {
-      console.log('[Catalog Init] Empty Firestore detected. Seeding full catalog...');
+      console.log('[Catalog Init] Empty Firestore database detected. Seeding initial baseline catalog...');
       await forceReseedCatalog(false);
       return;
     }
-
-    // Incremental seed: ensure all baseline initial products exist in Firestore if not deleted
-    const existingDocIds = new Set<string>();
-    productsSnap.forEach((d) => existingDocIds.add(d.id));
-
-    let seededCount = 0;
-    for (const prod of INITIAL_PRODUCTS) {
-      if (!existingDocIds.has(prod.id) && !deletedIds.has(prod.id)) {
-        try {
-          const sanitized = sanitizeProductForFirestore(prod);
-          await setDoc(doc(db, PRODUCTS_COL, sanitized.id), sanitized);
-          seededCount++;
-        } catch (err) {
-          console.warn(`[Catalog Init] Notice seeding baseline ${prod.id}:`, err);
-        }
-      }
-    }
-    if (seededCount > 0) {
-      console.log(`[Catalog Init] Synchronized ${seededCount} missing baseline products to Firestore.`);
-    }
+    // Database already contains live catalog products; do not overwrite or inject sample products.
   } catch (error) {
-    console.warn('[Catalog Init] Notice while verifying Firestore catalog:', error);
+    console.warn('[Catalog Init] Notice while checking Firestore catalog state:', error);
   }
 }
 
@@ -321,7 +300,7 @@ export async function forceReseedCatalog(throwOnError: boolean = true): Promise<
 
     saveCachedCategories(INITIAL_CATEGORIES);
     saveCachedProducts(INITIAL_PRODUCTS);
-    console.log('[Firestore] Catalog successfully seeded with all genuine products and categories.');
+    console.log('[Firestore] Catalog successfully seeded with initial products and categories.');
   } catch (error) {
     if (throwOnError) {
       handleFirestoreError(error, OperationType.WRITE, 'catalog_seed');
@@ -331,13 +310,14 @@ export async function forceReseedCatalog(throwOnError: boolean = true): Promise<
   }
 }
 
-// Products - Load latest saved products from persistent Firestore + server API with local cache fallback
+// Products - Load latest saved products directly from persistent Firestore collection
 export async function fetchProducts(): Promise<Product[]> {
   const cached = getCachedProducts();
   const deletedIds = getDeletedProductIds();
 
   const firestoreProducts: Product[] = [];
   let firestoreReadSuccess = false;
+  let firestoreError: any = null;
 
   try {
     const snap = await getDocs(collection(db, PRODUCTS_COL));
@@ -357,16 +337,13 @@ export async function fetchProducts(): Promise<Product[]> {
       const cleanVars = Array.isArray(data.variations)
         ? data.variations.map((v) => ({
             ...v,
-            price: cleanPrice,
-            mrp: cleanMrp,
+            price: typeof v.price === 'number' ? v.price : cleanPrice,
+            mrp: typeof v.mrp === 'number' ? v.mrp : cleanMrp,
             image: cleanLegacyImageUrl(v.image)
           }))
         : [];
 
-      const fallbackSample = INITIAL_PRODUCTS.find((p) => p.id === d.id);
-      const finalImgs = cleanImgs.length > 0
-        ? cleanImgs
-        : (fallbackSample?.images && fallbackSample.images.length > 0 ? fallbackSample.images : []);
+      const cleanVideoUrl = (typeof data.videoUrl === 'string' && data.videoUrl.trim()) ? data.videoUrl.trim() : undefined;
 
       const prodCandidate: Product = {
         id: d.id,
@@ -381,7 +358,7 @@ export async function fetchProducts(): Promise<Product[]> {
         price: cleanPrice,
         mrp: cleanMrp,
         discountPercent,
-        images: finalImgs,
+        images: cleanImgs,
         stock: typeof data.stock === 'number' ? data.stock : 0,
         inStock: typeof data.stock === 'number' ? data.stock > 0 : Boolean(data.inStock),
         isFeatured: typeof data.isFeatured === 'boolean' ? data.isFeatured : true,
@@ -393,20 +370,34 @@ export async function fetchProducts(): Promise<Product[]> {
         specifications: data.specifications || {},
         careInstructions: data.careInstructions || '',
         variations: cleanVars,
-        videoUrl: (typeof data.videoUrl === 'string' && data.videoUrl.trim()) ? data.videoUrl.trim() : fallbackSample?.videoUrl,
+        videoUrl: cleanVideoUrl,
         createdAt: data.createdAt || new Date().toISOString(),
-        updatedAt: data.updatedAt || new Date().toISOString()
+        updatedAt: data.updatedAt || data.createdAt || new Date().toISOString()
       };
 
       if (isGenuineProduct(prodCandidate) && !deletedIds.has(prodCandidate.id)) {
         firestoreProducts.push(prodCandidate);
       }
     });
-  } catch (error) {
+  } catch (error: any) {
+    firestoreError = error;
     console.warn('[Firestore] Notice fetching products from Firestore:', error);
   }
 
-  // Also query the server REST API (/api/products) to ensure full synchronization with server files
+  // 1. Authoritative Database Result: When Firestore responds successfully
+  if (firestoreReadSuccess) {
+    // Sort so newly created or updated products appear at the top
+    firestoreProducts.sort((a, b) => {
+      const timeA = new Date(a.updatedAt || a.createdAt || 0).getTime();
+      const timeB = new Date(b.updatedAt || b.createdAt || 0).getTime();
+      return timeB - timeA;
+    });
+
+    saveCachedProducts(firestoreProducts);
+    return firestoreProducts;
+  }
+
+  // 2. Server REST API fallback (for environments where Node backend runs but Firestore was unreachable)
   let serverProducts: Product[] = [];
   try {
     if (typeof fetch !== 'undefined') {
@@ -414,65 +405,33 @@ export async function fetchProducts(): Promise<Product[]> {
       if (resp && resp.ok) {
         const json = await resp.json().catch(() => null);
         if (Array.isArray(json) && json.length > 0) {
-          serverProducts = json.filter(isGenuineProduct);
+          serverProducts = json.filter((p) => isGenuineProduct(p) && !deletedIds.has(p.id));
         }
       }
     }
   } catch {}
 
-  // Master product registry Map keyed by ID
-  const map = new Map<string, Product>();
+  if (serverProducts.length > 0) {
+    serverProducts.sort((a, b) => {
+      const timeA = new Date(a.updatedAt || a.createdAt || 0).getTime();
+      const timeB = new Date(b.updatedAt || b.createdAt || 0).getTime();
+      return timeB - timeA;
+    });
+    saveCachedProducts(serverProducts);
+    return serverProducts;
+  }
 
-  // 1. Add Firestore products as primary authority
-  firestoreProducts.forEach((p) => map.set(p.id, p));
+  // 3. Local offline cache fallback (from previous successful sessions)
+  const validCached = cached.filter((c) => isGenuineProduct(c) && !deletedIds.has(c.id));
+  if (validCached.length > 0) {
+    console.warn('[Catalog Fallback] Database unreachable; serving saved products from local cache.');
+    return validCached;
+  }
 
-  // 2. Merge server products (for any newly added products or server updates)
-  serverProducts.forEach((sp) => {
-    if (!map.has(sp.id)) {
-      map.set(sp.id, sp);
-    } else {
-      const existing = map.get(sp.id)!;
-      const sTime = new Date(sp.updatedAt || 0).getTime();
-      const eTime = new Date(existing.updatedAt || 0).getTime();
-      if (sTime > eTime) {
-        map.set(sp.id, sp);
-      }
-    }
-  });
-
-  // 3. Merge locally cached products (for instantaneous responsiveness across browser tabs)
-  cached.forEach((c) => {
-    if (!map.has(c.id)) {
-      map.set(c.id, c);
-    } else {
-      const existing = map.get(c.id)!;
-      const cachedTime = new Date(c.updatedAt || 0).getTime();
-      const existingTime = new Date(existing.updatedAt || 0).getTime();
-      if (cachedTime > existingTime) {
-        map.set(c.id, c);
-      }
-    }
-  });
-
-  // 4. Ensure all authentic initial baseline heirlooms are preserved (unless explicitly deleted by admin)
-  INITIAL_PRODUCTS.forEach((initProd) => {
-    if (!map.has(initProd.id) && !deletedIds.has(initProd.id)) {
-      map.set(initProd.id, initProd);
-    }
-  });
-
-  // Final filtered list excluding any deleted IDs
-  const finalProducts = Array.from(map.values()).filter((p) => !deletedIds.has(p.id));
-
-  // Sort so newly created or updated products appear at the top
-  finalProducts.sort((a, b) => {
-    const timeA = new Date(a.updatedAt || a.createdAt || 0).getTime();
-    const timeB = new Date(b.updatedAt || b.createdAt || 0).getTime();
-    return timeB - timeA;
-  });
-
-  saveCachedProducts(finalProducts);
-  return finalProducts;
+  // 4. Initial static baseline fallback ONLY when database is offline/unreachable and no cached data exists
+  console.warn('[Catalog Fallback] Database and cache offline; serving initial fallback baseline.');
+  const fallback = INITIAL_PRODUCTS.filter((p) => !deletedIds.has(p.id));
+  return fallback;
 }
 
 export async function fetchProductById(id: string): Promise<Product | null> {
@@ -523,9 +482,9 @@ export async function fetchProductById(id: string): Promise<Product | null> {
         specifications: data.specifications || {},
         careInstructions: data.careInstructions || '',
         variations: cleanVars,
-        videoUrl: (typeof data.videoUrl === 'string' && data.videoUrl.trim()) ? data.videoUrl.trim() : INITIAL_PRODUCTS.find((p) => p.id === snap.id)?.videoUrl,
+        videoUrl: (typeof data.videoUrl === 'string' && data.videoUrl.trim()) ? data.videoUrl.trim() : undefined,
         createdAt: data.createdAt || new Date().toISOString(),
-        updatedAt: data.updatedAt || new Date().toISOString()
+        updatedAt: data.updatedAt || data.createdAt || new Date().toISOString()
       };
       return prod;
     }

@@ -514,7 +514,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-01T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 2. Antique Gold Oxidised Pink Stone Temple Necklace Set with Bead Jhumka Earrings (₹1,250)
@@ -561,7 +561,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-01T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 3. Gold Plated Multicolor Polki Kundan Choker Set with Green Stone Earrings (₹2,200)
@@ -609,7 +609,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-01T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 4. Pink White Pearl Multi-Layer Rani Haar with Antique Kundan Earrings (₹1,150)
@@ -658,7 +658,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-01T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 5. Fancy Gold Plated AD Mangalsutra with Matching Earrings (₹600)
@@ -704,7 +704,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-01T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 6. Gold Plated Pink Emerald Cut AD Statement Cocktail Ring (₹1,450)
@@ -754,7 +754,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-01T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 7. American Diamond (AD) Floral Cocktail Ring (₹700)
@@ -803,7 +803,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-01T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 8. Antique Gold-Plated Lord Ganesha Ring (₹300)
@@ -852,7 +852,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-01T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 9. Polki Rajwada Gold Imitation Ring (₹700)
@@ -900,7 +900,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-01T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 10. Gold polish rajwada choker set with Mang tika (₹2,100)
@@ -949,7 +949,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-02T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 11. Pink beautiful choker set (₹1,250)
@@ -995,7 +995,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-02T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 12. Rose gold diamond set look alike real diamond set (₹2,000)
@@ -1042,7 +1042,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-02T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 13. Diamond chocker with pink dublet stone (₹2,200)
@@ -1088,7 +1088,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-02T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 14. Gold +Diamond Plated Neclace (₹2,200) + Free Bangles
@@ -1134,7 +1134,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-02T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 15. Gold n Diamond pendent set with matar mala (₹2,200)
@@ -1180,7 +1180,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-02T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 16. Diamond Imitation pendent set with matar mala (₹2,200) + Free Bangles
@@ -1226,7 +1226,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-02T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 17. Gold plated antique gold set with Mang tika (₹10,000) + Free 4 Bangles
@@ -1273,7 +1273,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-02T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 18. Diamond set with violet dublet stone (₹2,450)
@@ -1319,7 +1319,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-02T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 19. Gold Plated AD Necklace Set with Ruby Stone (₹2,100)
@@ -1365,7 +1365,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-02T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 20. Rainbow Crystal Bird Pendant Necklace Set (₹1,000)
@@ -1412,7 +1412,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-02T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 21. Antique 22K Micro Gold Royal Floral Choker Set with Jhumkas (₹2,400)
@@ -1458,7 +1458,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-02T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 22. Royal Gold AD Square Pendant Necklace Set (₹2,200)
@@ -1504,7 +1504,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-02T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 23. Pink Green Jade Stone Diamond Floral Necklace Set with Tiara (₹2,500) + Free Bangles
@@ -1551,7 +1551,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-02T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 24. Gold polish Daily use no effect of perfume shampoo and water (₹900)
@@ -1597,7 +1597,7 @@ export const INITIAL_PRODUCTS: Product[] = [
       }
     ],
     createdAt: '2026-10-02T10:00:00.000Z',
-    updatedAt: new Date().toISOString()
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 25. AD Kada with Kundan Work Size 2.6 Gold Plated (₹1,200)
@@ -1670,8 +1670,8 @@ export const INITIAL_PRODUCTS: Product[] = [
         active: true
       }
     ],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    createdAt: '2026-10-01T10:00:00.000Z',
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 28. Royal Sapphire Blue Doublet & Baguette Diamond Wheel Cocktail Ring (₹1,650)
@@ -1721,8 +1721,8 @@ export const INITIAL_PRODUCTS: Product[] = [
         active: true
       }
     ],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    createdAt: '2026-10-01T10:00:00.000Z',
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 29. Imperial Cushion Solitaire Winged Marquise Diamond Cocktail Ring (₹1,850)
@@ -1772,8 +1772,8 @@ export const INITIAL_PRODUCTS: Product[] = [
         active: true
       }
     ],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    createdAt: '2026-10-01T10:00:00.000Z',
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 30. 22K Gold Oval Solitaire Halo Infinity Ring (₹1,150)
@@ -1822,8 +1822,8 @@ export const INITIAL_PRODUCTS: Product[] = [
         active: true
       }
     ],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    createdAt: '2026-10-01T10:00:00.000Z',
+    updatedAt: '2026-10-01T10:00:00.000Z'
   },
 
   // 31. Royal 22K Gold Plated Polki Kundan & AD Openable Kadas (Pair) (₹1,450)

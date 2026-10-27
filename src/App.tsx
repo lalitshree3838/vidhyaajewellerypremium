@@ -80,17 +80,20 @@ function MainApp() {
     sessionStorage.setItem('vidhyaa_promo_popup_dismissed', 'true');
   };
 
-  // Firestore Live Catalog Data initialized with cached or initial heirlooms
+  // Firestore Live Catalog Data initialized with cached or empty while loading
   const [products, setProducts] = useState<Product[]>(() => {
     const cached = getCachedProducts();
-    return cached.length > 0 ? cached : INITIAL_PRODUCTS;
+    return cached.length > 0 ? cached : [];
   });
   const [categories, setCategories] = useState<Category[]>(() => {
     const cached = getCachedCategories();
     return cached.length > 0 ? cached : INITIAL_CATEGORIES;
   });
   const [storeSettings, setStoreSettings] = useState<StoreSettings>(INITIAL_STORE_SETTINGS);
-  const [loadingInitial, setLoadingInitial] = useState(false);
+  const [loadingInitial, setLoadingInitial] = useState(() => {
+    const cached = getCachedProducts();
+    return cached.length === 0;
+  });
   const [initError, setInitError] = useState<string | null>(null);
 
   const loadData = async () => {
@@ -102,11 +105,9 @@ function MainApp() {
         fetchStoreSettings()
       ]);
 
-      if (prods && prods.length > 0) {
-        const genuineProds = prods.filter(isGenuineProduct);
-        const resolved = genuineProds.length > 0 ? genuineProds : INITIAL_PRODUCTS;
-        setProducts(resolved);
-        window.dispatchEvent(new CustomEvent('vidhyaa_products_updated', { detail: resolved }));
+      if (Array.isArray(prods)) {
+        setProducts(prods);
+        window.dispatchEvent(new CustomEvent('vidhyaa_products_updated', { detail: prods }));
       }
       if (cats && cats.length > 0) {
         setCategories(cats);
@@ -127,12 +128,12 @@ function MainApp() {
   };
 
   useEffect(() => {
-    initCatalogIfEmpty().finally(() => {
-      loadData();
-    });
+    // Check initial catalog in background without blocking live data load
+    initCatalogIfEmpty().catch(() => {});
+    loadData();
 
     const handleProductsUpdated = (e: any) => {
-      if (e.detail && Array.isArray(e.detail) && e.detail.length > 0) {
+      if (e.detail && Array.isArray(e.detail)) {
         setProducts(e.detail);
       }
     };

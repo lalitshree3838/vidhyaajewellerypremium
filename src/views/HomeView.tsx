@@ -365,16 +365,30 @@ export const HomeView: React.FC<HomeViewProps> = ({
         </div>
 
         {/* Product Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          {filteredProducts.slice(0, 8).map((prod: Product) => (
-            <ProductCard
-              key={prod.id}
-              product={prod}
-              onSelectProduct={onSelectProduct}
-              onOpenQuickView={onOpenQuickView}
-            />
-          ))}
-        </div>
+        {filteredProducts.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-[#E8DCCF] p-8 sm:p-12 text-center space-y-3">
+            <div className="w-12 h-12 rounded-full bg-[#0F5B46]/10 flex items-center justify-center mx-auto text-[#0F5B46]">
+              <Sparkles className="w-6 h-6" />
+            </div>
+            <h3 className="font-serif text-lg sm:text-xl font-bold text-[#241C1A]">
+              No Jewellery Designs Currently Listed
+            </h3>
+            <p className="text-xs sm:text-sm text-gray-600 max-w-md mx-auto">
+              Please explore our complete collection or add new pieces through the Administrator Executive Portal.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            {filteredProducts.slice(0, 8).map((prod: Product) => (
+              <ProductCard
+                key={prod.id}
+                product={prod}
+                onSelectProduct={onSelectProduct}
+                onOpenQuickView={onOpenQuickView}
+              />
+            ))}
+          </div>
+        )}
 
         <div className="text-center mt-10">
           <button
