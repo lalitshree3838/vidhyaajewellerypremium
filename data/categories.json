@@ -5,8 +5,8 @@
     "slug": "necklaces",
     "subtitle": "Heritage 22K Micro Gold Plated & Temple Choker Sets",
     "description": "Regal bridal sets, floral chokers, temple necklaces, and 22K micron gold-plated heirlooms with matching earrings.",
-    "image": "/products/pink_pearl_rani_haar_1150.jpg",
-    "heroBannerUrl": "/products/pink_pearl_rani_haar_1150.jpg",
+    "image": "/categories/necklaces_category.jpg",
+    "heroBannerUrl": "/categories/necklaces_category.jpg",
     "subcategories": [
       "Chokers",
       "Temple Jewellery",
@@ -30,33 +30,10 @@
       "cta"
     ],
     "hiddenSections": [],
-    "galleryImages": [
-      {
-        "id": "img-neck-4",
-        "url": "/products/pink_pearl_rani_haar_1150.jpg",
-        "title": "Pink White Pearl Multi-Layer Rani Haar with Antique Kundan Earrings",
-        "caption": "₹1,150 with Antique Kundan Earrings",
-        "altText": "Pink White Pearl Multi-Layer Rani Haar with Antique Kundan Earrings",
-        "isCover": true,
-        "order": 1
-      }
-    ],
-    "videos": [
-      {
-        "id": "vid-necklace-01",
-        "title": "Pink White Pearl Rani Haar Live 360° Atelier Showcase",
-        "videoUrl": "/videos/uploads/whatsapp_video_2026-10-20_at_8_00_00_pm_1792507723422_zdve.mp4",
-        "thumbnailUrl": "/products/pink_pearl_rani_haar_1150.jpg",
-        "description": "Live studio reel showcasing the natural luster and movement of multi-layer freshwater seed pearls.",
-        "duration": "0:15",
-        "order": 1,
-        "published": true
-      }
-    ],
+    "galleryImages": [],
+    "videos": [],
     "promoBanners": [],
-    "featuredProductIds": [
-      "prod-user-005"
-    ],
+    "featuredProductIds": [],
     "customStoryTitle": "The Art of 22K Antique Micron Gold Plating",
     "customStoryBody": "Each piece in our Necklaces collection undergoes a multi-layer micro electroplating process utilizing pure 22-karat gold over hypoallergenic brass. Handcrafted by heritage artisans, every design mimics the heft, touch, and heirloom luster of solid hallmarked gold.",
     "customStoryImage": "",
@@ -116,8 +93,8 @@
     "slug": "rings",
     "subtitle": "Solitaire Statement, Rajputana Polki & Divine Mandalas",
     "description": "Statement cocktail rings with pink emerald-cut solitaires, tiara coronets, Lord Ganesha blessings, and Rajwada uncut Polki domes.",
-    "image": "/products/pink_emerald_cocktail_ring_1900.jpg",
-    "heroBannerUrl": "/products/pink_emerald_cocktail_ring_1900.jpg",
+    "image": "/categories/rings_category.jpg",
+    "heroBannerUrl": "/categories/rings_category.jpg",
     "subcategories": [
       "Cocktail Rings",
       "AD Rings",
@@ -140,80 +117,13 @@
       "cta"
     ],
     "hiddenSections": [],
-    "galleryImages": [
-      {
-        "id": "img-ring-1",
-        "url": "/products/pink_emerald_cocktail_ring_1900.jpg",
-        "title": "Gold Plated Pink Emerald Cut AD Statement Cocktail Ring",
-        "caption": "Step-cut pink crystal & marquise diamond trellis",
-        "isCover": true,
-        "order": 1
-      },
-      {
-        "id": "img-ring-2",
-        "url": "/products/ad_floral_cocktail_ring_750.jpg",
-        "title": "American Diamond (AD) Floral Cocktail Ring",
-        "caption": "Dual radiant solitaires & tiara petal coronet",
-        "order": 2
-      },
-      {
-        "id": "img-ring-3",
-        "url": "/products/lord_ganesha_ring_300.jpg",
-        "title": "Antique Gold-Plated Lord Ganesha Ring",
-        "caption": "Sacred embossed idol with sunburst mandala",
-        "order": 3
-      },
-      {
-        "id": "img-ring-4",
-        "url": "/products/polki_rajwada_dome_ring_900.jpg",
-        "title": "Polki Rajwada Gold Imitation Ring",
-        "caption": "Uncut Polki glass in 24K gold foil jadau bezel",
-        "order": 4
-      },
-      {
-        "id": "img-ring-sapphire",
-        "url": "/products/sapphire_wheel_cocktail_ring_1650.jpg",
-        "title": "Royal Sapphire Blue Doublet & Baguette Diamond Wheel Ring",
-        "caption": "₹1,650 • 360° Video Available • Sapphire petals with baguette halo",
-        "order": 5
-      },
-      {
-        "id": "img-ring-cushion",
-        "url": "/products/cushion_solitaire_winged_ring_1850.jpg",
-        "title": "Imperial Cushion Solitaire Winged Cocktail Ring",
-        "caption": "₹1,850 • 360° Video Available • Cushion solitaire with marquise wings",
-        "order": 6
-      },
-      {
-        "id": "img-ring-oval",
-        "url": "/products/oval_solitaire_infinity_ring_1150.jpg",
-        "title": "22K Gold Oval Solitaire Halo Infinity Ring",
-        "caption": "₹1,150 • 360° Video Available • Oval diamond with crossover shank",
-        "order": 7
-      }
-    ],
-    "videos": [
-      {
-        "id": "vid-ring-01",
-        "title": "Gold Plated Pink Emerald Cut AD Statement Ring Showcase",
-        "videoUrl": "/videos/uploads/beautiful_solitaire_ring_studed_with_dia_1792500643287_z8tw.mp4",
-        "thumbnailUrl": "/products/pink_emerald_cocktail_ring_1900.jpg",
-        "description": "360° light refraction through precision emerald-cut simulant and cathedral marquise trellis.",
-        "duration": "0:15",
-        "order": 1,
-        "published": true
-      }
-    ],
+    "galleryImages": [],
+    "videos": [],
     "promoBanners": [],
-    "featuredProductIds": [
-      "prod-user-010",
-      "prod-user-031",
-      "prod-user-032",
-      "prod-user-033"
-    ],
+    "featuredProductIds": [],
     "customStoryTitle": "Universal Comfort-Fit Adjustable Shanks",
     "customStoryBody": "Every Vidhyaa ring is engineered with our comfort-fit adjustable band, allowing effortless wear across different fingers without resizing hassles.",
-    "customStoryImage": "/products/pink_emerald_cocktail_ring_1900.jpg",
+    "customStoryImage": "",
     "ctaTitle": "Elevate Every Hand Gesture",
     "ctaSubtitle": "Free velvet presentation cushion included with every statement ring.",
     "ctaButtonText": "Shop Rings",
@@ -226,8 +136,8 @@
     "slug": "devotional-rings",
     "subtitle": "Lord Ganesha Temple Blessing & Auspicious Mandalas",
     "description": "Sacred devotional rings featuring Lord Ganesha blessing idols, divine mandala cut-work filigree, and royal uncut Polki domes from ₹300.",
-    "image": "/products/lord_ganesha_ring_300.jpg",
-    "heroBannerUrl": "/products/lord_ganesha_ring_300.jpg",
+    "image": "/categories/devotional_category.jpg",
+    "heroBannerUrl": "/categories/devotional_category.jpg",
     "subcategories": [
       "Devotional Rings",
       "Temple Rings",
@@ -250,48 +160,13 @@
       "cta"
     ],
     "hiddenSections": [],
-    "galleryImages": [
-      {
-        "id": "img-dev-ring-1",
-        "url": "/products/lord_ganesha_ring_300.jpg",
-        "title": "Antique Gold-Plated Lord Ganesha Ring",
-        "caption": "₹300 • Auspicious seated Ganesha idol with mandala halo",
-        "isCover": true,
-        "order": 1
-      },
-      {
-        "id": "img-dev-ring-2",
-        "url": "/products/polki_rajwada_dome_ring_900.jpg",
-        "title": "Polki Rajwada Gold Imitation Ring",
-        "caption": "Uncut Polki glass in 24K gold foil jadau bezel",
-        "order": 2
-      },
-      {
-        "id": "img-dev-ring-3",
-        "url": "/products/ad_floral_cocktail_ring_750.jpg",
-        "title": "American Diamond (AD) Floral Cocktail Ring",
-        "caption": "Dual radiant solitaires & tiara petal coronet",
-        "order": 3
-      },
-      {
-        "id": "img-dev-ring-4",
-        "url": "/products/pink_emerald_cocktail_ring_1900.jpg",
-        "title": "Gold Plated Pink Emerald Cut AD Statement Cocktail Ring",
-        "caption": "Step-cut pink crystal & marquise diamond trellis",
-        "order": 4
-      }
-    ],
+    "galleryImages": [],
     "videos": [],
     "promoBanners": [],
-    "featuredProductIds": [
-      "prod-user-012",
-      "prod-user-013",
-      "prod-user-011",
-      "prod-user-010"
-    ],
+    "featuredProductIds": [],
     "customStoryTitle": "Auspicious Devotional Craftsmanship",
     "customStoryBody": "Handcrafted temple devotional rings blessed with sacred iconography and adjustable comfortable bands for daily prayer and festive celebrations.",
-    "customStoryImage": "/products/lord_ganesha_ring_300.jpg",
+    "customStoryImage": "",
     "ctaTitle": "Sacred Blessings for Every Day",
     "ctaSubtitle": "Free protective velvet pouch included with every devotional ring.",
     "ctaButtonText": "Shop Devotional Rings",

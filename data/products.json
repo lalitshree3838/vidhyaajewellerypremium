@@ -12,9 +12,7 @@
     "price": 1250,
     "mrp": 2500,
     "discountPercent": 50,
-    "images": [
-      "/products/pink_beaded_choker_set_1250.jpg"
-    ],
+    "images": [],
     "stock": 15,
     "inStock": true,
     "isFeatured": true,
@@ -40,7 +38,7 @@
         "price": 1250,
         "mrp": 2500,
         "stock": 15,
-        "image": "/products/pink_beaded_choker_set_1250.jpg",
+        "image": "",
         "active": true
       }
     ],
@@ -60,9 +58,7 @@
     "price": 1250,
     "mrp": 2500,
     "discountPercent": 50,
-    "images": [
-      "/products/pink_beaded_choker_set_1250.jpg"
-    ],
+    "images": [],
     "stock": 18,
     "inStock": true,
     "isFeatured": true,
@@ -87,7 +83,7 @@
         "price": 1250,
         "mrp": 2500,
         "stock": 18,
-        "image": "/products/pink_beaded_choker_set_1250.jpg",
+        "image": "",
         "active": true
       }
     ],
@@ -143,53 +139,6 @@
     "updatedAt": "2026-10-22T15:50:33.565Z"
   },
   {
-    "id": "prod-user-005",
-    "name": "Pink White Pearl Multi-Layer Rani Haar with Antique Kundan Earrings",
-    "slug": "pink-white-pearl-multi-layer-rani-haar-kundan-earrings",
-    "categoryId": "necklaces",
-    "categoryName": "Necklaces & Necklace Sets",
-    "subcategory": "Rani Haar",
-    "description": "Aristocratic multi-strand Rani Haar featuring cascading layers of micro faceted pink beads and lustrous white freshwater seed pearls. Interspersed with six ornate antique Kundan floral circular brooches centered with ruby cabochons. Accompanied by matching floral studs.",
-    "shortDescription": "₹1,150 only! Multi-layer pink and white seed pearl rani haar with floral ruby kundan side brooches and matching earrings.",
-    "material": "Multi-Strand Seed Pearls, Pink Crystal Beads, Ruby Kundan Floral Brooches",
-    "price": 1150,
-    "mrp": 2300,
-    "discountPercent": 50,
-    "images": [
-      "/products/pink_pearl_rani_haar_1150.jpg"
-    ],
-    "videoUrl": "/videos/uploads/whatsapp_video_2026-10-20_at_8_00_00_pm_1792507723422_zdve.mp4",
-    "stock": 20,
-    "inStock": true,
-    "isFeatured": true,
-    "active": true,
-    "rating": 4.9,
-    "reviewCount": 39,
-    "specifications": {
-      "Price": "₹1,150",
-      "Length": "26-inch Majestic Long Rani Haar",
-      "Beads": "Faceted Pink Spinel Beads & Cultured White Seed Pearls",
-      "Brooches": "Antique Kundan Floral Rosettes with Ruby Centers"
-    },
-    "careInstructions": "Store in airtight box provided. Keep away from perfumes.",
-    "variations": [
-      {
-        "id": "var-user-005-pearl",
-        "name": "Pink White Pearl Rani Haar",
-        "colorFinish": "Pearl Gold",
-        "hexCode": "#F472B6",
-        "sku": "VDH-RANI-HAAR-PEARL-05",
-        "price": 1150,
-        "mrp": 2300,
-        "stock": 20,
-        "image": "/products/pink_pearl_rani_haar_1150.jpg",
-        "active": true
-      }
-    ],
-    "createdAt": "2026-10-01T10:00:00.000Z",
-    "updatedAt": "2026-10-22T15:50:33.565Z"
-  },
-  {
     "id": "prod-user-003",
     "name": "Fancy Gold Plated AD Mangalsutra with Matching Earrings",
     "slug": "fancy-gold-plated-ad-mangalsutra-matching-earrings",
@@ -234,336 +183,6 @@
     ],
     "createdAt": "2026-10-01T10:00:00.000Z",
     "updatedAt": "2026-10-22T15:50:33.565Z"
-  },
-  {
-    "id": "prod-user-010",
-    "name": "Gold Plated Pink Emerald Cut AD Statement Cocktail Ring",
-    "slug": "gold-plated-pink-emerald-cut-ad-statement-cocktail-ring",
-    "categoryId": "rings",
-    "categoryName": "Rings",
-    "subcategory": "Cocktail Rings",
-    "description": "Showstopping red-carpet cocktail ring showcasing a massive step-cut pink morganite/sapphire simulant, flanked by an intricate cathedral trellis of marquise-cut American Diamonds. Set on an 18K yellow gold plated comfort-fit adjustable band.",
-    "shortDescription": "Monumental pink emerald-cut solitaire cocktail ring with elaborate floral marquise diamond halo and adjustable gold band.",
-    "material": "18K Micro Gold Plated Alloy, Pink Emerald-Cut Crystal & Marquise Diamonds",
-    "price": 1450,
-    "mrp": 2900,
-    "discountPercent": 50,
-    "images": [
-      "/products/pink_emerald_cocktail_ring_1900.jpg"
-    ],
-    "videoUrl": "/videos/uploads/beautiful_solitaire_ring_studed_with_dia_1792500643287_z8tw.mp4",
-    "stock": 20,
-    "inStock": true,
-    "isFeatured": true,
-    "isBestseller": true,
-    "active": true,
-    "rating": 5,
-    "reviewCount": 34,
-    "specifications": {
-      "Center Stone": "Faceted Pink Emerald Step-Cut (16x12mm)",
-      "Halo": "Multi-Tier Marquise Cluster Cathedral Trellis",
-      "Size": "Universal Free-Size Comfort Adjustable Shank",
-      "Collection": "Royal Statement Cocktail Rings"
-    },
-    "careInstructions": "Avoid chemicals, sprays, and water. Wipe clean before storing.",
-    "variations": [
-      {
-        "id": "var-user-010-pink",
-        "name": "Pink Emerald Statement Ring",
-        "colorFinish": "Pink & Yellow Gold",
-        "hexCode": "#F472B6",
-        "sku": "VDH-RING-PINK-EMERALD-10",
-        "price": 1450,
-        "mrp": 2900,
-        "stock": 20,
-        "image": "/products/pink_emerald_cocktail_ring_1900.jpg",
-        "active": true
-      }
-    ],
-    "createdAt": "2026-10-01T10:00:00.000Z",
-    "updatedAt": "2026-10-22T15:50:33.565Z"
-  },
-  {
-    "id": "prod-user-011",
-    "name": "American Diamond (AD) Floral Cocktail Ring",
-    "slug": "american-diamond-ad-floral-cocktail-ring",
-    "categoryId": "rings",
-    "categoryName": "Rings",
-    "subcategory": "AD Rings",
-    "description": "Modern crossover bypass ring spotlighting two luminous radiant-cut American Diamonds crowned by fan-shaped marquise diamond petal coronets. Finished with double pavé eternity bands and micro gold plating.",
-    "shortDescription": "Avant-garde dual radiant-cut American Diamond floral tiara crossover cocktail ring.",
-    "material": "Micro Gold & Rhodium Dual Plated Alloy with VVS American Diamonds",
-    "price": 700,
-    "mrp": 1400,
-    "discountPercent": 50,
-    "images": [
-      "/products/ad_floral_cocktail_ring_750.jpg"
-    ],
-    "videoUrl": "/videos/uploads/beautiful_diamond_ring_size_adjustable_l_1792502221377_pj9u.mp4",
-    "stock": 25,
-    "inStock": true,
-    "isFeatured": true,
-    "active": true,
-    "rating": 4.8,
-    "reviewCount": 29,
-    "specifications": {
-      "Design": "Bypass Tiara Crossover with Twin Solitaires",
-      "Shank": "Dual Eternity Pavé Micro Bands",
-      "Size": "Free Size Adjustable Fit",
-      "Collection": "Floral AD Rings"
-    },
-    "careInstructions": "Store in soft velvet box. Avoid direct contact with detergents.",
-    "variations": [
-      {
-        "id": "var-user-011-floral",
-        "name": "Dual Radiant Floral AD Ring",
-        "colorFinish": "Dual Tone Gold",
-        "hexCode": "#DFB982",
-        "sku": "VDH-RING-AD-FLORAL-11",
-        "price": 700,
-        "mrp": 1400,
-        "stock": 25,
-        "image": "/products/ad_floral_cocktail_ring_750.jpg",
-        "active": true
-      }
-    ],
-    "createdAt": "2026-10-01T10:00:00.000Z",
-    "updatedAt": "2026-10-22T15:50:33.565Z"
-  },
-  {
-    "id": "prod-user-012",
-    "name": "Antique Gold-Plated Lord Ganesha Ring",
-    "slug": "antique-gold-plated-lord-ganesha-ring",
-    "categoryId": "rings",
-    "categoryName": "Rings",
-    "subcategory": "Devotional Rings",
-    "description": "Auspicious spiritual jewellery: Deeply embossed three-dimensional seated Lord Ganesha blessing idol encircled by an ornate openwork mandala sunburst halo. Micro antique gold plated with comfortable adjustable shank.",
-    "shortDescription": "Sacred antique gold temple circular mandala ring with three-dimensional Lord Ganesha centerpiece.",
-    "material": "Antique 22K Micro Gold Plated Hypoallergenic Alloy",
-    "price": 300,
-    "mrp": 600,
-    "discountPercent": 50,
-    "images": [
-      "/products/lord_ganesha_ring_300.jpg"
-    ],
-    "stock": 40,
-    "inStock": true,
-    "isFeatured": true,
-    "isBestseller": true,
-    "active": true,
-    "rating": 5,
-    "reviewCount": 95,
-    "specifications": {
-      "Motif": "Lord Ganesha Divine Blessing Posture",
-      "Frame": "Intricate Cut-Work Mandala Filigree",
-      "Size": "Free Size Adjustable Band",
-      "Collection": "Devotional Temple Rings"
-    },
-    "careInstructions": "Store in airtight pouch. Clean with soft cloth.",
-    "variations": [
-      {
-        "id": "var-user-012-ganesha",
-        "name": "Lord Ganesha Temple Blessing",
-        "colorFinish": "Antique Temple Gold",
-        "hexCode": "#B8860B",
-        "sku": "VDH-RING-GANESHA-12",
-        "price": 300,
-        "mrp": 600,
-        "stock": 40,
-        "image": "/products/lord_ganesha_ring_300.jpg",
-        "active": true
-      }
-    ],
-    "createdAt": "2026-10-01T10:00:00.000Z",
-    "updatedAt": "2026-10-22T15:50:33.566Z"
-  },
-  {
-    "id": "prod-user-013",
-    "name": "Polki Rajwada Gold Imitation Ring",
-    "slug": "polki-rajwada-gold-imitation-ring",
-    "categoryId": "rings",
-    "categoryName": "Rings",
-    "subcategory": "Polki Rings",
-    "description": "Timeless royal court craftsmanship: Majestic convex dome ring handset with uncut Polki glass cabochons in 24K gold foil jadau bezels, accented with micro pavé diamonds and an intricately embossed vintage shank.",
-    "shortDescription": "Heritage Rajasthani Rajwada dome cocktail ring studded with uncut Polki glass stones and royal carving.",
-    "material": "24K Gold Foil Jadau Bezel, Uncut Polki Glass & Micro Diamonds",
-    "price": 700,
-    "mrp": 1400,
-    "discountPercent": 50,
-    "images": [
-      "/products/polki_rajwada_dome_ring_900.jpg"
-    ],
-    "stock": 22,
-    "inStock": true,
-    "isFeatured": true,
-    "active": true,
-    "rating": 4.9,
-    "reviewCount": 40,
-    "specifications": {
-      "Style": "Royal Rajasthani Rajwada Dome",
-      "Setting": "Jadau Foil Bezel with Cut-Glass Polki",
-      "Size": "Adjustable Back Band",
-      "Collection": "Rajwada Polki Rings"
-    },
-    "careInstructions": "Clean with dry cloth only. Store in soft cotton velvet box.",
-    "variations": [
-      {
-        "id": "var-user-013-polki",
-        "name": "Polki Rajwada Gold Dome Ring",
-        "colorFinish": "Polki Gold",
-        "hexCode": "#D4AF37",
-        "sku": "VDH-RING-POLKI-RAJWADA-13",
-        "price": 700,
-        "mrp": 1400,
-        "stock": 22,
-        "image": "/products/polki_rajwada_dome_ring_900.jpg",
-        "active": true
-      }
-    ],
-    "createdAt": "2026-10-01T10:00:00.000Z",
-    "updatedAt": "2026-10-22T15:50:33.566Z"
-  },
-  {
-    "id": "prod-user-014",
-    "name": "Gold Polish Rajwada Choker Set with Mang Tikka",
-    "slug": "gold-polish-rajwada-choker-set-mang-tika",
-    "categoryId": "necklaces",
-    "categoryName": "Necklaces & Necklace Sets",
-    "subcategory": "Kundan & Polki",
-    "description": "Regal Rajasthani Rajwada bridal choker set crafted in 22K gold polish with cascading emerald green beads, radiant uncut Polki Jadau teardrop centerpiece, matching jhumka earrings, and ornate Mang Tikka.",
-    "shortDescription": "₹2,100! Gold polish Rajwada choker set with emerald green drops, matching jhumkas, and Mang Tikka.",
-    "material": "22K Gold Polish Alloy, Uncut Polki Jadau, Emerald Green Beads & Fine Pearls",
-    "price": 2100,
-    "mrp": 4200,
-    "discountPercent": 50,
-    "images": [
-      "/products/rajwada_choker_set_green_2100.jpg"
-    ],
-    "videoUrl": "/videos/uploads/whatsapp_video_2026-10-13_at_9_15_20_pm_1792506416620_5m3u.mp4",
-    "stock": 15,
-    "inStock": true,
-    "isFeatured": true,
-    "isBestseller": true,
-    "isNewArrival": true,
-    "active": true,
-    "rating": 5,
-    "reviewCount": 38,
-    "specifications": {
-      "Price": "₹2,100",
-      "Set Includes": "Choker Necklace + Matching Jhumkas + Forehead Mang Tikka",
-      "Finish": "22K Antique Gold Polish with Rajputana Meenakari Detailing",
-      "Stones": "Emerald Green Glass Cabochons & Polki Kundan"
-    },
-    "careInstructions": "Store in airtight box. Keep away from water and direct sprays.",
-    "variations": [
-      {
-        "id": "var-user-014-green",
-        "name": "Rajwada Green + Mang Tikka",
-        "colorFinish": "Gold Polish & Emerald Green",
-        "hexCode": "#0B6623",
-        "sku": "VDH-RAJWADA-CHOKER-14",
-        "price": 2100,
-        "mrp": 4200,
-        "stock": 15,
-        "image": "/products/rajwada_choker_set_green_2100.jpg",
-        "active": true
-      }
-    ],
-    "createdAt": "2026-10-02T10:00:00.000Z",
-    "updatedAt": "2026-10-22T15:50:33.566Z"
-  },
-  {
-    "id": "prod-user-015",
-    "name": "Pink Crystal Pearl Beaded Choker Set",
-    "slug": "pink-crystal-pearl-beaded-choker-set",
-    "categoryId": "necklaces",
-    "categoryName": "Necklaces & Necklace Sets",
-    "subcategory": "Chokers",
-    "description": "Enchanting multi-strand blush pink crystal and natural pearl choker set featuring an imperial square pink doublet stone centerpiece surrounded by diamond zircon accents and matching floral tops.",
-    "shortDescription": "₹1,250! Pink beautiful choker set with layered pearls, pink gemstone center, and matching earrings.",
-    "material": "Multi-Layer Pink Crystals, Fresh Water Pearls & Pink Doublet Stone",
-    "price": 1250,
-    "mrp": 2500,
-    "discountPercent": 50,
-    "images": [
-      "/products/pink_beaded_choker_set_1250.jpg"
-    ],
-    "stock": 18,
-    "inStock": true,
-    "isFeatured": true,
-    "active": true,
-    "rating": 4.9,
-    "reviewCount": 29,
-    "specifications": {
-      "Price": "₹1,250",
-      "Centerpiece": "Cushion Cut Pink Doublet Gemstone in Diamond Bezel",
-      "Strands": "7-Row Multi-Tier Seed Pearls & Pink Quartz Crystals",
-      "Earrings": "Matching Cushion Pink Studs"
-    },
-    "careInstructions": "Wipe with microfiber cloth after wear. Store in dry pouch.",
-    "variations": [
-      {
-        "id": "var-user-015-pink",
-        "name": "Blush Pink & Pearl",
-        "colorFinish": "Rose Pink & Pearl",
-        "hexCode": "#F4C2C2",
-        "sku": "VDH-PINK-CHOKER-15",
-        "price": 1250,
-        "mrp": 2500,
-        "stock": 18,
-        "image": "/products/pink_beaded_choker_set_1250.jpg",
-        "active": true
-      }
-    ],
-    "createdAt": "2026-10-02T10:00:00.000Z",
-    "updatedAt": "2026-10-22T15:50:33.566Z"
-  },
-  {
-    "id": "prod-user-016",
-    "name": "Rose Gold American Diamond Waterfall Fringe Set",
-    "slug": "rose-gold-american-diamond-waterfall-fringe-set",
-    "categoryId": "necklaces",
-    "categoryName": "Necklaces & Necklace Sets",
-    "subcategory": "Necklace Sets",
-    "description": "Breathtaking luxury rose gold plated necklace set designed to mimic real solitaire diamonds, featuring a cascading waterfall fringe of VVS diamond zircons and matching chandelier drop earrings.",
-    "shortDescription": "₹2,000! Rose gold diamond set, look-alike real diamond jewellery with matching chandelier earrings.",
-    "material": "Rose Gold Micron Plating, VVS Quality American Diamond (AD) Zircons",
-    "price": 2000,
-    "mrp": 4000,
-    "discountPercent": 50,
-    "images": [
-      "/products/rose_gold_diamond_set_2000.jpg"
-    ],
-    "stock": 14,
-    "inStock": true,
-    "isFeatured": true,
-    "isNewArrival": true,
-    "active": true,
-    "rating": 5,
-    "reviewCount": 42,
-    "specifications": {
-      "Price": "₹2,000",
-      "Plating": "Everlasting Rose Gold Micro Electroplating",
-      "Stones": "High Refraction VVS Lab-Created Solitaire Zircons",
-      "Clasp": "Adjustable Box Safety Clasp"
-    },
-    "careInstructions": "Keep away from moisture and chemical sprays. Store in velvet casing.",
-    "variations": [
-      {
-        "id": "var-user-016-rosegold",
-        "name": "Rose Gold Solitaire",
-        "colorFinish": "Rose Gold",
-        "hexCode": "#B76E79",
-        "sku": "VDH-ROSE-DIAMOND-16",
-        "price": 2000,
-        "mrp": 4000,
-        "stock": 14,
-        "image": "/products/rose_gold_diamond_set_2000.jpg",
-        "active": true
-      }
-    ],
-    "createdAt": "2026-10-02T10:00:00.000Z",
-    "updatedAt": "2026-10-22T15:50:33.566Z"
   },
   {
     "id": "prod-user-017",
@@ -762,9 +381,7 @@
     "price": 10000,
     "mrp": 20000,
     "discountPercent": 50,
-    "images": [
-      "/products/rajwada_choker_set_green_2100.jpg"
-    ],
+    "images": [],
     "stock": 8,
     "inStock": true,
     "isFeatured": true,
@@ -789,7 +406,7 @@
         "price": 10000,
         "mrp": 20000,
         "stock": 8,
-        "image": "/products/rajwada_choker_set_green_2100.jpg",
+        "image": "",
         "active": true
       }
     ],
@@ -1188,152 +805,6 @@
         "mrp": 2400,
         "stock": 12,
         "image": "/products/uploads/gold_rajwada_kada_openable_____1792726903001_4fx1.jpg",
-        "active": true
-      }
-    ],
-    "createdAt": "2026-10-22T15:50:33.567Z",
-    "updatedAt": "2026-10-22T15:50:33.567Z"
-  },
-  {
-    "id": "prod-user-031",
-    "name": "Royal Sapphire Blue Doublet & Baguette Diamond Wheel Cocktail Ring",
-    "slug": "royal-sapphire-blue-doublet-baguette-diamond-wheel-cocktail-ring",
-    "categoryId": "rings",
-    "categoryName": "Rings",
-    "subcategory": "Cocktail Rings",
-    "description": "Breathtaking 360-degree statement cocktail ring featuring a brilliant round diamond center embraced by pear-cut royal blue sapphire doublet petals, encircled with a radiant starburst of baguette-cut diamonds and micropavé halo in platinum rhodium polish.",
-    "shortDescription": "₹1,650! Royal sapphire blue doublet petals with baguette diamond halo & adjustable shank.",
-    "material": "Platinum Rhodium & 925 Sterling Silver Polish, Royal Blue Sapphire Doublet, Baguette & Round AD Diamonds",
-    "price": 1650,
-    "mrp": 3300,
-    "discountPercent": 50,
-    "images": [
-      "/products/sapphire_wheel_cocktail_ring_1650.jpg"
-    ],
-    "stock": 20,
-    "inStock": true,
-    "isFeatured": true,
-    "isBestseller": true,
-    "isNewArrival": true,
-    "active": true,
-    "rating": 5,
-    "reviewCount": 39,
-    "specifications": {
-      "Craftsmanship": "Master Artisan Handcrafted & Micro Electroplated",
-      "Center Stone": "Round Brilliant Solitaire AD Diamond",
-      "Color Gemstones": "Royal Sapphire Blue Doublet Gemstones",
-      "Halo": "Radial Baguette Cut Diamond Trellis + Round Pavé Rim",
-      "Shank": "Free-Size Comfort Fit Adjustable Band"
-    },
-    "careInstructions": "Store in airtight velvet case. Avoid water and perfumes.",
-    "variations": [
-      {
-        "id": "var-user-031-silver",
-        "name": "Platinum Rhodium & Sapphire Blue",
-        "colorFinish": "Platinum Rhodium & Blue",
-        "hexCode": "#002366",
-        "sku": "VDH-RING-SAPPHIRE-31",
-        "price": 1650,
-        "mrp": 3300,
-        "stock": 20,
-        "image": "/products/sapphire_wheel_cocktail_ring_1650.jpg",
-        "active": true
-      }
-    ],
-    "createdAt": "2026-10-22T15:50:33.567Z",
-    "updatedAt": "2026-10-22T15:50:33.567Z"
-  },
-  {
-    "id": "prod-user-032",
-    "name": "Imperial Cushion Solitaire Winged Marquise Diamond Cocktail Ring",
-    "slug": "imperial-cushion-solitaire-winged-marquise-diamond-cocktail-ring",
-    "categoryId": "rings",
-    "categoryName": "Rings",
-    "subcategory": "Cocktail Rings",
-    "description": "Magnificent monumental cocktail ring showcasing a massive clear cushion-cut diamond solitaire held in four-prong 22K gold basket, flanked by sculptural winged shoulders densely paved with shimmering marquise and pear-cut American Diamonds.",
-    "shortDescription": "₹1,850! Massive cushion solitaire diamond with winged marquise shoulders in 22K gold.",
-    "material": "22K Micro Gold Plating, VVS Lab Cushion Solitaire, Marquise & Pear Cut American Diamonds",
-    "price": 1850,
-    "mrp": 3700,
-    "discountPercent": 50,
-    "images": [
-      "/products/cushion_solitaire_winged_ring_1850.jpg"
-    ],
-    "stock": 18,
-    "inStock": true,
-    "isFeatured": true,
-    "isBestseller": true,
-    "isNewArrival": true,
-    "active": true,
-    "rating": 5,
-    "reviewCount": 42,
-    "specifications": {
-      "Craftsmanship": "Master Artisan Handcrafted & Micro Electroplated",
-      "Center Stone": "High-Refraction 10-Carat Look Cushion Cut Solitaire Diamond",
-      "Shoulder Accents": "Sculpted Angel Wings of Marquise & Pear Diamonds",
-      "Plating": "22K Micro Gold Electroplate with Anti-Tarnish Seal",
-      "Band": "Comfort Smooth Adjustable Shank"
-    },
-    "careInstructions": "Store in the provided velvet cushion box. Keep clean with dry microfiber cloth.",
-    "variations": [
-      {
-        "id": "var-user-032-gold",
-        "name": "22K Gold & Cushion Solitaire",
-        "colorFinish": "22K Yellow Gold",
-        "hexCode": "#D4AF37",
-        "sku": "VDH-RING-CUSHION-32",
-        "price": 1850,
-        "mrp": 3700,
-        "stock": 18,
-        "image": "/products/cushion_solitaire_winged_ring_1850.jpg",
-        "active": true
-      }
-    ],
-    "createdAt": "2026-10-22T15:50:33.567Z",
-    "updatedAt": "2026-10-22T15:50:33.567Z"
-  },
-  {
-    "id": "prod-user-033",
-    "name": "22K Gold Oval Solitaire Halo Infinity Ring",
-    "slug": "22k-gold-oval-solitaire-halo-infinity-ring",
-    "categoryId": "rings",
-    "categoryName": "Rings",
-    "subcategory": "AD Rings",
-    "description": "Timeless luxury oval solitaire ring highlighted by a luminous oval brilliant diamond centerpiece framed with an ultra-fine micropavé diamond halo, set upon an infinity crossover split shank paved with diamonds in rich 22K yellow gold.",
-    "shortDescription": "₹1,150! Oval brilliant solitaire with halo and infinity crossover pavé split shank.",
-    "material": "22K Micron Gold Plated Alloy, VVS Oval Brilliant Solitaire & Micropavé Diamonds",
-    "price": 1150,
-    "mrp": 2300,
-    "discountPercent": 50,
-    "images": [
-      "/products/oval_solitaire_infinity_ring_1150.jpg"
-    ],
-    "stock": 22,
-    "inStock": true,
-    "isFeatured": true,
-    "isNewArrival": true,
-    "active": true,
-    "rating": 4.9,
-    "reviewCount": 31,
-    "specifications": {
-      "Craftsmanship": "Master Artisan Handcrafted & Micro Electroplated",
-      "Center Stone": "Oval Brilliant Cut Solitaire Diamond (VVS Simulant)",
-      "Halo": "Prong-Set Micropavé Diamond Coronet",
-      "Shank Style": "Crossover Infinity Split Shank",
-      "Finish": "22K Micro Gold Polish"
-    },
-    "careInstructions": "Wipe with soft cloth. Store in padded jewellery pouch.",
-    "variations": [
-      {
-        "id": "var-user-033-oval",
-        "name": "22K Gold Oval Solitaire",
-        "colorFinish": "22K Yellow Gold",
-        "hexCode": "#D4AF37",
-        "sku": "VDH-RING-OVAL-33",
-        "price": 1150,
-        "mrp": 2300,
-        "stock": 22,
-        "image": "/products/oval_solitaire_infinity_ring_1150.jpg",
         "active": true
       }
     ],

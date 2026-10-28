@@ -410,98 +410,62 @@ export const HomeView: React.FC<HomeViewProps> = ({
         onSelectProduct={onSelectProduct}
       />
 
-      {/* 5. Promotional Section: Necklaces & Statement Rings Duo Grid */}
-      {(() => {
-        const pearlImg = '/products/pink_pearl_rani_haar_1150.jpg';
-        const solitaireImg = '/products/pink_emerald_cocktail_ring_1900.jpg';
-        const hasPearl = isGenuineImageUrl(pearlImg) && !failedImageUrls.has(pearlImg);
-        const hasSolitaire = isGenuineImageUrl(solitaireImg) && !failedImageUrls.has(solitaireImg);
+      {/* 5. Featured Collections Banner Duo */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 md:grid-cols-2 gap-8">
+        <div
+          className="relative rounded-3xl overflow-hidden aspect-[4/3] group cursor-pointer shadow-lg bg-white flex items-center justify-center"
+          onClick={() => onNavigate('shop', 'necklaces')}
+        >
+          <img
+            src="/categories/necklaces_category.jpg"
+            alt="Necklaces & Bridal Sets"
+            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
+          />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent pointer-events-none" />
+          <div className="absolute inset-x-0 bottom-0 p-8 text-white space-y-2 pointer-events-none">
+            <span className="text-xs font-bold text-[#DFB982] uppercase tracking-widest">
+              Royal Heritage Collection
+            </span>
+            <h3 className="font-serif text-2xl sm:text-3xl font-bold">
+              Necklaces & Bridal Sets
+            </h3>
+            <p className="text-xs text-gray-300 max-w-sm line-clamp-2">
+              Regal bridal chokers, temple necklaces, and 22K micron gold-plated heirlooms with matching earrings.
+            </p>
+            <div className="pt-2 flex items-center gap-1 text-xs font-semibold text-[#DFB982]">
+              <span>Discover Collection</span>
+              <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+            </div>
+          </div>
+        </div>
 
-        if (!hasPearl && !hasSolitaire) return null;
-
-        const pearlPromoProduct = products.find((p) => p.id === 'prod-user-005');
-        const solitairePromoProduct = products.find((p) => p.id === 'prod-user-010');
-        const pearlPrice = pearlPromoProduct ? formatPrice(pearlPromoProduct.price) : '₹1,150';
-        const solitairePrice = solitairePromoProduct ? formatPrice(solitairePromoProduct.price) : '₹1,450';
-
-        return (
-          <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 md:grid-cols-2 gap-8">
-            {/* Pink White Pearl Rani Haar Box */}
-            {hasPearl && (
-              <div
-                className="relative rounded-3xl overflow-hidden aspect-[4/3] group cursor-pointer shadow-lg bg-white flex items-center justify-center p-4"
-                onClick={() => {
-                  if (pearlPromoProduct) {
-                    onSelectProduct(pearlPromoProduct);
-                  } else {
-                    onNavigate('shop', 'necklaces');
-                  }
-                }}
-              >
-                <img
-                  src={pearlImg}
-                  alt="Pink White Pearl Rani Haar"
-                  className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-700"
-                  onError={() => handleImageError(pearlImg)}
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent pointer-events-none" />
-                <div className="absolute inset-x-0 bottom-0 p-8 text-white space-y-2 pointer-events-none">
-                  <span className="text-xs font-bold text-[#DFB982] uppercase tracking-widest">
-                    Royal Heritage • {pearlPrice}
-                  </span>
-                  <h3 className="font-serif text-2xl sm:text-3xl font-bold">
-                    Pink White Pearl Rani Haar
-                  </h3>
-                  <p className="text-xs text-gray-300 max-w-sm line-clamp-2">
-                    Multi-layer cascading pink crystal beads, freshwater seed pearls, and antique Kundan earrings.
-                  </p>
-                  <div className="pt-2 flex items-center gap-1 text-xs font-semibold text-[#DFB982]">
-                    <span>Discover Collection</span>
-                    <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Statement Rings Box */}
-            {hasSolitaire && (
-              <div
-                className="relative rounded-3xl overflow-hidden aspect-[4/3] group cursor-pointer shadow-lg bg-white flex items-center justify-center p-4"
-                onClick={() => {
-                  if (solitairePromoProduct) {
-                    onSelectProduct(solitairePromoProduct);
-                  } else {
-                    onNavigate('shop', 'rings');
-                  }
-                }}
-              >
-                <img
-                  src={solitaireImg}
-                  alt="Pink Emerald Statement Ring"
-                  className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-700"
-                  onError={() => handleImageError(solitaireImg)}
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent pointer-events-none" />
-                <div className="absolute inset-x-0 bottom-0 p-8 text-white space-y-2 pointer-events-none">
-                  <span className="text-xs font-bold text-[#DFB982] uppercase tracking-widest">
-                    Cocktail Statement • {solitairePrice}
-                  </span>
-                  <h3 className="font-serif text-2xl sm:text-3xl font-bold">
-                    Pink Emerald Cut AD Cocktail Ring
-                  </h3>
-                  <p className="text-xs text-gray-300 max-w-sm line-clamp-2">
-                    Step-cut pink solitaire enveloped in marquise-cut diamond cathedral trellis with comfort adjustable band.
-                  </p>
-                  <div className="pt-2 flex items-center gap-1 text-xs font-semibold text-[#DFB982]">
-                    <span>Shop Rings</span>
-                    <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
-                  </div>
-                </div>
-              </div>
-            )}
-          </section>
-        );
-      })()}
+        <div
+          className="relative rounded-3xl overflow-hidden aspect-[4/3] group cursor-pointer shadow-lg bg-white flex items-center justify-center"
+          onClick={() => onNavigate('shop', 'kangan-kada-and-bracelet')}
+        >
+          <img
+            src="/categories/kada_bangles_category.jpg"
+            alt="Royal Kangan & Kadas"
+            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
+          />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent pointer-events-none" />
+          <div className="absolute inset-x-0 bottom-0 p-8 text-white space-y-2 pointer-events-none">
+            <span className="text-xs font-bold text-[#DFB982] uppercase tracking-widest">
+              Artisan Wristwear
+            </span>
+            <h3 className="font-serif text-2xl sm:text-3xl font-bold">
+              Royal Kangan & Kadas
+            </h3>
+            <p className="text-xs text-gray-300 max-w-sm line-clamp-2">
+              Handcrafted 22K micro gold plated kangan, artisanal openable kadas, and luxury American diamond bracelets.
+            </p>
+            <div className="pt-2 flex items-center gap-1 text-xs font-semibold text-[#DFB982]">
+              <span>Shop Wristwear</span>
+              <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+            </div>
+          </div>
+        </div>
+      </section>
 
       {/* 6. Trust & Craftsmanship Section */}
       <section className="bg-[#FAF7F2] py-14 border-y border-[#E8DCCF]">

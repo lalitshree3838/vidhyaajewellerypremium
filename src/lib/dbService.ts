@@ -220,13 +220,32 @@ const LEGACY_CATEGORY_IDS = new Set(['gold-imitation', 'silver-925', 'oxidised',
 
 const DELETED_PRODUCTS_KEY = 'vidhyaa_deleted_products';
 
+export const PERMANENTLY_DELETED_PRODUCT_IDS = new Set([
+  'prod-user-005',
+  'prod-user-010',
+  'prod-user-011',
+  'prod-user-012',
+  'prod-user-013',
+  'prod-user-014',
+  'prod-user-015',
+  'prod-user-016',
+  'prod-user-031',
+  'prod-user-032',
+  'prod-user-033'
+]);
+
 export function getDeletedProductIds(): Set<string> {
+  const result = new Set<string>(PERMANENTLY_DELETED_PRODUCT_IDS);
   try {
     const raw = localStorage.getItem(DELETED_PRODUCTS_KEY);
-    return raw ? new Set(JSON.parse(raw)) : new Set();
-  } catch {
-    return new Set();
-  }
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((id) => result.add(id));
+      }
+    }
+  } catch {}
+  return result;
 }
 
 export function markProductDeleted(id: string): void {
@@ -525,8 +544,16 @@ export function subscribeToProducts(
           // Merge with cached items to ensure newly added products are preserved
           const currentCached = getCachedProducts();
           const mergedMap = new Map<string, Product>();
-          currentCached.forEach((p) => mergedMap.set(p.id, p));
-          liveProducts.forEach((p) => mergedMap.set(p.id, p));
+          currentCached.forEach((p) => {
+            if (!deletedIds.has(p.id) && isGenuineProduct(p)) {
+              mergedMap.set(p.id, p);
+            }
+          });
+          liveProducts.forEach((p) => {
+            if (!deletedIds.has(p.id) && isGenuineProduct(p)) {
+              mergedMap.set(p.id, p);
+            }
+          });
 
           const sorted = Array.from(mergedMap.values()).sort((a, b) => {
             const timeA = new Date(a.updatedAt || a.createdAt || 0).getTime();

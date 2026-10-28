@@ -18,7 +18,7 @@ import confetti from 'canvas-confetti';
 import { Product, ProductVariation } from '../types';
 import { useCart } from '../context/CartContext';
 
-import { isGenuineVideoUrl, isGenuineImageUrl, INITIAL_PRODUCTS } from '../lib/sampleData';
+import { isGenuineVideoUrl, isGenuineImageUrl, INITIAL_PRODUCTS, BANNED_PRODUCT_IDS } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 
 import { SeamlessLoopVideo, SeamlessLoopVideoHandle } from './SeamlessLoopVideo';
@@ -111,7 +111,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
   // Compute video reels from database products with verified user-uploaded videos, combined with catalog videos
   const videoReels: VideoReelItem[] = useMemo(() => {
     const active = products
-      .filter((p) => Boolean(p.videoUrl && isGenuineVideoUrl(p.videoUrl)))
+      .filter((p) => Boolean(p.videoUrl && isGenuineVideoUrl(p.videoUrl) && !BANNED_PRODUCT_IDS.has(p.id)))
       .map((p) => {
         const genuinePoster = (p.images || []).find(isGenuineImageUrl) || '';
         return {
