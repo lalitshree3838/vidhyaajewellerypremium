@@ -55,28 +55,8 @@ const AutoplayingReelVideo: React.FC<AutoplayingReelVideoProps> = ({
   title,
   isMuted = true
 }) => {
-  const [hasError, setHasError] = useState(false);
-
-  if (hasError) {
-    return (
-      <div className="absolute inset-0 w-full h-full overflow-hidden bg-black select-none pointer-events-none">
-        {posterImage && isGenuineImageUrl(posterImage) ? (
-          <img
-            src={posterImage}
-            alt={title}
-            className="w-full h-full object-cover select-none"
-          />
-        ) : (
-          <div className="w-full h-full bg-[#181113] flex items-center justify-center">
-            <Sparkles className="w-8 h-8 text-[#DFB982]/50" />
-          </div>
-        )}
-      </div>
-    );
-  }
-
   return (
-    <div className="absolute inset-0 w-full h-full overflow-hidden bg-black select-none pointer-events-none">
+    <div className="absolute inset-0 w-full h-full overflow-hidden bg-black select-none">
       <SeamlessLoopVideo
         src={videoUrl}
         poster={posterImage && isGenuineImageUrl(posterImage) ? posterImage : undefined}
@@ -85,14 +65,12 @@ const AutoplayingReelVideo: React.FC<AutoplayingReelVideoProps> = ({
         autoPlay={true}
         enableObserver={true}
         observerThreshold={0.05}
-        showPlayButtonFallback={false}
-        onError={() => setHasError(true)}
-        className="w-full h-full object-cover pointer-events-none select-none block"
+        showPlayButtonFallback={true}
+        className="w-full h-full object-cover select-none block"
         style={{
           width: '100%',
           height: '100%',
-          objectFit: 'cover',
-          pointerEvents: 'none'
+          objectFit: 'cover'
         }}
         aria-hidden="true"
         tabIndex={-1}
@@ -502,69 +480,50 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
 
             {/* LEFT / CENTER: 9:16 Continuous Autoplaying Background Video Area */}
             <div className="relative md:w-3/5 bg-black flex items-center justify-center overflow-hidden select-none">
-              {!videoHasError ? (
-                <div
-                  className="relative w-full h-full max-h-[550px] md:max-h-[640px] flex items-center justify-center cursor-pointer"
-                  onClick={togglePlayPause}
-                >
-                  <SeamlessLoopVideo
-                    ref={lightboxLoopHandleRef}
-                    key={currentReel.id}
-                    src={currentReel.videoUrl}
-                    poster={currentReel.posterImage && isGenuineImageUrl(currentReel.posterImage) ? currentReel.posterImage : undefined}
-                    title={currentReel.title}
-                    autoPlay={true}
-                    isMuted={isMuted}
-                    enableObserver={false}
-                    onError={() => setVideoHasError(true)}
-                    className="w-full h-full max-h-[550px] md:max-h-[640px] object-contain pointer-events-none select-none"
-                    style={{ width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none' }}
-                  />
+              <div
+                className="relative w-full h-full max-h-[550px] md:max-h-[640px] flex items-center justify-center cursor-pointer"
+                onClick={togglePlayPause}
+              >
+                <SeamlessLoopVideo
+                  ref={lightboxLoopHandleRef}
+                  key={currentReel.id}
+                  src={currentReel.videoUrl}
+                  poster={currentReel.posterImage && isGenuineImageUrl(currentReel.posterImage) ? currentReel.posterImage : undefined}
+                  title={currentReel.title}
+                  autoPlay={true}
+                  isMuted={isMuted}
+                  enableObserver={false}
+                  showPlayButtonFallback={true}
+                  className="w-full h-full max-h-[550px] md:max-h-[640px] object-contain select-none"
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                />
 
-                  {/* Play / Pause indicator overlay if user pauses */}
-                  {!isPlaying && (
-                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center pointer-events-none">
-                      <div className="w-16 h-16 rounded-full bg-black/70 backdrop-blur-md flex items-center justify-center border border-white/20 text-[#DFB982]">
-                        <Play className="w-8 h-8 fill-[#DFB982] ml-1" />
-                      </div>
+                {/* Play / Pause indicator overlay if user pauses */}
+                {!isPlaying && (
+                  <div className="absolute inset-0 bg-black/40 flex items-center justify-center pointer-events-none">
+                    <div className="w-16 h-16 rounded-full bg-black/70 backdrop-blur-md flex items-center justify-center border border-white/20 text-[#DFB982]">
+                      <Play className="w-8 h-8 fill-[#DFB982] ml-1" />
                     </div>
-                  )}
+                  </div>
+                )}
 
-                  {/* Audio Toggle Button in Video Player */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleMute();
-                    }}
-                    className="absolute top-4 left-4 z-20 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 backdrop-blur-md text-white flex items-center justify-center transition-colors cursor-pointer border border-white/20"
-                    title={isMuted ? 'Click to Unmute' : 'Click to Mute'}
-                    aria-label={isMuted ? 'Unmute video audio' : 'Mute video audio'}
-                  >
-                    {isMuted ? (
-                      <VolumeX className="w-4 h-4 text-red-300" />
-                    ) : (
-                      <Volume2 className="w-4 h-4 text-emerald-400" />
-                    )}
-                  </button>
-                </div>
-              ) : (
-                <div
-                  className="relative w-full h-full max-h-[550px] md:max-h-[640px] flex items-center justify-center overflow-hidden bg-[#1C1615] select-none pointer-events-none"
+                {/* Audio Toggle Button in Video Player */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleMute();
+                  }}
+                  className="absolute top-4 left-4 z-20 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 backdrop-blur-md text-white flex items-center justify-center transition-colors cursor-pointer border border-white/20"
+                  title={isMuted ? 'Click to Unmute' : 'Click to Mute'}
+                  aria-label={isMuted ? 'Unmute video audio' : 'Mute video audio'}
                 >
-                  {currentReel.posterImage && isGenuineImageUrl(currentReel.posterImage) ? (
-                    <img
-                      src={currentReel.posterImage}
-                      alt={currentReel.title}
-                      className="w-full h-full object-cover"
-                    />
+                  {isMuted ? (
+                    <VolumeX className="w-4 h-4 text-red-300" />
                   ) : (
-                    <div className="w-full h-full bg-[#1C1615] flex items-center justify-center">
-                      <Sparkles className="w-12 h-12 text-[#DFB982]/60" />
-                    </div>
+                    <Volume2 className="w-4 h-4 text-emerald-400" />
                   )}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/30 pointer-events-none" />
-                </div>
-              )}
+                </button>
+              </div>
 
               {/* Reel Counter Tag (subtle, non-interfering) */}
               <div className="absolute bottom-4 left-4 z-20 pointer-events-none">

@@ -66,7 +66,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const hasDiscount = currentMrp > currentPrice && discountPercent > 0;
 
   // Video presence check with actual saved URL from database
-  const hasVideo = Boolean(product.videoUrl && isGenuineVideoUrl(product.videoUrl) && !videoError);
+  const hasVideo = Boolean(product.videoUrl && isGenuineVideoUrl(product.videoUrl));
   const isDisplayingVideo = hasVideo && showVideo;
 
   // Elegant luxury jewellery placeholder if image is missing or cannot be loaded (never homepage banner)

@@ -110,7 +110,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
                   autoPlay={true}
                   isMuted={videoMuted}
                   enableObserver={false}
-                  onError={() => setShowVideo(false)}
+                  showPlayButtonFallback={true}
                   className="w-full h-full object-contain"
                   style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                 />

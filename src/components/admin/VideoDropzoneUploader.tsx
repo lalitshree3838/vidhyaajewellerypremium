@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Film, X, RefreshCw, CheckCircle2, AlertCircle, Play, FileVideo } from 'lucide-react';
+import { Upload, Film, X, RefreshCw, CheckCircle2, AlertCircle, Play, FileVideo, Link, Check } from 'lucide-react';
 import {
   validateVideoFile,
   formatFileSize,
@@ -30,6 +30,8 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
   const [uploadProgress, setUploadProgress] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successInfo, setSuccessInfo] = useState<string | null>(null);
+  const [showUrlInput, setShowUrlInput] = useState(false);
+  const [customVideoUrl, setCustomVideoUrl] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoPreviewRef = useRef<HTMLVideoElement>(null);
@@ -42,6 +44,59 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
       }
     };
   }, [localPreviewUrl]);
+
+  const performUpload = async (file: File) => {
+    setIsUploading(true);
+    setUploadProgress(0);
+    setErrorMessage(null);
+    setSuccessInfo(null);
+
+    try {
+      // 1. Generate thumbnail snapshot in browser if possible
+      let capturedThumbnail: string | null = null;
+      try {
+        capturedThumbnail = await captureVideoThumbnail(file);
+      } catch {
+        // Thumbnail generation is optional
+      }
+
+      // 2. Perform actual upload to persistent storage (Firebase Storage with server fallback)
+      const uploadResult = await uploadJewelleryVideo(file, {
+        onProgress: (percent) => {
+          setUploadProgress(percent);
+        }
+      });
+
+      if (capturedThumbnail && !uploadResult.thumbnailUrl) {
+        uploadResult.thumbnailUrl = capturedThumbnail;
+      }
+
+      const storageLabel = uploadResult.storageType === 'firebase'
+        ? 'Firebase Cloud Storage'
+        : 'Vidhyaa Persistent Storage';
+
+      setSuccessInfo(`Uploaded successfully to ${storageLabel}!`);
+      setUploadProgress(100);
+
+      // Clean up temporary local blob preview
+      if (localPreviewUrl) {
+        URL.revokeObjectURL(localPreviewUrl);
+        setLocalPreviewUrl(null);
+      }
+      setSelectedFile(null);
+
+      // Notify parent with persistent URL and metadata
+      onVideoUploaded(uploadResult);
+    } catch (err: any) {
+      console.error('Video upload failed:', err);
+      setErrorMessage(
+        err.message || 'Video upload failed. Please verify your connection and permissions.'
+      );
+      setUploadProgress(0);
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   const handleFileSelection = (file: File) => {
     setErrorMessage(null);
@@ -61,6 +116,9 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
     setSelectedFile(file);
     setLocalPreviewUrl(objectUrl);
     setUploadProgress(0);
+
+    // Automatically begin upload so the admin doesn't need to manually click twice
+    performUpload(file);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -119,59 +177,19 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
     }
   };
 
-  const handleUpload = async () => {
-    if (!selectedFile || isUploading) return;
-
-    setIsUploading(true);
-    setUploadProgress(0);
-    setErrorMessage(null);
-    setSuccessInfo(null);
-
-    try {
-      // 1. Generate thumbnail snapshot in browser
-      let capturedThumbnail: string | null = null;
-      try {
-        capturedThumbnail = await captureVideoThumbnail(selectedFile);
-      } catch {
-        // Thumbnail generation is optional
-      }
-
-      // 2. Perform actual upload to persistent storage (Firebase Storage with server fallback)
-      const uploadResult = await uploadJewelleryVideo(selectedFile, {
-        onProgress: (percent) => {
-          setUploadProgress(percent);
-        }
-      });
-
-      if (capturedThumbnail && !uploadResult.thumbnailUrl) {
-        uploadResult.thumbnailUrl = capturedThumbnail;
-      }
-
-      const storageLabel = uploadResult.storageType === 'firebase'
-        ? 'Firebase Cloud Storage'
-        : 'Vidhyaa Persistent Storage';
-
-      setSuccessInfo(`Uploaded successfully to ${storageLabel}!`);
-      setUploadProgress(100);
-
-      // Clean up temporary local blob preview
-      if (localPreviewUrl) {
-        URL.revokeObjectURL(localPreviewUrl);
-        setLocalPreviewUrl(null);
-      }
-      setSelectedFile(null);
-
-      // Notify parent with persistent URL and metadata
-      onVideoUploaded(uploadResult);
-    } catch (err: any) {
-      console.error('Video upload failed:', err);
-      setErrorMessage(
-        err.message || 'Video upload failed. Please verify your connection and permissions.'
-      );
-      setUploadProgress(0);
-    } finally {
-      setIsUploading(false);
-    }
+  const handleApplyCustomUrl = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = customVideoUrl.trim();
+    if (!trimmed) return;
+    onVideoUploaded({
+      url: trimmed,
+      fileName: trimmed.split('/').pop() || 'custom_video.mp4',
+      storageType: 'server',
+      sizeBytes: 0
+    });
+    setSuccessInfo('Direct video link attached successfully!');
+    setCustomVideoUrl('');
+    setShowUrlInput(false);
   };
 
   return (
@@ -193,7 +211,7 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
               <span className="text-xs font-bold text-[#3B1E22] uppercase tracking-wider">
-                Video Uploaded & Saved
+                Video Uploaded & Looping
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -220,30 +238,35 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
             </div>
           </div>
 
-          <div className="relative aspect-video max-h-56 w-full rounded-xl overflow-hidden bg-black flex items-center justify-center border border-black/10">
+          <div className="relative aspect-video max-h-60 w-full rounded-xl overflow-hidden bg-black flex items-center justify-center border border-black/10">
             <video
               src={currentVideoUrl}
-              controls
+              autoPlay
+              muted
+              loop
               playsInline
               preload="metadata"
+              controls
               className="w-full h-full object-contain"
             />
           </div>
 
           <div className="flex items-center justify-between text-[11px] text-gray-500 px-1 font-mono">
             <span className="truncate max-w-xs">{currentVideoName || currentVideoUrl}</span>
-            <span className="text-emerald-700 font-sans font-semibold">Persistent Cloud Storage</span>
+            <span className="text-emerald-700 font-sans font-semibold">Continuous Loop Active</span>
           </div>
         </div>
       )}
 
-      {/* Case 2: Selected File Waiting for Upload */}
+      {/* Case 2: Selected File & Upload in Progress */}
       {selectedFile && (
         <div className="bg-[#FAF7F2] border-2 border-[#802336]/30 rounded-2xl p-4 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <FileVideo className="w-4 h-4 text-[#802336]" />
-              <span className="text-xs font-bold text-[#3B1E22]">Ready to Upload</span>
+              <span className="text-xs font-bold text-[#3B1E22]">
+                {isUploading ? 'Uploading & Processing...' : 'Ready to Upload'}
+              </span>
             </div>
             {!isUploading && (
               <div className="flex items-center gap-2">
@@ -261,7 +284,7 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
                   className="px-3 py-1 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
                 >
                   <X className="w-3 h-3" />
-                  <span>Remove</span>
+                  <span>Cancel</span>
                 </button>
               </div>
             )}
@@ -273,8 +296,11 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
               <video
                 ref={videoPreviewRef}
                 src={localPreviewUrl}
-                controls
+                autoPlay
+                muted
+                loop
                 playsInline
+                controls
                 className="w-full h-full object-contain"
               />
             </div>
@@ -289,22 +315,16 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
               </p>
             </div>
 
-            {/* Upload Button */}
-            {!isUploading ? (
+            {/* Manual Retry/Upload Button if upload didn't start or errored */}
+            {!isUploading && (
               <button
                 type="button"
-                onClick={handleUpload}
+                onClick={() => performUpload(selectedFile)}
                 className="px-5 py-2.5 bg-[#802336] hover:bg-[#631B2A] text-white font-bold text-xs uppercase tracking-wider rounded-xl flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer whitespace-nowrap active:scale-98"
               >
                 <Upload className="w-4 h-4 text-[#DFB982]" />
                 <span>Upload Video</span>
               </button>
-            ) : (
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-[#802336] animate-pulse">
-                  Uploading ({uploadProgress}%)
-                </span>
-              </div>
             )}
           </div>
 
@@ -376,9 +396,55 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
             </div>
 
             <p className="text-[11px] text-gray-400">
-              Select directly from computer or smartphone camera roll
+              Select directly from computer or smartphone camera roll. Plays and loops automatically.
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Direct Video URL Input Option */}
+      {!currentVideoUrl && !selectedFile && (
+        <div className="text-center pt-1">
+          {!showUrlInput ? (
+            <button
+              type="button"
+              onClick={() => setShowUrlInput(true)}
+              className="text-xs text-[#802336] hover:underline font-semibold flex items-center justify-center gap-1.5 mx-auto cursor-pointer"
+            >
+              <Link className="w-3.5 h-3.5" />
+              <span>Or enter a direct video URL</span>
+            </button>
+          ) : (
+            <form onSubmit={handleApplyCustomUrl} className="bg-white border border-[#E8DCCF] rounded-xl p-3 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-gray-700">Direct Video URL</span>
+                <button
+                  type="button"
+                  onClick={() => setShowUrlInput(false)}
+                  className="text-gray-400 hover:text-gray-600 text-[11px]"
+                >
+                  Cancel
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  placeholder="https://.../video.mp4 or /videos/uploads/..."
+                  value={customVideoUrl}
+                  onChange={(e) => setCustomVideoUrl(e.target.value)}
+                  className="flex-1 px-3 py-1.5 border border-[#E8DCCF] rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-[#802336]"
+                />
+                <button
+                  type="submit"
+                  disabled={!customVideoUrl.trim()}
+                  className="px-3 py-1.5 bg-[#802336] text-white rounded-lg text-xs font-bold hover:bg-[#631B2A] transition-colors disabled:opacity-50 cursor-pointer flex items-center gap-1"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Attach</span>
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       )}
 

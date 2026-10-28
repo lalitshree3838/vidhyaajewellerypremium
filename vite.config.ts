@@ -443,18 +443,24 @@ const otpDevPlugin = (): Plugin => ({
           const start = parseInt(parts[0], 10);
           const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
           const chunksize = (end - start) + 1;
-          const file = fs.createReadStream(filePath, { start, end });
           res.statusCode = 206;
           res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
           res.setHeader('Accept-Ranges', 'bytes');
           res.setHeader('Content-Length', chunksize);
           res.setHeader('Content-Type', contentType);
+          if (req.method === 'HEAD') {
+            return res.end();
+          }
+          const file = fs.createReadStream(filePath, { start, end });
           return file.pipe(res);
         } else {
           res.statusCode = 200;
           res.setHeader('Content-Length', fileSize);
           res.setHeader('Content-Type', contentType);
           res.setHeader('Accept-Ranges', 'bytes');
+          if (req.method === 'HEAD') {
+            return res.end();
+          }
           const file = fs.createReadStream(filePath);
           return file.pipe(res);
         }
