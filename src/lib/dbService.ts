@@ -66,21 +66,32 @@ export function saveCachedProducts(products: Product[]): void {
     if (!Array.isArray(products) || products.length === 0) return;
     localStorage.setItem(PRODUCTS_CACHE_KEY, JSON.stringify(products));
   } catch (err) {
-    // If browser localStorage quota (typically 5MB) is exceeded, compress and omit oversized (>300KB) data strings
+    // If browser localStorage quota (typically 5MB) is exceeded, omit bulky base64 data URLs in local cache
+    // so catalog metadata, stock, prices, variations, and external image URLs (e.g. postimg, cloud storage)
+    // persist reliably without throwing QuotaExceededError. Full embedded base64 images remain intact in memory and Firestore.
     try {
       const safePayload = products.map((p) => {
         if (!p || typeof p !== 'object') return p;
         const safeImages = Array.isArray(p.images)
           ? p.images.map((img) => {
-              if (typeof img === 'string' && img.startsWith('data:') && img.length > 300000) {
+              if (typeof img === 'string' && img.startsWith('data:image/')) {
                 return '';
               }
               return img;
             }).filter(Boolean)
           : [];
+        const safeVariations = Array.isArray(p.variations)
+          ? p.variations.map((v) => {
+              if (v && typeof v.image === 'string' && v.image.startsWith('data:image/')) {
+                return { ...v, image: '' };
+              }
+              return v;
+            })
+          : p.variations;
         return {
           ...p,
-          images: safeImages.length > 0 ? safeImages : (p.images || [])
+          images: safeImages,
+          variations: safeVariations
         };
       });
       localStorage.setItem(PRODUCTS_CACHE_KEY, JSON.stringify(safePayload));
@@ -379,7 +390,23 @@ export async function fetchProducts(): Promise<Product[]> {
           const timeExisting = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
           const timeCached = new Date(cp.updatedAt || cp.createdAt || 0).getTime();
           if (timeCached >= timeExisting) {
-            catalogMap.set(cp.id, cp);
+            // If cached product images were omitted due to localStorage quota fallback, preserve existing full images
+            const imagesToUse = (Array.isArray(cp.images) && cp.images.length > 0)
+              ? cp.images
+              : existing.images;
+            const variationsToUse = (Array.isArray(cp.variations) && cp.variations.length > 0)
+              ? cp.variations.map((v, vIdx) => {
+                  if (!v.image && existing.variations?.[vIdx]?.image) {
+                    return { ...v, image: existing.variations[vIdx].image };
+                  }
+                  return v;
+                })
+              : existing.variations;
+            catalogMap.set(cp.id, {
+              ...cp,
+              images: imagesToUse,
+              variations: variationsToUse
+            });
           }
         }
       }

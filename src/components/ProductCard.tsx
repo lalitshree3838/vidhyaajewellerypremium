@@ -49,10 +49,22 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   }, [product.id]);
 
   // Active displayed image: prioritize non-empty variation image if valid, otherwise primary product image
-  const primaryProductImage = (Array.isArray(product.images) ? product.images.find((img) => Boolean(img && img.trim())) : '')?.trim() || '';
+  const primaryProductImage = (
+    Array.isArray(product.images)
+      ? product.images.find((img) => Boolean(img && typeof img === 'string' && img.trim() && isGenuineImageUrl(img.trim())))
+      : ''
+  )?.trim() || (Array.isArray(product.images) && product.images[0] ? String(product.images[0]).trim() : '');
+
   const variationImage = selectedVariation?.image?.trim();
-  const displayImage = (variationImage && isGenuineImageUrl(variationImage)) ? variationImage : primaryProductImage;
-  const secondaryImage = product.images?.[1]?.trim() || displayImage;
+  const displayImage = (variationImage && isGenuineImageUrl(variationImage))
+    ? variationImage
+    : (primaryProductImage && isGenuineImageUrl(primaryProductImage) ? primaryProductImage : (primaryProductImage || variationImage || ''));
+
+  const secondaryImage = (
+    Array.isArray(product.images)
+      ? product.images.find((img, idx) => idx > 0 && Boolean(img && typeof img === 'string' && img.trim() && isGenuineImageUrl(img.trim())))
+      : ''
+  )?.trim() || displayImage;
 
   // Reset image error status when the product or displayed image changes
   useEffect(() => {
