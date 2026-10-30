@@ -3194,14 +3194,39 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 <VideoDropzoneUploader
                   currentVideoUrl={editingProduct.videoUrl}
                   onVideoUploaded={(res) => {
-                    setEditingProduct({ ...editingProduct, videoUrl: res.url });
+                    setEditingProduct({ ...editingProduct, videoUrl: res.url, showInShoppingVideos: true });
                   }}
                   onClearVideo={() => {
                     setEditingProduct({ ...editingProduct, videoUrl: undefined });
                   }}
                 />
+
+                {/* Clear "Show in Homepage Shopping Videos" Toggle */}
+                <div className="p-3 bg-[#FAF7F2] rounded-xl border border-[#DFB982]/60 flex items-center justify-between gap-3">
+                  <div className="flex flex-col">
+                    <span className="font-bold text-xs text-[#241C1A]">Show in Homepage Shopping Videos</span>
+                    <span className="text-[11px] text-gray-500">
+                      When enabled, this product's video will play in the homepage Shopping Videos slider.
+                    </span>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={editingProduct.showInShoppingVideos !== false}
+                      onChange={(e) =>
+                        setEditingProduct({
+                          ...editingProduct,
+                          showInShoppingVideos: e.target.checked
+                        })
+                      }
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#0F5B46]"></div>
+                  </label>
+                </div>
+
                 <p className="text-[11px] text-gray-500">
-                  When you upload a video for this piece, it will automatically appear in the 360° Reel showcase on the homepage and product page.
+                  When you upload an MP4/WebM video for this piece and toggle this option on, it will automatically appear in the Shopping Videos slider on the homepage.
                 </p>
               </div>
 

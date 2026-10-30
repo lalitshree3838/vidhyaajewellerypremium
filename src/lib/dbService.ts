@@ -209,6 +209,9 @@ export function sanitizeProductForFirestore(product: Product): Product {
   if (product.videoUrl && typeof product.videoUrl === 'string' && product.videoUrl.trim()) {
     cleanProduct.videoUrl = product.videoUrl.trim();
   }
+  if (typeof product.showInShoppingVideos === 'boolean') {
+    cleanProduct.showInShoppingVideos = product.showInShoppingVideos;
+  }
   if (typeof product.isFeatured === 'boolean') {
     cleanProduct.isFeatured = product.isFeatured;
   }

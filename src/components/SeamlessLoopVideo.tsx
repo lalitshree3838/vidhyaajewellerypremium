@@ -20,6 +20,7 @@ export interface SeamlessLoopVideoHandle {
 export interface SeamlessLoopVideoProps {
   src: string;
   poster?: string;
+  fallbackImage?: string;
   title?: string;
   autoPlay?: boolean;
   isMuted?: boolean;
@@ -41,6 +42,7 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
     {
       src,
       poster,
+      fallbackImage,
       title,
       autoPlay = true,
       isMuted = true,
@@ -60,18 +62,11 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
   ) => {
     const videoRef = useRef<HTMLVideoElement | null>(null);
     const containerRef = useRef<HTMLDivElement | null>(null);
+    const isUserPausedRef = useRef<boolean>(false);
     const [isPlaying, setIsPlaying] = useState<boolean>(false);
     const [isAutoplayBlocked, setIsAutoplayBlocked] = useState<boolean>(false);
     const [hasError, setHasError] = useState<boolean>(false);
-    const [isVisibleInViewport, setIsVisibleInViewport] = useState<boolean>(!enableObserver);
-
-    // Synchronize mute state
-    useEffect(() => {
-      if (videoRef.current) {
-        videoRef.current.muted = isMuted;
-        videoRef.current.defaultMuted = isMuted;
-      }
-    }, [isMuted]);
+    const [isVisibleInViewport, setIsVisibleInViewport] = useState<boolean>(true);
 
     // Attempt video playback safely without unhandled rejections
     const attemptPlay = useCallback(async () => {
@@ -90,11 +85,81 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
         }
       } catch (err: any) {
         if (err?.name === 'NotAllowedError') {
-          // Browser requires user interaction before playing audio or video
+          // If unmuted playback was denied, fallback to muted immediately
+          if (!video.muted) {
+            try {
+              video.muted = true;
+              video.defaultMuted = true;
+              video.setAttribute('muted', '');
+              await video.play();
+              setIsPlaying(true);
+              setIsAutoplayBlocked(false);
+              setHasError(false);
+              return;
+            } catch {
+              // Both unmuted and muted blocked by browser policy until gesture
+            }
+          }
           setIsAutoplayBlocked(true);
           setIsPlaying(false);
         } else if (err?.name !== 'AbortError') {
           console.warn('[Video Player] Playback attempt notice:', err?.message || err);
+        }
+      }
+    }, [isMuted]);
+
+    // Callback ref to guarantee muted and playsinline DOM properties and attributes are set synchronously
+    const setVideoRef = useCallback((node: HTMLVideoElement | null) => {
+      videoRef.current = node;
+      if (node) {
+        node.muted = isMuted;
+        node.defaultMuted = isMuted;
+        node.playsInline = true;
+        node.setAttribute('playsinline', '');
+        node.setAttribute('webkit-playsinline', 'true');
+        if (isMuted) {
+          node.setAttribute('muted', '');
+        } else {
+          node.removeAttribute('muted');
+        }
+        if (autoPlay && !isUserPausedRef.current) {
+          const p = node.play();
+          if (p !== undefined) {
+            p.then(() => {
+              setIsPlaying(true);
+              setIsAutoplayBlocked(false);
+              setHasError(false);
+            }).catch((err) => {
+              if (err?.name === 'NotAllowedError') {
+                if (!node.muted) {
+                  node.muted = true;
+                  node.defaultMuted = true;
+                  node.setAttribute('muted', '');
+                  node.play().then(() => {
+                    setIsPlaying(true);
+                    setIsAutoplayBlocked(false);
+                  }).catch(() => {
+                    setIsAutoplayBlocked(true);
+                  });
+                } else {
+                  setIsAutoplayBlocked(true);
+                }
+              }
+            });
+          }
+        }
+      }
+    }, [isMuted, autoPlay]);
+
+    // Synchronize mute state
+    useEffect(() => {
+      if (videoRef.current) {
+        videoRef.current.muted = isMuted;
+        videoRef.current.defaultMuted = isMuted;
+        if (isMuted) {
+          videoRef.current.setAttribute('muted', '');
+        } else {
+          videoRef.current.removeAttribute('muted');
         }
       }
     }, [isMuted]);
@@ -104,12 +169,14 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
       ref,
       () => ({
         play: async () => {
+          isUserPausedRef.current = false;
           if (videoRef.current) {
             setIsAutoplayBlocked(false);
             return videoRef.current.play();
           }
         },
         pause: () => {
+          isUserPausedRef.current = true;
           if (videoRef.current) {
             videoRef.current.pause();
             setIsPlaying(false);
@@ -120,6 +187,11 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
             const nextMuted = !videoRef.current.muted;
             videoRef.current.muted = nextMuted;
             videoRef.current.defaultMuted = nextMuted;
+            if (nextMuted) {
+              videoRef.current.setAttribute('muted', '');
+            } else {
+              videoRef.current.removeAttribute('muted');
+            }
             return nextMuted;
           }
           return true;
@@ -147,13 +219,13 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
       const observer = new IntersectionObserver(
         (entries) => {
           entries.forEach((entry) => {
-            const inView = entry.isIntersecting;
+            const inView = entry.isIntersecting || entry.intersectionRatio > 0;
             setIsVisibleInViewport(inView);
             const video = videoRef.current;
             if (!video) return;
 
             if (inView) {
-              if (autoPlay && video.paused) {
+              if (autoPlay && video.paused && !isUserPausedRef.current) {
                 attemptPlay();
               }
             } else {
@@ -164,14 +236,36 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
             }
           });
         },
-        { threshold: observerThreshold }
+        { threshold: [0, 0.05, 0.2], rootMargin: '100px 0px 100px 0px' }
       );
 
       observer.observe(target);
       return () => {
         observer.disconnect();
       };
-    }, [enableObserver, observerThreshold, autoPlay, attemptPlay]);
+    }, [enableObserver, autoPlay, attemptPlay]);
+
+    // Global user interaction listener to unlock autoplay when browser restricts before touch
+    useEffect(() => {
+      if (!autoPlay || !isVisibleInViewport) return;
+
+      const handleGlobalInteraction = () => {
+        const video = videoRef.current;
+        if (video && video.paused && !isUserPausedRef.current) {
+          attemptPlay();
+        }
+      };
+
+      window.addEventListener('touchstart', handleGlobalInteraction, { passive: true, once: true });
+      window.addEventListener('click', handleGlobalInteraction, { passive: true, once: true });
+      window.addEventListener('scroll', handleGlobalInteraction, { passive: true, once: true });
+
+      return () => {
+        window.removeEventListener('touchstart', handleGlobalInteraction);
+        window.removeEventListener('click', handleGlobalInteraction);
+        window.removeEventListener('scroll', handleGlobalInteraction);
+      };
+    }, [autoPlay, isVisibleInViewport, attemptPlay]);
 
     // Playback on src change
     useEffect(() => {
@@ -181,12 +275,12 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
       const video = videoRef.current;
       if (!video) return;
 
-      if (autoPlay && isVisibleInViewport) {
+      if (autoPlay && isVisibleInViewport && !isUserPausedRef.current) {
         attemptPlay();
       }
     }, [src, autoPlay, isVisibleInViewport, attemptPlay]);
 
-    // Seamless Continuous Loop: Guarantee restart on end
+    // Seamless Continuous Loop: Guarantee instant restart on end across all browsers
     const handleEnded = () => {
       const video = videoRef.current;
       if (video) {
@@ -198,8 +292,37 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
       }
     };
 
+    // Continuous Loop Protection: detect if video reaches end frame and ensure seamless loop
+    const handleTimeUpdate = () => {
+      const video = videoRef.current;
+      if (!video) return;
+      if (video.duration > 0.5 && (video.ended || video.currentTime >= video.duration - 0.08)) {
+        video.currentTime = 0;
+        const playPromise = video.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(() => {});
+        }
+      }
+    };
+
+    // Guard against browser pausing at end of video loop
+    const handlePause = () => {
+      setIsPlaying(false);
+      const video = videoRef.current;
+      if (!video) return;
+      if (!isUserPausedRef.current && isVisibleInViewport && autoPlay) {
+        if (video.ended || (video.duration > 0 && video.currentTime >= video.duration - 0.2)) {
+          video.currentTime = 0;
+          const playPromise = video.play();
+          if (playPromise !== undefined) {
+            playPromise.catch(() => {});
+          }
+        }
+      }
+    };
+
     const handleVideoCanPlay = (e: SyntheticEvent<HTMLVideoElement, Event>) => {
-      if (autoPlay && isVisibleInViewport) {
+      if (autoPlay && isVisibleInViewport && !isUserPausedRef.current) {
         attemptPlay();
       }
       onCanPlay?.(e);
@@ -214,6 +337,7 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
 
     const handleUserClickPlay = (e: React.MouseEvent) => {
       e.stopPropagation();
+      isUserPausedRef.current = false;
       setIsAutoplayBlocked(false);
       setHasError(false);
       const video = videoRef.current;
@@ -225,6 +349,7 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
 
     const handleRetry = (e: React.MouseEvent) => {
       e.stopPropagation();
+      isUserPausedRef.current = false;
       setHasError(false);
       setIsAutoplayBlocked(false);
       const video = videoRef.current;
@@ -241,7 +366,7 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
         style={style}
       >
         <video
-          ref={videoRef}
+          ref={setVideoRef}
           src={src}
           poster={poster}
           title={title}
@@ -251,8 +376,9 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
           loop
           playsInline
           webkit-playsinline="true"
-          preload="metadata"
+          preload="auto"
           onEnded={handleEnded}
+          onTimeUpdate={handleTimeUpdate}
           onError={handleVideoError}
           onLoadedData={onLoadedData}
           onCanPlay={handleVideoCanPlay}
@@ -260,7 +386,7 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
             setIsPlaying(true);
             setIsAutoplayBlocked(false);
           }}
-          onPause={() => setIsPlaying(false)}
+          onPause={handlePause}
           className={className}
           style={{ width: '100%', height: '100%', ...style }}
           aria-hidden={ariaHidden}
@@ -283,8 +409,17 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
           </div>
         )}
 
-        {/* Playback Error Recovery Overlay */}
-        {hasError && !controls && (
+        {/* Genuine Product Image Fallback if Video is Unavailable or Errors */}
+        {hasError && fallbackImage && (
+          <img
+            src={fallbackImage}
+            alt={title || 'Product jewellery showcase'}
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+        )}
+
+        {/* Playback Error Recovery Overlay if no fallback image */}
+        {hasError && !fallbackImage && !controls && (
           <div
             onClick={handleRetry}
             className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center z-15 cursor-pointer p-4 text-center text-white"

@@ -40,6 +40,7 @@ export interface Product {
   careInstructions: string;
   variations: ProductVariation[];
   videoUrl?: string;
+  showInShoppingVideos?: boolean;
   createdAt: string;
   updatedAt: string;
 }

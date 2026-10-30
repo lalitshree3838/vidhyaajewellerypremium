@@ -44,14 +44,14 @@ interface ShopByVideoSectionProps {
 
 interface AutoplayingReelVideoProps {
   videoUrl: string;
-  posterImage?: string;
+  fallbackImage?: string;
   title: string;
   isMuted?: boolean;
 }
 
 const AutoplayingReelVideo: React.FC<AutoplayingReelVideoProps> = ({
   videoUrl,
-  posterImage,
+  fallbackImage,
   title,
   isMuted = true
 }) => {
@@ -59,7 +59,7 @@ const AutoplayingReelVideo: React.FC<AutoplayingReelVideoProps> = ({
     <div className="absolute inset-0 w-full h-full overflow-hidden bg-black select-none">
       <SeamlessLoopVideo
         src={videoUrl}
-        poster={posterImage && isGenuineImageUrl(posterImage) ? posterImage : undefined}
+        fallbackImage={fallbackImage}
         title={title}
         isMuted={isMuted}
         autoPlay={true}
@@ -89,7 +89,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
   // Compute video reels from database products with verified user-uploaded videos, combined with catalog videos
   const videoReels: VideoReelItem[] = useMemo(() => {
     const active = products
-      .filter((p) => Boolean(p.videoUrl && isGenuineVideoUrl(p.videoUrl) && !BANNED_PRODUCT_IDS.has(p.id)))
+      .filter((p) => Boolean(p.videoUrl && isGenuineVideoUrl(p.videoUrl) && !BANNED_PRODUCT_IDS.has(p.id) && p.showInShoppingVideos !== false))
       .map((p) => {
         const genuinePoster = (p.images || []).find(isGenuineImageUrl) || '';
         return {
@@ -110,7 +110,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
     // Merge active with any initial products having videos so full video catalog is always rich, without duplicates
     const seenIds = new Set(active.map((r) => r.productId));
     const catalogReels: VideoReelItem[] = INITIAL_PRODUCTS
-      .filter((p) => Boolean(p.videoUrl && isGenuineVideoUrl(p.videoUrl) && !seenIds.has(p.id)))
+      .filter((p) => Boolean(p.videoUrl && isGenuineVideoUrl(p.videoUrl) && !seenIds.has(p.id) && p.showInShoppingVideos !== false))
       .map((p) => {
         const genuinePoster = (p.images || []).find(isGenuineImageUrl) || '';
         return {
@@ -300,11 +300,11 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
           <div className="space-y-2 max-w-2xl mx-auto md:mx-0">
             <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-[#DFB982]/20 border border-[#DFB982]/40 text-[#802336] text-[11px] font-bold uppercase tracking-widest">
               <Sparkles className="w-3 h-3 text-[#B8860B]" />
-              <span>Discover Our Jewellery in Motion</span>
+              <span>Shop the Look • Craftsmanship in Motion</span>
             </div>
 
             <h2 className="font-serif text-3xl sm:text-4xl lg:text-5xl font-bold text-[#241C1A] tracking-tight">
-              SHOPPING VIDEO
+              Video Shopping
             </h2>
 
             <p className="text-xs sm:text-sm text-[#5C4D4A] leading-relaxed font-normal">
@@ -339,18 +339,18 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
           ref={scrollContainerRef}
           className="flex gap-5 sm:gap-6 overflow-x-auto pb-6 pt-2 scrollbar-none snap-x snap-mandatory scroll-smooth -mx-4 px-4 sm:mx-0 sm:px-0"
         >
-          {videoReels.map((reel) => (
+          {videoReels.map((reel, index) => (
             <div
               key={reel.id}
               className="group relative flex-none w-[78vw] xs:w-[65vw] sm:w-[280px] lg:w-[285px] snap-center bg-white rounded-3xl overflow-hidden border border-[#E8DCCF] hover:border-[#DFB982] shadow-sm hover:shadow-xl transition-all duration-300 hover:-translate-y-1.5 cursor-pointer flex flex-col"
-              onClick={() => handleShopNow(reel)}
+              onClick={() => setActiveReelIndex(index)}
             >
               {/* 9:16 Portrait Continuous Autoplaying Background Video Container */}
               <div className="relative aspect-[9/16] w-full overflow-hidden bg-black select-none">
                 {/* Autoplaying continuous looping background video (muted by default, object-fit: cover) */}
                 <AutoplayingReelVideo
                   videoUrl={reel.videoUrl}
-                  posterImage={reel.posterImage}
+                  fallbackImage={reel.posterImage}
                   title={reel.title}
                   isMuted={unmutedReelId !== reel.id}
                 />
@@ -488,7 +488,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
                   ref={lightboxLoopHandleRef}
                   key={currentReel.id}
                   src={currentReel.videoUrl}
-                  poster={currentReel.posterImage && isGenuineImageUrl(currentReel.posterImage) ? currentReel.posterImage : undefined}
+                  fallbackImage={currentReel.posterImage}
                   title={currentReel.title}
                   autoPlay={true}
                   isMuted={isMuted}
