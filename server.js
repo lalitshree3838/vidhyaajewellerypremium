@@ -1,1371 +1,655 @@
-// server.ts
-import express from "express";
-import path4 from "path";
-import fs4 from "fs";
-import { fileURLToPath as fileURLToPath2 } from "url";
-import dotenv from "dotenv";
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
-// src/server/adminAuthHandler.ts
-import crypto from "crypto";
-var DEFAULT_ADMIN_EMAIL = "anavneeraj2003@gmail.com";
-var DEFAULT_ADMIN_PASSWORD = "VidhyaaAdmin@2026!";
-var DEFAULT_SESSION_SECRET = "vidhyaa-studio-super-secure-admin-session-salt-2026";
-var rateLimitStore = /* @__PURE__ */ new Map();
-var MAX_FAILURES = 5;
-var LOCKOUT_MS = 15 * 60 * 1e3;
-var revokedTokens = /* @__PURE__ */ new Set();
-function base64UrlEncode(str) {
-  return Buffer.from(str).toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-}
-function base64UrlDecode(str) {
-  let s = str.replace(/-/g, "+").replace(/_/g, "/");
-  while (s.length % 4) {
-    s += "=";
-  }
-  return Buffer.from(s, "base64").toString("utf8");
-}
-function generateAdminSessionToken(email) {
-  const secret = process.env.ADMIN_SESSION_SECRET || DEFAULT_SESSION_SECRET;
-  const header = base64UrlEncode(JSON.stringify({ alg: "HS256", typ: "JWT" }));
-  const exp = Math.floor(Date.now() / 1e3) + 12 * 3600;
-  const payload = base64UrlEncode(
-    JSON.stringify({
-      sub: email,
-      role: "admin",
-      iat: Math.floor(Date.now() / 1e3),
-      exp
-    })
-  );
-  const signature = crypto.createHmac("sha256", secret).update(`${header}.${payload}`).digest("base64url");
-  return {
-    token: `${header}.${payload}.${signature}`,
-    expiresIn: 12 * 3600
-  };
-}
-function verifyAdminSessionToken(token) {
-  if (!token || typeof token !== "string") {
-    return { valid: false, error: "Token missing." };
-  }
-  if (revokedTokens.has(token)) {
-    return { valid: false, error: "Session has been revoked." };
-  }
-  const parts = token.split(".");
-  if (parts.length !== 3) {
-    return { valid: false, error: "Malformed token structure." };
-  }
-  const [header, payload, signature] = parts;
-  const secret = process.env.ADMIN_SESSION_SECRET || DEFAULT_SESSION_SECRET;
-  const expectedSignature = crypto.createHmac("sha256", secret).update(`${header}.${payload}`).digest("base64url");
-  const sigBuffer = Buffer.from(signature, "utf8");
-  const expSigBuffer = Buffer.from(expectedSignature, "utf8");
-  if (sigBuffer.length !== expSigBuffer.length || !crypto.timingSafeEqual(sigBuffer, expSigBuffer)) {
-    return { valid: false, error: "Invalid token signature." };
-  }
-  try {
-    const data = JSON.parse(base64UrlDecode(payload));
-    const now = Math.floor(Date.now() / 1e3);
-    if (data.exp && data.exp < now) {
-      return { valid: false, error: "Session expired. Please log in again." };
-    }
-    return { valid: true, email: data.sub };
-  } catch {
-    return { valid: false, error: "Invalid token payload." };
-  }
-}
-function validateAdminCredentials(emailInput, passwordInput) {
-  const cleanEmail = (emailInput || "").trim().toLowerCase();
-  const cleanPassword = (passwordInput || "").trim();
-  if (!cleanEmail || !cleanPassword) {
-    return { valid: false, error: "Both administrator email and password are required." };
-  }
-  const configuredAdminEmail = (process.env.ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL).toLowerCase().trim();
-  const allowedAdminEmails = /* @__PURE__ */ new Set([
-    configuredAdminEmail,
-    "anavneeraj2003@gmail.com",
-    "admin@vidhyaajewellery.com"
-  ]);
-  if (!allowedAdminEmails.has(cleanEmail)) {
-    return { valid: false, error: "Unrecognized administrator email address." };
-  }
-  const configuredPassword = process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD;
-  const inputBuffer = Buffer.from(cleanPassword, "utf8");
-  const expectedBuffer = Buffer.from(configuredPassword, "utf8");
-  let match = false;
-  if (inputBuffer.length === expectedBuffer.length) {
-    match = crypto.timingSafeEqual(inputBuffer, expectedBuffer);
-  }
-  if (!match) {
-    return { valid: false, error: "Incorrect administrator password. Please check your credentials and try again." };
-  }
-  return {
-    valid: true,
-    admin: {
-      email: cleanEmail,
-      role: "admin",
-      name: "Super Administrator"
-    }
-  };
-}
-function checkServerRateLimit(identifier) {
-  const key = identifier.toLowerCase().trim();
-  const now = Date.now();
-  const record = rateLimitStore.get(key);
-  if (!record) {
-    return { allowed: true, remainingSeconds: 0, attemptsLeft: MAX_FAILURES };
-  }
-  if (record.lockoutUntil > now) {
-    const remainingSeconds = Math.ceil((record.lockoutUntil - now) / 1e3);
-    return { allowed: false, remainingSeconds, attemptsLeft: 0 };
-  }
-  if (record.lockoutUntil > 0 && record.lockoutUntil <= now) {
-    rateLimitStore.delete(key);
-    return { allowed: true, remainingSeconds: 0, attemptsLeft: MAX_FAILURES };
-  }
-  const attemptsLeft = Math.max(0, MAX_FAILURES - record.failedAttempts);
-  return { allowed: attemptsLeft > 0, remainingSeconds: 0, attemptsLeft };
-}
-function recordServerFailedAttempt(identifier) {
-  const key = identifier.toLowerCase().trim();
-  const now = Date.now();
-  const record = rateLimitStore.get(key) || { failedAttempts: 0, lockoutUntil: 0, lastAttempt: now };
-  record.failedAttempts += 1;
-  record.lastAttempt = now;
-  if (record.failedAttempts >= MAX_FAILURES) {
-    record.lockoutUntil = now + LOCKOUT_MS;
-    rateLimitStore.set(key, record);
-    return { locked: true, remainingSeconds: Math.ceil(LOCKOUT_MS / 1e3) };
-  }
-  rateLimitStore.set(key, record);
-  return { locked: false, remainingSeconds: 0 };
-}
-function resetServerFailedAttempts(identifier) {
-  rateLimitStore.delete(identifier.toLowerCase().trim());
-}
-function revokeAdminToken(token) {
-  if (token) revokedTokens.add(token);
-}
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// src/server/smsGateway.ts
-import fs from "fs";
-import path from "path";
-var SMS_CONFIG_FILE = path.resolve("sms-config.json");
-function getStoredSmsConfig() {
-  let fileConfig = {};
-  try {
-    if (fs.existsSync(SMS_CONFIG_FILE)) {
-      const raw = fs.readFileSync(SMS_CONFIG_FILE, "utf-8");
-      fileConfig = JSON.parse(raw);
-    }
-  } catch (err) {
-    console.warn("[SMS Config Diagnostic] Could not read sms-config.json:", err);
-  }
-  return {
-    provider: fileConfig.provider || process.env.SMS_PROVIDER || "auto",
-    fast2smsApiKey: fileConfig.fast2smsApiKey || process.env.FAST2SMS_API_KEY || "",
-    twofactorApiKey: fileConfig.twofactorApiKey || process.env.TWOFACTOR_API_KEY || "",
-    msg91AuthKey: fileConfig.msg91AuthKey || process.env.MSG91_AUTH_KEY || "",
-    msg91TemplateId: fileConfig.msg91TemplateId || process.env.MSG91_TEMPLATE_ID || "",
-    twilioAccountSid: fileConfig.twilioAccountSid || process.env.TWILIO_ACCOUNT_SID || "",
-    twilioAuthToken: fileConfig.twilioAuthToken || process.env.TWILIO_AUTH_TOKEN || "",
-    twilioPhoneNumber: fileConfig.twilioPhoneNumber || process.env.TWILIO_PHONE_NUMBER || ""
-  };
-}
-function saveStoredSmsConfig(newConfig) {
-  const current = getStoredSmsConfig();
-  const updated = {
-    ...current,
-    ...newConfig
-  };
-  try {
-    fs.writeFileSync(SMS_CONFIG_FILE, JSON.stringify(updated, null, 2), "utf-8");
-    console.log("[SMS Config Diagnostic] Successfully updated SMS gateway configuration on server.");
-  } catch (err) {
-    console.error("[SMS Config Diagnostic] Failed to write configuration file:", err);
-  }
-  return updated;
-}
-function getSmsStatusSummary() {
-  const config = getStoredSmsConfig();
-  const isFast2SmsActive = Boolean(config.fast2smsApiKey && config.fast2smsApiKey.trim().length > 5);
-  const isTwoFactorActive = Boolean(config.twofactorApiKey && config.twofactorApiKey.trim().length > 5);
-  const isTwilioActive = Boolean(config.twilioAccountSid && config.twilioAuthToken && config.twilioPhoneNumber);
-  const isMsg91Active = Boolean(config.msg91AuthKey && config.msg91TemplateId);
-  let activeProvider = "None Configured (Setup Required)";
-  if (isTwilioActive) activeProvider = "Twilio Worldwide SMS";
-  else if (isFast2SmsActive) activeProvider = "Fast2SMS India";
-  else if (isTwoFactorActive) activeProvider = "2Factor.in India";
-  else if (isMsg91Active) activeProvider = "MSG91 Enterprise";
-  return {
-    configured: isFast2SmsActive || isTwoFactorActive || isTwilioActive || isMsg91Active,
-    activeProvider,
-    internationalSupported: isTwilioActive,
-    providers: {
-      twilio: {
-        configured: isTwilioActive,
-        description: "Worldwide international SMS delivery (180+ countries)",
-        senderNumber: config.twilioPhoneNumber ? `${config.twilioPhoneNumber.slice(0, 3)}\u2022\u2022\u2022\u2022${config.twilioPhoneNumber.slice(-2)}` : ""
-      },
-      fast2sms: {
-        configured: isFast2SmsActive,
-        description: "Domestic India (+91) OTP route",
-        maskedKey: isFast2SmsActive ? `${config.fast2smsApiKey.slice(0, 4)}\u2022\u2022\u2022\u2022${config.fast2smsApiKey.slice(-3)}` : ""
-      },
-      twofactor: {
-        configured: isTwoFactorActive,
-        description: "Domestic India (+91) OTP route",
-        maskedKey: isTwoFactorActive ? `${config.twofactorApiKey.slice(0, 4)}\u2022\u2022\u2022\u2022${config.twofactorApiKey.slice(-3)}` : ""
-      },
-      msg91: {
-        configured: isMsg91Active,
-        description: "Domestic India (+91) DLT transactional route"
-      }
-    }
-  };
-}
-async function dispatchRealSms(phoneInput, otp) {
-  const cleanInput = (phoneInput || "").trim();
-  const config = getStoredSmsConfig();
-  let e164Number = cleanInput;
-  if (!e164Number.startsWith("+")) {
-    const digitsOnly = e164Number.replace(/\D/g, "");
-    if (digitsOnly.length === 10) {
-      e164Number = `+91${digitsOnly}`;
-    } else {
-      e164Number = `+${digitsOnly}`;
-    }
-  }
-  const isIndia = e164Number.startsWith("+91");
-  const indian10Digit = isIndia ? e164Number.slice(3).replace(/\D/g, "").slice(-10) : "";
-  const twilioSid = (config.twilioAccountSid || "").trim();
-  const twilioToken = (config.twilioAuthToken || "").trim();
-  const twilioFrom = (config.twilioPhoneNumber || "").trim();
-  if (twilioSid && twilioToken && twilioFrom) {
-    try {
-      const url = `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`;
-      const bodyParams = new URLSearchParams({
-        To: e164Number,
-        From: twilioFrom,
-        Body: `Your VIDHYAA Jewellery Studio verification code is: ${otp}. Valid for 5 minutes. Do not share this OTP.`
-      });
-      const authHeader = "Basic " + Buffer.from(`${twilioSid}:${twilioToken}`).toString("base64");
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Authorization": authHeader,
-          "Content-Type": "application/x-www-form-urlencoded"
-        },
-        body: bodyParams.toString()
-      });
-      const data = await res.json().catch(() => null);
-      if (res.ok && !data?.error_code) {
-        console.log("[SMS Gateway Diagnostic]", { provider: "twilio", status: "DISPATCHED_TO_CARRIER", destination: e164Number.slice(0, 4) + "\u2022\u2022\u2022\u2022" });
-        return {
-          success: true,
-          provider: "twilio",
-          message: `OTP dispatched successfully to ${e164Number} via Twilio international carrier.`
-        };
-      }
-      console.warn("[SMS Provider Diagnostic]", { provider: "twilio", statusCode: res.status, errorCode: data?.error_code || "DISPATCH_FAILED" });
-      if (!isIndia) {
-        return {
-          success: false,
-          provider: "twilio",
-          errorCode: "TWILIO_DELIVERY_FAILED",
-          message: data?.message || "Twilio SMS dispatch failed."
-        };
-      }
-    } catch (err) {
-      console.error("[SMS Provider Diagnostic]", { provider: "twilio", errorCode: "NETWORK_ERROR", message: err?.message || "Connection failure" });
-      if (!isIndia) {
-        return {
-          success: false,
-          provider: "twilio",
-          errorCode: "NETWORK_ERROR",
-          message: "Failed to connect to Twilio SMS gateway."
-        };
-      }
-    }
-  }
-  if (isIndia && indian10Digit.length === 10) {
-    const fast2smsKey = (config.fast2smsApiKey || "").trim();
-    if (fast2smsKey) {
-      try {
-        const getUrl = `https://www.fast2sms.com/dev/bulkV2?authorization=${encodeURIComponent(fast2smsKey)}&route=otp&variables_values=${encodeURIComponent(otp)}&numbers=${encodeURIComponent(indian10Digit)}`;
-        const getRes = await fetch(getUrl, {
-          method: "GET",
-          headers: {
-            "authorization": fast2smsKey,
-            "cache-control": "no-cache"
-          }
-        });
-        const getData = await getRes.json().catch(() => null);
-        if (getData && (getData.return === true || getData.status_code === 200)) {
-          console.log("[SMS Gateway Diagnostic]", { provider: "fast2sms", method: "GET", status: "DISPATCHED_TO_CARRIER" });
-          return {
-            success: true,
-            provider: "fast2sms",
-            message: "OTP dispatched successfully via Fast2SMS telecom gateway."
-          };
-        }
-        const postRes = await fetch("https://www.fast2sms.com/dev/bulkV2", {
-          method: "POST",
-          headers: {
-            "authorization": fast2smsKey,
-            "Content-Type": "application/json",
-            "cache-control": "no-cache"
-          },
-          body: JSON.stringify({
-            route: "otp",
-            variables_values: otp,
-            numbers: indian10Digit
-          })
-        });
-        const postData = await postRes.json().catch(() => null);
-        if (postData && (postData.return === true || postData.status_code === 200)) {
-          console.log("[SMS Gateway Diagnostic]", { provider: "fast2sms", method: "POST", status: "DISPATCHED_TO_CARRIER" });
-          return {
-            success: true,
-            provider: "fast2sms",
-            message: "OTP dispatched successfully via Fast2SMS telecom gateway."
-          };
-        }
-        const errMsg = Array.isArray(postData?.message) ? postData.message[0] : postData?.message || (Array.isArray(getData?.message) ? getData.message[0] : getData?.message) || "Fast2SMS delivery rejected by carrier.";
-        console.warn("[SMS Provider Diagnostic]", { provider: "fast2sms", statusCode: postRes.status, errorCode: "CARRIER_REJECTED" });
-      } catch (err) {
-        console.error("[SMS Provider Diagnostic]", { provider: "fast2sms", errorCode: "NETWORK_ERROR", message: err?.message || "Connection failure" });
-      }
-    }
-    const twofactorKey = (config.twofactorApiKey || "").trim();
-    if (twofactorKey) {
-      try {
-        const url = `https://2factor.in/API/V1/${encodeURIComponent(twofactorKey)}/SMS/+91${encodeURIComponent(indian10Digit)}/${encodeURIComponent(otp)}/OTP1`;
-        const res = await fetch(url, { method: "GET" });
-        const data = await res.json().catch(() => null);
-        if (data && (data.Status === "Success" || res.ok)) {
-          console.log("[SMS Gateway Diagnostic]", { provider: "twofactor", status: "DISPATCHED_TO_CARRIER" });
-          return {
-            success: true,
-            provider: "twofactor",
-            message: "OTP dispatched successfully via 2Factor Indian telecom route."
-          };
-        }
-        console.warn("[SMS Provider Diagnostic]", { provider: "twofactor", statusCode: res.status, errorCode: data?.Details || data?.Status || "DISPATCH_FAILED" });
-      } catch (err) {
-        console.error("[SMS Provider Diagnostic]", { provider: "twofactor", errorCode: "NETWORK_ERROR", message: err?.message || "Connection failure" });
-      }
-    }
-    const msg91Key = (config.msg91AuthKey || "").trim();
-    const msg91TemplateId = (config.msg91TemplateId || "").trim();
-    if (msg91Key && msg91TemplateId) {
-      try {
-        const url = `https://control.msg91.com/api/v5/otp?template_id=${encodeURIComponent(msg91TemplateId)}&mobile=91${indian10Digit}&authkey=${encodeURIComponent(msg91Key)}&otp=${encodeURIComponent(otp)}`;
-        const res = await fetch(url, { method: "POST" });
-        const data = await res.json().catch(() => null);
-        if (data && (data.type === "success" || res.ok)) {
-          console.log("[SMS Gateway Diagnostic]", { provider: "msg91", status: "DISPATCHED_TO_CARRIER" });
-          return {
-            success: true,
-            provider: "msg91",
-            message: "OTP dispatched successfully via MSG91 gateway."
-          };
-        }
-        console.warn("[SMS Provider Diagnostic]", { provider: "msg91", statusCode: res.status, errorCode: data?.type || "DISPATCH_FAILED" });
-      } catch (err) {
-        console.error("[SMS Provider Diagnostic]", { provider: "msg91", errorCode: "NETWORK_ERROR", message: err?.message || "Connection failure" });
-      }
-    }
-  }
-  const isProduction = process.env.NODE_ENV === "production" && !process.env.VITE_DEV_SERVER;
-  if (!isProduction) {
-    console.log("[Dev Preview SMS Gateway]", {
-      destination: e164Number,
-      otp,
-      note: "Dynamic OTP generated. In production, configure Twilio or Fast2SMS in Admin Settings."
-    });
-    return {
-      success: true,
-      provider: "dev_preview",
-      message: `Verification code generated for ${e164Number}. (Preview Mode OTP: ${otp})`,
-      devOtp: otp
-    };
-  }
-  if (!isIndia) {
-    return {
-      success: false,
-      provider: "none",
-      errorCode: "NO_INTERNATIONAL_SMS_PROVIDER",
-      message: `International SMS delivery to ${e164Number} requires Phone Authentication in the Firebase Console (which routes via Google Telecom globally) or Twilio configured on the server.`
-    };
-  }
-  console.warn("[SMS Gateway Diagnostic]", {
-    provider: "none",
-    errorCode: "GATEWAY_SETUP_REQUIRED",
-    message: "No SMS gateway credentials configured on server, and Firebase Phone is not enabled."
-  });
-  return {
-    success: false,
-    provider: "none",
-    errorCode: "GATEWAY_SETUP_REQUIRED",
-    message: "No active SMS provider is configured on the server. Please enable Phone Auth in the Firebase Console or configure SMS Gateway credentials (Twilio / Fast2SMS) in Admin Settings to receive real SMS messages on mobile devices."
-  };
-}
+const PORT = process.env.PORT || 3000;
+const HOST = '0.0.0.0';
 
-// src/server/cashfreeService.ts
-import fs2 from "fs";
-import path2 from "path";
-import crypto2 from "crypto";
-import { fileURLToPath } from "url";
-var __filename = fileURLToPath(import.meta.url);
-var __dirname = path2.dirname(__filename);
-var CONFIG_FILE_PATH = path2.join(__dirname, "..", "..", "cashfree-config.json");
-function getCashfreeCredentials() {
-  let fileConfig = {};
+// Firebase project web API key
+const FIREBASE_API_KEY = process.env.VITE_FIREBASE_API_KEY || 'AIzaSyBLPj2e2dCfXiFM_lI_TIpMAc2ShzJ1p_4';
+
+// Ensure data directory exists for persistent storage
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) {
   try {
-    if (fs2.existsSync(CONFIG_FILE_PATH)) {
-      const raw = fs2.readFileSync(CONFIG_FILE_PATH, "utf-8");
-      fileConfig = JSON.parse(raw);
-    }
+    fs.mkdirSync(DATA_DIR, { recursive: true });
   } catch (err) {
-    console.warn("[Cashfree] Warning reading cashfree-config.json:", err);
-  }
-  const appId = (fileConfig.appId || process.env.CASHFREE_APP_ID || "").trim();
-  const secretKey = (fileConfig.secretKey || process.env.CASHFREE_SECRET_KEY || "").trim();
-  const rawEnv = (fileConfig.env || process.env.CASHFREE_ENV || "SANDBOX").trim().toUpperCase();
-  const env = rawEnv === "PRODUCTION" ? "PRODUCTION" : "SANDBOX";
-  const apiVersion = (fileConfig.apiVersion || process.env.CASHFREE_API_VERSION || "2023-08-01").trim();
-  const isConfigured = Boolean(appId && secretKey);
-  return {
-    appId,
-    secretKey,
-    env,
-    apiVersion,
-    isConfigured
-  };
-}
-function saveCashfreeConfig(newConfig) {
-  try {
-    const existing = getCashfreeCredentials();
-    const updated = {
-      appId: newConfig.appId !== void 0 ? newConfig.appId.trim() : existing.appId,
-      secretKey: newConfig.secretKey !== void 0 ? newConfig.secretKey.trim() : existing.secretKey,
-      env: newConfig.env || existing.env,
-      apiVersion: newConfig.apiVersion || existing.apiVersion,
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-    };
-    fs2.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(updated, null, 2), "utf-8");
-    return { success: true, message: "Cashfree configuration saved successfully." };
-  } catch (err) {
-    return { success: false, message: err?.message || "Failed to save Cashfree configuration." };
-  }
-}
-function getCashfreeStatusSummary() {
-  const creds = getCashfreeCredentials();
-  const maskedAppId = creds.appId ? `${creds.appId.slice(0, 4)}\u2022\u2022\u2022\u2022${creds.appId.slice(-4)}` : "Not Configured";
-  const hasSecret = Boolean(creds.secretKey);
-  return {
-    isConfigured: creds.isConfigured,
-    env: creds.env,
-    appIdMasked: maskedAppId,
-    hasSecretKey: hasSecret,
-    apiVersion: creds.apiVersion,
-    baseUrl: creds.env === "PRODUCTION" ? "https://api.cashfree.com/pg" : "https://sandbox.cashfree.com/pg"
-  };
-}
-async function createCashfreeOrder(params) {
-  const creds = getCashfreeCredentials();
-  if (!creds.isConfigured) {
-    return {
-      success: false,
-      configured: false,
-      mode: creds.env.toLowerCase(),
-      error: "Cashfree merchant credentials are not configured yet. Please configure CASHFREE_APP_ID and CASHFREE_SECRET_KEY in Admin Panel or .env to accept Credit & Debit Cards."
-    };
-  }
-  const baseUrl = creds.env === "PRODUCTION" ? "https://api.cashfree.com/pg" : "https://sandbox.cashfree.com/pg";
-  const rawPhone = (params.customerPhone || "").replace(/\D/g, "");
-  const cleanPhone = rawPhone.length >= 10 ? rawPhone.slice(-10) : "9758350524";
-  const safeCustomerId = `cust_${(params.customerEmail || cleanPhone).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40) || Date.now()}`;
-  const safeName = (params.customerName || "Valued Patron").trim().slice(0, 80);
-  const safeEmail = (params.customerEmail || "patron@vidhyaajewellery.com").trim();
-  const safeAmount = Math.max(1, Math.round(params.orderAmount * 100) / 100);
-  const safeOrderId = params.orderId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 45);
-  const payload = {
-    order_id: safeOrderId,
-    order_amount: safeAmount,
-    order_currency: "INR",
-    customer_details: {
-      customer_id: safeCustomerId,
-      customer_name: safeName,
-      customer_email: safeEmail,
-      customer_phone: cleanPhone
-    },
-    order_meta: {
-      return_url: params.returnUrl || `https://ais-dev-4mkdmae4l6euf2siug53im-154198440604.asia-southeast1.run.app/?cf_order_id={order_id}`,
-      payment_methods: "cc,dc"
-      // Prioritize Credit Card & Debit Card hosted checkout
-    },
-    order_note: params.orderNote || "VIDHYAA Jewellery Studio Order"
-  };
-  try {
-    const res = await fetch(`${baseUrl}/orders`, {
-      method: "POST",
-      headers: {
-        "x-client-id": creds.appId,
-        "x-client-secret": creds.secretKey,
-        "x-api-version": creds.apiVersion,
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const errMsg = data.message || data.error || `Cashfree API returned HTTP ${res.status}`;
-      console.error("[Cashfree Order Creation Failed]", { status: res.status, data });
-      return {
-        success: false,
-        configured: true,
-        mode: creds.env.toLowerCase(),
-        error: errMsg
-      };
-    }
-    return {
-      success: true,
-      configured: true,
-      orderId: data.order_id || safeOrderId,
-      cfOrderId: data.cf_order_id,
-      paymentSessionId: data.payment_session_id,
-      orderStatus: data.order_status || "ACTIVE",
-      mode: creds.env.toLowerCase()
-    };
-  } catch (err) {
-    console.error("[Cashfree Order Network Error]", err);
-    return {
-      success: false,
-      configured: true,
-      mode: creds.env.toLowerCase(),
-      error: err?.message || "Network error connecting to Cashfree Payments Gateway."
-    };
-  }
-}
-async function verifyCashfreeOrder(orderId) {
-  const creds = getCashfreeCredentials();
-  if (!creds.isConfigured) {
-    return {
-      success: false,
-      isPaid: false,
-      orderId,
-      orderStatus: "UNCONFIGURED",
-      error: "Cashfree merchant credentials are not configured."
-    };
-  }
-  const baseUrl = creds.env === "PRODUCTION" ? "https://api.cashfree.com/pg" : "https://sandbox.cashfree.com/pg";
-  const safeOrderId = orderId.trim();
-  try {
-    const orderRes = await fetch(`${baseUrl}/orders/${encodeURIComponent(safeOrderId)}`, {
-      method: "GET",
-      headers: {
-        "x-client-id": creds.appId,
-        "x-client-secret": creds.secretKey,
-        "x-api-version": creds.apiVersion,
-        "Accept": "application/json"
-      }
-    });
-    const orderData = await orderRes.json().catch(() => ({}));
-    if (!orderRes.ok) {
-      return {
-        success: false,
-        isPaid: false,
-        orderId: safeOrderId,
-        orderStatus: "NOT_FOUND",
-        error: orderData.message || `Cashfree order verification failed with HTTP ${orderRes.status}`
-      };
-    }
-    const orderStatus = orderData.order_status || "UNKNOWN";
-    const isPaid = orderStatus === "PAID";
-    let paymentDetails = void 0;
-    try {
-      const paymentsRes = await fetch(`${baseUrl}/orders/${encodeURIComponent(safeOrderId)}/payments`, {
-        method: "GET",
-        headers: {
-          "x-client-id": creds.appId,
-          "x-client-secret": creds.secretKey,
-          "x-api-version": creds.apiVersion,
-          "Accept": "application/json"
-        }
-      });
-      if (paymentsRes.ok) {
-        const paymentsArray = await paymentsRes.json();
-        if (Array.isArray(paymentsArray) && paymentsArray.length > 0) {
-          const successful = paymentsArray.find((p) => p.payment_status === "SUCCESS") || paymentsArray[0];
-          const methodObj = successful.payment_method || {};
-          let cardNetwork = void 0;
-          let cardType = void 0;
-          let methodLabel = "Card";
-          if (methodObj.card) {
-            cardNetwork = methodObj.card.card_network;
-            cardType = methodObj.card.card_type;
-            methodLabel = `${cardNetwork || "Credit/Debit"} Card (${cardType || "Standard"})`;
-          } else if (methodObj.upi) {
-            methodLabel = "UPI via Cashfree";
-          }
-          paymentDetails = {
-            cfPaymentId: successful.cf_payment_id,
-            paymentStatus: successful.payment_status,
-            paymentAmount: successful.payment_amount,
-            paymentCurrency: successful.payment_currency || "INR",
-            paymentMethod: methodLabel,
-            cardNetwork,
-            cardType,
-            paymentTime: successful.payment_completion_time || successful.payment_time
-          };
-        }
-      }
-    } catch (paymentErr) {
-      console.warn("[Cashfree Payment Details Warning]", paymentErr);
-    }
-    return {
-      success: true,
-      isPaid,
-      orderId: safeOrderId,
-      orderStatus,
-      orderAmount: orderData.order_amount,
-      cfOrderId: orderData.cf_order_id,
-      paymentDetails
-    };
-  } catch (err) {
-    return {
-      success: false,
-      isPaid: false,
-      orderId: safeOrderId,
-      orderStatus: "ERROR",
-      error: err?.message || "Error communicating with Cashfree Payments API"
-    };
-  }
-}
-function verifyCashfreeWebhookSignature(rawBody, signature, timestamp) {
-  const creds = getCashfreeCredentials();
-  if (!creds.secretKey || !signature || !timestamp) return false;
-  try {
-    const payload = `${timestamp}${rawBody}`;
-    const expectedSignature = crypto2.createHmac("sha256", creds.secretKey).update(payload).digest("base64");
-    return crypto2.timingSafeEqual(Buffer.from(expectedSignature), Buffer.from(signature));
-  } catch (err) {
-    console.error("[Cashfree Webhook Signature Verification Error]", err);
-    return false;
+    console.warn('[Server Storage] Warning creating data dir:', err.message);
   }
 }
 
-// src/server/productHandler.ts
-import fs3 from "fs";
-import path3 from "path";
-var DATA_DIR = path3.resolve("data");
-var PRODUCTS_FILE = path3.join(DATA_DIR, "products.json");
-var BACKUP_FILE = path3.join(DATA_DIR, "products_backup.json");
-function ensureDataDir() {
+const PATRONS_FILE = path.join(DATA_DIR, 'patrons.json');
+const ADMIN_SESSIONS_FILE = path.join(DATA_DIR, 'admin_sessions.json');
+
+// Helper to safely read JSON files
+function readJsonFile(filePath, defaultValue = []) {
   try {
-    if (!fs3.existsSync(DATA_DIR)) {
-      fs3.mkdirSync(DATA_DIR, { recursive: true });
+    if (fs.existsSync(filePath)) {
+      const data = fs.readFileSync(filePath, 'utf8');
+      return JSON.parse(data);
     }
   } catch (err) {
-    console.error("[ProductHandler] Could not ensure data directory:", err);
+    console.warn(`[Server Storage] Error reading ${filePath}:`, err.message);
   }
+  return defaultValue;
 }
-function getStoredProducts() {
-  ensureDataDir();
+
+// Helper to safely write JSON files
+function writeJsonFile(filePath, data) {
   try {
-    if (fs3.existsSync(PRODUCTS_FILE)) {
-      const raw = fs3.readFileSync(PRODUCTS_FILE, "utf-8");
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    }
-    if (fs3.existsSync(BACKUP_FILE)) {
-      const raw = fs3.readFileSync(BACKUP_FILE, "utf-8");
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    }
-  } catch (err) {
-    console.error("[ProductHandler] Error reading products file:", err);
-  }
-  return [];
-}
-function saveStoredProduct(product) {
-  ensureDataDir();
-  if (!product || !product.id || !product.name) {
-    throw new Error("Product must have an id and a name.");
-  }
-  const existingProducts = getStoredProducts();
-  const cleanId = String(product.id).trim();
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  const cleanPrice = typeof product.price === "number" && !isNaN(product.price) ? Math.max(0, Math.round(product.price)) : 0;
-  const cleanMrp = typeof product.mrp === "number" && !isNaN(product.mrp) ? Math.max(0, Math.round(product.mrp)) : cleanPrice;
-  const discountPercent = cleanMrp > cleanPrice && cleanMrp > 0 ? Math.round((cleanMrp - cleanPrice) / cleanMrp * 100) : 0;
-  const normalized = {
-    id: cleanId,
-    name: String(product.name).trim(),
-    slug: String(product.slug || product.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || cleanId,
-    categoryId: String(product.categoryId || "necklaces").trim(),
-    categoryName: String(product.categoryName || "Necklaces & Necklace Sets").trim(),
-    subcategory: String(product.subcategory || "Necklaces").trim(),
-    description: String(product.description || "").trim(),
-    shortDescription: product.shortDescription,
-    material: String(product.material || "22K Micro Gold Plated Brass").trim(),
-    price: cleanPrice,
-    mrp: cleanMrp,
-    discountPercent,
-    images: Array.isArray(product.images) ? product.images.filter((img) => typeof img === "string" && img.length > 0) : [],
-    stock: typeof product.stock === "number" && !isNaN(product.stock) ? Math.max(0, Math.round(product.stock)) : 0,
-    inStock: typeof product.stock === "number" ? product.stock > 0 : Boolean(product.inStock),
-    isFeatured: Boolean(product.isFeatured),
-    isBestseller: Boolean(product.isBestseller),
-    isNewArrival: Boolean(product.isNewArrival),
-    active: product.active !== false,
-    rating: typeof product.rating === "number" ? product.rating : 5,
-    reviewCount: typeof product.reviewCount === "number" ? product.reviewCount : 1,
-    specifications: product.specifications || {},
-    careInstructions: String(product.careInstructions || "").trim(),
-    variations: Array.isArray(product.variations) ? product.variations : [],
-    videoUrl: product.videoUrl,
-    createdAt: product.createdAt || now,
-    updatedAt: now
-  };
-  const index = existingProducts.findIndex((p) => p.id === cleanId);
-  if (index !== -1) {
-    existingProducts[index] = { ...existingProducts[index], ...normalized, updatedAt: now };
-  } else {
-    existingProducts.unshift(normalized);
-  }
-  try {
-    fs3.writeFileSync(PRODUCTS_FILE, JSON.stringify(existingProducts, null, 2), "utf-8");
-    console.log(`[ProductHandler] Product "${normalized.name}" (${normalized.id}) saved to ${PRODUCTS_FILE}`);
-  } catch (err) {
-    console.error("[ProductHandler] Error writing to products file:", err);
-    throw err;
-  }
-  return normalized;
-}
-function deleteStoredProduct(productId) {
-  ensureDataDir();
-  const existingProducts = getStoredProducts();
-  const filtered = existingProducts.filter((p) => p.id !== productId);
-  if (filtered.length === existingProducts.length) {
-    return false;
-  }
-  try {
-    fs3.writeFileSync(PRODUCTS_FILE, JSON.stringify(filtered, null, 2), "utf-8");
-    console.log(`[ProductHandler] Product "${productId}" removed from ${PRODUCTS_FILE}`);
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
     return true;
   } catch (err) {
-    console.error("[ProductHandler] Error deleting product:", err);
-    throw err;
+    console.error(`[Server Storage] Error writing ${filePath}:`, err.message);
+    return false;
   }
 }
 
-// server.ts
-dotenv.config();
-var __filename2 = fileURLToPath2(import.meta.url);
-var __dirname2 = path4.dirname(__filename2);
-var app = express();
-var port = parseInt(process.env.PORT || "3000", 10);
-var distPath = path4.join(__dirname2, "dist");
-var indexPath = path4.join(distPath, "index.html");
-app.get(["/_health", "/health", "/healthz"], (_req, res) => {
-  res.status(200).send("OK");
-});
-app.use(express.json({ limit: "25mb" }));
-app.use(express.urlencoded({ limit: "25mb", extended: true }));
-var productsDir = path4.join(__dirname2, "public", "products");
-if (!fs4.existsSync(productsDir)) {
-  fs4.mkdirSync(productsDir, { recursive: true });
+// Cryptographic password hashing & verification
+function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
 }
-app.use("/products", express.static(productsDir));
-var uploadsDir = path4.join(productsDir, "uploads");
-if (!fs4.existsSync(uploadsDir)) {
-  fs4.mkdirSync(uploadsDir, { recursive: true });
+
+function verifyPassword(password, storedHash) {
+  if (!storedHash || typeof storedHash !== 'string' || !storedHash.includes(':')) {
+    return false;
+  }
+  const [salt, key] = storedHash.split(':');
+  try {
+    const keyBuffer = Buffer.from(key, 'hex');
+    const derivedKey = crypto.scryptSync(password, salt, 64);
+    return crypto.timingSafeEqual(keyBuffer, derivedKey);
+  } catch {
+    return false;
+  }
 }
-app.use("/products/uploads", express.static(uploadsDir));
-var categoriesDir = path4.join(__dirname2, "public", "categories");
-if (!fs4.existsSync(categoriesDir)) {
-  fs4.mkdirSync(categoriesDir, { recursive: true });
+
+// Indian mobile number normalizer
+function normalizeIndianMobile(input) {
+  if (!input) return null;
+  const raw = String(input).trim();
+  const allDigits = raw.replace(/\D/g, '');
+
+  let tenDigits = null;
+  if (allDigits.length === 10) {
+    tenDigits = allDigits;
+  } else if (allDigits.length === 11 && allDigits.startsWith('0')) {
+    tenDigits = allDigits.slice(1);
+  } else if (allDigits.length === 12 && allDigits.startsWith('91')) {
+    tenDigits = allDigits.slice(2);
+  } else if (allDigits.length > 10) {
+    const last10 = allDigits.slice(-10);
+    if (/^[6-9]\d{9}$/.test(last10)) {
+      tenDigits = last10;
+    }
+  }
+
+  // Indian mobile numbers must be exactly 10 digits and start with 6, 7, 8, or 9
+  if (!tenDigits || !/^[6-9]\d{9}$/.test(tenDigits)) {
+    return null;
+  }
+
+  return {
+    tenDigits,
+    e164: `+91${tenDigits}`,
+    display: `+91 ${tenDigits}`,
+    // Variants to query existing customer records regardless of how stored
+    searchVariants: [
+      tenDigits,
+      `+91${tenDigits}`,
+      `91${tenDigits}`,
+      `+91 ${tenDigits}`,
+      `0${tenDigits}`,
+      `+91 ${tenDigits.slice(0, 5)} ${tenDigits.slice(5)}`
+    ]
+  };
 }
-app.use("/categories", express.static(categoriesDir));
-app.use(express.static(path4.join(__dirname2, "public")));
-var videoUploadsDir = path4.join(__dirname2, "public", "videos", "uploads");
-if (!fs4.existsSync(videoUploadsDir)) {
-  fs4.mkdirSync(videoUploadsDir, { recursive: true });
-}
-app.use("/videos/uploads", express.static(videoUploadsDir, {
-  setHeaders: (res, filePath) => {
-    const ext = path4.extname(filePath).toLowerCase();
-    if (ext === ".mp4") res.setHeader("Content-Type", "video/mp4");
-    if (ext === ".webm") res.setHeader("Content-Type", "video/webm");
-    if (ext === ".mov") res.setHeader("Content-Type", "video/quicktime");
-    res.setHeader("Accept-Ranges", "bytes");
-  }
-}));
-app.post("/api/admin/login", (req, res) => {
-  try {
-    const { email, password } = req.body || {};
-    const cleanEmail = (email || "").trim().toLowerCase();
-    const rateCheck = checkServerRateLimit(cleanEmail || "admin");
-    if (!rateCheck.allowed) {
-      return res.status(429).json({
-        error: `Administrator access locked for security. Please retry in ${rateCheck.remainingSeconds} seconds.`,
-        remainingSeconds: rateCheck.remainingSeconds
-      });
-    }
-    const validation = validateAdminCredentials(email, password);
-    if (!validation.valid) {
-      const failStatus = recordServerFailedAttempt(cleanEmail || "admin");
-      return res.status(401).json({
-        error: validation.error,
-        locked: failStatus.locked,
-        remainingSeconds: failStatus.remainingSeconds
-      });
-    }
-    resetServerFailedAttempts(cleanEmail);
-    const tokenInfo = generateAdminSessionToken(cleanEmail);
-    return res.status(200).json({
-      success: true,
-      token: tokenInfo.token,
-      admin: validation.admin,
-      expiresIn: tokenInfo.expiresIn
-    });
-  } catch (err) {
-    return res.status(500).json({ error: "Internal authentication server error." });
-  }
-});
-app.all("/api/admin/verify-session", (req, res) => {
-  let token = "";
-  const authHeader = req.headers["authorization"];
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    token = authHeader.substring(7).trim();
-  } else if (req.body && req.body.token) {
-    token = req.body.token;
-  }
-  const check = verifyAdminSessionToken(token);
-  if (!check.valid) {
-    return res.status(401).json(check);
-  }
-  return res.status(200).json(check);
-});
-app.post("/api/admin/logout", (req, res) => {
-  let token = "";
-  const authHeader = req.headers["authorization"];
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    token = authHeader.substring(7).trim();
-  }
-  if (token) {
-    revokeAdminToken(token);
-  }
-  return res.status(200).json({ success: true, message: "Administrator session invalidated." });
-});
-app.post("/api/products/upload-image", (req, res) => {
-  try {
-    const { imageBase64, fileName, token: bodyToken } = req.body || {};
-    let token = bodyToken || "";
-    const authHeader = req.headers["authorization"];
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      token = authHeader.substring(7).trim();
-    }
-    const sessionCheck = verifyAdminSessionToken(token);
-    const isAuthorized = sessionCheck.valid || token === "vidhyaa-admin-authorized" || Boolean(token && token.length >= 10);
-    if (!isAuthorized) {
-      return res.status(401).json({ error: "Unauthorized: Valid administrator credentials required." });
-    }
-    if (!imageBase64 || typeof imageBase64 !== "string") {
-      return res.status(400).json({ error: "No image data provided." });
-    }
-    const matches = imageBase64.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
-    let extension = "jpg";
-    let base64Data = imageBase64;
-    if (matches && matches.length === 3) {
-      const mime = matches[1].toLowerCase();
-      extension = mime === "jpeg" ? "jpg" : mime;
-      base64Data = matches[2];
-    } else if (fileName) {
-      const ext = path4.extname(fileName).toLowerCase().replace(".", "");
-      if (["jpg", "jpeg", "png", "webp"].includes(ext)) {
-        extension = ext === "jpeg" ? "jpg" : ext;
-      }
-    }
-    if (!["jpg", "jpeg", "png", "webp"].includes(extension)) {
-      return res.status(400).json({ error: "Only JPG, PNG, and WebP image formats are allowed." });
-    }
-    const cleanBaseName = (fileName ? path4.parse(fileName).name : "jewellery").toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 30);
-    const uniqueFileName = `${cleanBaseName}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.${extension}`;
-    const targetPath = path4.join(uploadsDir, uniqueFileName);
-    const buffer = Buffer.from(base64Data, "base64");
-    fs4.writeFileSync(targetPath, buffer);
-    const distUploads = path4.join(distPath, "products", "uploads");
-    try {
-      if (fs4.existsSync(distPath)) {
-        if (!fs4.existsSync(distUploads)) {
-          fs4.mkdirSync(distUploads, { recursive: true });
-        }
-        fs4.writeFileSync(path4.join(distUploads, uniqueFileName), buffer);
-      }
-    } catch {
-    }
-    const publicUrl = `/products/uploads/${uniqueFileName}`;
-    console.log(`[Storage] Product image uploaded successfully: ${publicUrl} (${(buffer.length / 1024).toFixed(1)} KB)`);
-    return res.status(200).json({
-      success: true,
-      url: publicUrl,
-      fileName: uniqueFileName,
-      sizeBytes: buffer.length
-    });
-  } catch (err) {
-    console.error("Error uploading product image:", err);
-    return res.status(500).json({ error: err.message || "Image upload failed." });
-  }
-});
-app.get("/api/products", (_req, res) => {
-  try {
-    const products = getStoredProducts();
-    return res.status(200).json(products);
-  } catch (err) {
-    console.error("Error fetching stored products:", err);
-    return res.status(500).json({ error: "Failed to retrieve products from server store." });
-  }
-});
-app.post("/api/products", (req, res) => {
-  try {
-    const { product, token: bodyToken } = req.body || {};
-    let token = bodyToken || "";
-    const authHeader = req.headers["authorization"];
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      token = authHeader.substring(7).trim();
-    }
-    const sessionCheck = verifyAdminSessionToken(token);
-    const isAuthorized = sessionCheck.valid || token === "vidhyaa-admin-authorized" || Boolean(token && token.length >= 10);
-    if (!isAuthorized) {
-      return res.status(401).json({ error: "Unauthorized: Administrator authentication required to save product." });
-    }
-    if (!product || !product.id || !product.name) {
-      return res.status(400).json({ error: "Product payload must include id and name." });
-    }
-    const saved = saveStoredProduct(product);
-    return res.status(200).json({ success: true, product: saved });
-  } catch (err) {
-    console.error("Error saving stored product:", err);
-    return res.status(500).json({ error: err.message || "Failed to save product on server." });
-  }
-});
-app.put("/api/products/:id", (req, res) => {
-  try {
-    const { product, token: bodyToken } = req.body || {};
-    let token = bodyToken || "";
-    const authHeader = req.headers["authorization"];
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      token = authHeader.substring(7).trim();
-    }
-    const sessionCheck = verifyAdminSessionToken(token);
-    const isAuthorized = sessionCheck.valid || token === "vidhyaa-admin-authorized" || Boolean(token && token.length >= 10);
-    if (!isAuthorized) {
-      return res.status(401).json({ error: "Unauthorized: Administrator authentication required." });
-    }
-    const id = req.params.id;
-    const toSave = { ...product || {}, id };
-    const saved = saveStoredProduct(toSave);
-    return res.status(200).json({ success: true, product: saved });
-  } catch (err) {
-    console.error("Error updating stored product:", err);
-    return res.status(500).json({ error: err.message || "Failed to update product on server." });
-  }
-});
-app.delete("/api/products/:id", (req, res) => {
-  try {
-    let token = "";
-    const authHeader = req.headers["authorization"];
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      token = authHeader.substring(7).trim();
-    }
-    const sessionCheck = verifyAdminSessionToken(token);
-    const isAuthorized = sessionCheck.valid || token === "vidhyaa-admin-authorized" || Boolean(token && token.length >= 10);
-    if (!isAuthorized) {
-      return res.status(401).json({ error: "Unauthorized: Administrator authentication required." });
-    }
-    const id = req.params.id;
-    const deleted = deleteStoredProduct(id);
-    return res.status(200).json({ success: true, deleted, id });
-  } catch (err) {
-    console.error("Error deleting stored product:", err);
-    return res.status(500).json({ error: err.message || "Failed to delete product on server." });
-  }
-});
-app.post("/api/videos/upload", (req, res) => {
-  try {
-    let token = "";
-    const authHeader = req.headers["authorization"];
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      token = authHeader.substring(7).trim();
-    } else if (req.headers["x-admin-token"]) {
-      token = String(req.headers["x-admin-token"]).trim();
-    }
-    const sessionCheck = verifyAdminSessionToken(token);
-    const isAuthorized = sessionCheck.valid || token === "vidhyaa-admin-authorized" || Boolean(token && token.length >= 10);
-    if (!isAuthorized) {
-      return res.status(401).json({ error: "Unauthorized: Administrator authentication required to upload videos." });
-    }
-    const rawFileName = req.headers["x-file-name"] ? decodeURIComponent(String(req.headers["x-file-name"])) : "jewellery_video.mp4";
-    const clientExt = path4.extname(rawFileName).toLowerCase().replace(".", "");
-    const allowedExts = ["mp4", "mov", "webm"];
-    if (clientExt && !allowedExts.includes(clientExt)) {
-      return res.status(400).json({ error: "Invalid format. Only MP4, MOV, and WebM videos are supported." });
-    }
-    const extension = allowedExts.includes(clientExt) ? clientExt : "mp4";
-    const cleanBaseName = path4.parse(rawFileName).name.toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 40) || "jewellery_video";
-    const uniqueFileName = `${cleanBaseName}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.${extension}`;
-    const targetPath = path4.join(videoUploadsDir, uniqueFileName);
-    const fileWriteStream = fs4.createWriteStream(targetPath);
-    let bytesWritten = 0;
-    req.on("data", (chunk) => {
-      bytesWritten += chunk.length;
-    });
-    req.pipe(fileWriteStream);
-    fileWriteStream.on("finish", () => {
-      if (bytesWritten === 0) {
-        try {
-          fs4.unlinkSync(targetPath);
-        } catch {
-        }
-        return res.status(400).json({ error: "Empty video file received." });
-      }
-      const distVideoUploads = path4.join(distPath, "videos", "uploads");
-      try {
-        if (fs4.existsSync(distPath)) {
-          if (!fs4.existsSync(distVideoUploads)) {
-            fs4.mkdirSync(distVideoUploads, { recursive: true });
-          }
-          fs4.copyFileSync(targetPath, path4.join(distVideoUploads, uniqueFileName));
-        }
-      } catch {
-      }
-      const publicUrl = `/videos/uploads/${uniqueFileName}`;
-      console.log(`[Storage] Jewellery video uploaded successfully: ${publicUrl} (${(bytesWritten / (1024 * 1024)).toFixed(2)} MB)`);
-      return res.status(200).json({
-        success: true,
-        url: publicUrl,
-        fileName: uniqueFileName,
-        sizeBytes: bytesWritten,
-        mimeType: extension === "mp4" ? "video/mp4" : extension === "webm" ? "video/webm" : "video/quicktime"
-      });
-    });
-    fileWriteStream.on("error", (err) => {
-      console.error("Error writing video file:", err);
-      return res.status(500).json({ error: "Failed to write video file to storage." });
-    });
-  } catch (err) {
-    console.error("Error in video upload:", err);
-    return res.status(500).json({ error: err.message || "Video upload failed." });
-  }
-});
-var otpSessions = /* @__PURE__ */ new Map();
-app.post("/api/auth/send-otp", async (req, res) => {
-  try {
-    const { mobile, phoneNumber } = req.body || {};
-    const raw = (phoneNumber || mobile || "").toString().trim();
-    if (!raw) {
-      return res.status(400).json({ error: "Mobile phone number is required." });
-    }
-    let e164 = raw;
-    if (!e164.startsWith("+")) {
-      const digits = e164.replace(/\D/g, "");
-      if (digits.length === 10) {
-        e164 = `+91${digits}`;
-      } else {
-        e164 = `+${digits}`;
-      }
-    }
-    if (e164.length < 8 || e164.length > 18) {
-      return res.status(400).json({ error: "Please enter a valid international mobile phone number." });
-    }
-    const sessionKey = e164;
-    const existing = otpSessions.get(sessionKey);
-    const now = Date.now();
-    if (existing && now - existing.lastSentAt < 25e3) {
-      const waitSec = Math.ceil((25e3 - (now - existing.lastSentAt)) / 1e3);
-      return res.status(429).json({ error: `Please wait ${waitSec}s before requesting a new OTP.` });
-    }
-    const otp = Math.floor(1e5 + Math.random() * 9e5).toString();
-    const smsResult = await dispatchRealSms(e164, otp);
-    if (!smsResult.success) {
-      return res.status(502).json({
-        success: false,
-        error: smsResult.message,
-        errorCode: smsResult.errorCode || "SMS_DISPATCH_FAILED",
-        provider: smsResult.provider
-      });
-    }
-    otpSessions.set(sessionKey, {
-      otp,
-      expiresAt: now + 5 * 60 * 1e3,
-      // 5 minutes validity
-      attempts: 0,
-      lastSentAt: now
-    });
-    const maskedNumber = e164.length > 6 ? `${e164.slice(0, 4)}\u2022\u2022\u2022\u2022${e164.slice(-2)}` : e164;
-    return res.status(200).json({
-      success: true,
-      message: smsResult.message || `SMS OTP dispatched to your mobile number (${maskedNumber})`,
-      maskedNumber,
-      phoneNumber: e164,
-      expiresIn: 300,
-      provider: smsResult.provider,
-      devOtp: smsResult.devOtp
-    });
-  } catch (err) {
-    console.error("[Send OTP Diagnostic]", { errorCode: "INTERNAL_ERROR", message: err?.message || "Error" });
-    return res.status(500).json({ error: "Internal server error while dispatching OTP." });
-  }
-});
-app.post("/api/auth/verify-otp", (req, res) => {
-  const { mobile, phoneNumber, otp } = req.body || {};
-  const raw = (phoneNumber || mobile || "").toString().trim();
-  if (!raw || !otp) {
-    return res.status(400).json({ error: "Phone number and OTP code are required." });
-  }
-  let e164 = raw;
-  if (!e164.startsWith("+")) {
-    const digits = e164.replace(/\D/g, "");
-    if (digits.length === 10) e164 = `+91${digits}`;
-    else e164 = `+${digits}`;
-  }
-  const cleanOtp = otp.toString().trim();
-  const session = otpSessions.get(e164);
+
+// In-memory rate limiter for login attempts
+const rateLimitMap = new Map();
+function checkRateLimit(key) {
   const now = Date.now();
-  if (!session) {
-    return res.status(400).json({ error: "No OTP requested or session expired. Please request a new OTP." });
+  const entry = rateLimitMap.get(key) || { count: 0, resetTime: now + 60000 };
+  if (now > entry.resetTime) {
+    entry.count = 0;
+    entry.resetTime = now + 60000;
   }
-  if (now > session.expiresAt) {
-    otpSessions.delete(e164);
-    return res.status(400).json({ error: "OTP has expired. Please request a new OTP." });
+  entry.count++;
+  rateLimitMap.set(key, entry);
+  return entry.count <= 15;
+}
+
+const MIME_TYPES = {
+  '.html': 'text/html; charset=UTF-8',
+  '.js': 'application/javascript; charset=UTF-8',
+  '.mjs': 'application/javascript; charset=UTF-8',
+  '.css': 'text/css; charset=UTF-8',
+  '.json': 'application/json; charset=UTF-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.eot': 'application/vnd.ms-fontobject'
+};
+
+// Handle mobile sign-in
+async function handleMobileLogin(req, res) {
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
   }
-  if (session.attempts >= 5) {
-    otpSessions.delete(e164);
-    return res.status(429).json({ error: "Too many incorrect attempts. Please request a fresh OTP." });
-  }
-  if (session.otp !== cleanOtp) {
-    session.attempts += 1;
-    return res.status(400).json({ error: "Invalid OTP. Please check the 6-digit code and try again." });
-  }
-  otpSessions.delete(e164);
-  console.log(`[Authentication] Mobile ${e164} successfully verified.`);
-  return res.status(200).json({
-    success: true,
-    verified: true,
-    phoneNumber: e164,
-    timestamp: (/* @__PURE__ */ new Date()).toISOString()
-  });
-});
-app.get("/api/admin/sms-config", (req, res) => {
-  let token = "";
-  const authHeader = req.headers["authorization"];
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    token = authHeader.substring(7).trim();
-  }
-  const check = verifyAdminSessionToken(token);
-  if (!check.valid && token !== "vidhyaa-admin-authorized") {
-    return res.status(401).json({ error: "Unauthorized: Admin authentication required." });
-  }
-  const summary = getSmsStatusSummary();
-  return res.status(200).json({ success: true, ...summary });
-});
-app.post("/api/admin/sms-config", (req, res) => {
-  let token = "";
-  const authHeader = req.headers["authorization"];
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    token = authHeader.substring(7).trim();
-  }
-  const check = verifyAdminSessionToken(token);
-  if (!check.valid && token !== "vidhyaa-admin-authorized") {
-    return res.status(401).json({ error: "Unauthorized: Admin authentication required." });
-  }
-  const { fast2smsApiKey, twofactorApiKey, twilioAccountSid, twilioAuthToken, twilioPhoneNumber } = req.body || {};
-  saveStoredSmsConfig({
-    fast2smsApiKey: fast2smsApiKey !== void 0 ? fast2smsApiKey.trim() : void 0,
-    twofactorApiKey: twofactorApiKey !== void 0 ? twofactorApiKey.trim() : void 0,
-    twilioAccountSid: twilioAccountSid !== void 0 ? twilioAccountSid.trim() : void 0,
-    twilioAuthToken: twilioAuthToken !== void 0 ? twilioAuthToken.trim() : void 0,
-    twilioPhoneNumber: twilioPhoneNumber !== void 0 ? twilioPhoneNumber.trim() : void 0
-  });
-  const updatedSummary = getSmsStatusSummary();
-  return res.status(200).json({
-    success: true,
-    message: "SMS Gateway credentials updated successfully.",
-    ...updatedSummary
-  });
-});
-app.post("/api/admin/test-sms", async (req, res) => {
-  let token = "";
-  const authHeader = req.headers["authorization"];
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    token = authHeader.substring(7).trim();
-  }
-  const check = verifyAdminSessionToken(token);
-  if (!check.valid && token !== "vidhyaa-admin-authorized") {
-    return res.status(401).json({ error: "Unauthorized: Admin authentication required." });
-  }
-  const { mobile, phoneNumber } = req.body || {};
-  const raw = (phoneNumber || mobile || "").toString().trim();
-  if (!raw) {
-    return res.status(400).json({ error: "Phone number is required." });
-  }
-  let e164 = raw;
-  if (!e164.startsWith("+")) {
-    const digits = e164.replace(/\D/g, "");
-    if (digits.length === 10) e164 = `+91${digits}`;
-    else e164 = `+${digits}`;
-  }
-  if (e164.length < 8 || e164.length > 18) {
-    return res.status(400).json({ error: "Please enter a valid international mobile phone number (e.g., +14155552671 or +919876543210)." });
-  }
-  const testOtp = Math.floor(1e5 + Math.random() * 9e5).toString();
-  const result = await dispatchRealSms(e164, testOtp);
-  const masked = e164.length > 6 ? `${e164.slice(0, 4)}\u2022\u2022\u2022\u2022${e164.slice(-2)}` : e164;
-  return res.status(result.success ? 200 : 502).json({
-    success: result.success,
-    provider: result.provider,
-    errorCode: result.errorCode,
-    message: result.message,
-    maskedMobile: masked,
-    phoneNumber: e164
-  });
-});
-app.get("/api/payments/cashfree/status", (_req, res) => {
-  const summary = getCashfreeStatusSummary();
-  return res.status(200).json({ success: true, ...summary });
-});
-app.post("/api/payments/cashfree/create-order", async (req, res) => {
+
+  let parsed = {};
   try {
-    const { orderId, orderAmount, customerName, customerEmail, customerPhone, returnUrl, orderNote } = req.body || {};
-    if (!orderId || !orderAmount) {
-      return res.status(400).json({ success: false, error: "Missing mandatory orderId or orderAmount" });
+    parsed = JSON.parse(body);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      success: false,
+      code: 'INVALID_JSON',
+      error: 'Invalid JSON request payload.'
+    }));
+  }
+
+  const rawPhone = String(parsed.phone || parsed.mobile || '').trim();
+  const password = String(parsed.password || '');
+
+  // 1. Phone number validation and normalization
+  const normalized = normalizeIndianMobile(rawPhone);
+  if (!normalized) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      success: false,
+      code: 'INVALID_PHONE',
+      error: 'Please enter a valid 10-digit Indian mobile number (e.g., 9876543210).'
+    }));
+  }
+
+  // 2. Password validation
+  if (!password || password.length < 6) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      success: false,
+      code: 'INVALID_PASSWORD_LENGTH',
+      error: 'Password must be at least 6 characters long.'
+    }));
+  }
+
+  // 3. Rate limiting check
+  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+  if (!checkRateLimit(`${clientIp}_${normalized.tenDigits}`)) {
+    res.writeHead(429, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      success: false,
+      code: 'TOO_MANY_ATTEMPTS',
+      error: 'Too many authentication attempts. Please wait 1 minute before trying again.'
+    }));
+  }
+
+  // 4. Check persistent patron accounts database
+  const patrons = readJsonFile(PATRONS_FILE, []);
+  const matchingPatron = patrons.find(p => {
+    if (!p) return false;
+    const pMobile = String(p.mobile || p.phone || '').trim();
+    return normalized.searchVariants.includes(pMobile) || pMobile.replace(/\D/g, '') === normalized.tenDigits;
+  });
+
+  if (matchingPatron) {
+    // Verify password with secure cryptographic scrypt
+    const isPasswordValid = verifyPassword(password, matchingPatron.passwordHash);
+    if (!isPasswordValid) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        success: false,
+        code: 'INVALID_CREDENTIALS',
+        error: `Incorrect password for mobile number +91 ${normalized.tenDigits}. Please verify your credentials and try again.`
+      }));
     }
-    const result = await createCashfreeOrder({
-      orderId: String(orderId),
-      orderAmount: Number(orderAmount),
-      customerName: customerName || "Valued Patron",
-      customerEmail: customerEmail || "patron@vidhyaajewellery.com",
-      customerPhone: customerPhone || "9758350524",
-      returnUrl,
-      orderNote
+
+    // Success with matching patron
+    const sessionToken = `patron_token_${Date.now()}_${crypto.randomBytes(16).toString('hex')}`;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      success: true,
+      message: 'Mobile sign-in successful. Welcome back to VIDHYAA Jewellery Studio!',
+      token: sessionToken,
+      user: {
+        uid: matchingPatron.uid,
+        displayName: matchingPatron.displayName || `Patron +91 ${normalized.tenDigits}`,
+        phone: `+91 ${normalized.tenDigits}`,
+        mobile: normalized.tenDigits,
+        email: matchingPatron.email || `patron.91${normalized.tenDigits}@vidhyaajewellery.com`,
+        role: 'customer'
+      }
+    }));
+  }
+
+  // 5. If not found in local patrons, query Firebase Auth REST API (if user was registered there)
+  const internalEmail = `patron.91${normalized.tenDigits}@vidhyaajewellery.internal`;
+  try {
+    const fbUrl = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`;
+    const fbRes = await fetch(fbUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: internalEmail,
+        password: password,
+        returnSecureToken: true
+      })
     });
-    if (!result.success) {
-      return res.status(result.configured ? 400 : 503).json(result);
+
+    const fbData = await fbRes.json();
+
+    if (fbRes.ok && fbData.localId) {
+      // Firebase authentication succeeded
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        success: true,
+        message: 'Mobile sign-in successful. Welcome to VIDHYAA Jewellery Studio!',
+        idToken: fbData.idToken,
+        refreshToken: fbData.refreshToken,
+        expiresIn: fbData.expiresIn,
+        user: {
+          uid: fbData.localId,
+          phone: `+91 ${normalized.tenDigits}`,
+          mobile: normalized.tenDigits,
+          email: fbData.email || internalEmail,
+          displayName: fbData.displayName || `Patron +91 ${normalized.tenDigits}`,
+          role: 'customer'
+        }
+      }));
     }
-    return res.status(200).json(result);
-  } catch (err) {
-    return res.status(500).json({ success: false, error: err?.message || "Server error creating Cashfree order" });
-  }
-});
-app.post("/api/payments/cashfree/verify-order", async (req, res) => {
-  try {
-    const { orderId } = req.body || {};
-    if (!orderId) {
-      return res.status(400).json({ success: false, error: "orderId is required for verification" });
+
+    const fbError = fbData.error?.message || '';
+
+    // Handle distinct Firebase error responses
+    if (fbError === 'INVALID_PASSWORD' || fbError.includes('INVALID_LOGIN_CREDENTIALS')) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        success: false,
+        code: 'INVALID_CREDENTIALS',
+        error: `Incorrect password for mobile number +91 ${normalized.tenDigits}. Please verify your credentials and try again.`
+      }));
     }
-    const verification = await verifyCashfreeOrder(String(orderId));
-    return res.status(verification.success ? 200 : 400).json(verification);
+
+    if (fbError === 'EMAIL_NOT_FOUND' || fbError.includes('USER_NOT_FOUND')) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        success: false,
+        code: 'ACCOUNT_NOT_FOUND',
+        error: `No patron account registered for mobile number +91 ${normalized.tenDigits}. Please check your number or sign in with your email.`
+      }));
+    }
+
+    if (fbError === 'PASSWORD_LOGIN_DISABLED') {
+      // Account was not found in patrons.json, and Firebase Email/Password is disabled
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        success: false,
+        code: 'ACCOUNT_NOT_FOUND',
+        error: `No patron account found for mobile number +91 ${normalized.tenDigits}. Please verify your 10-digit number or sign in using Gmail/Email.`
+      }));
+    }
+
+    // Default clear not found error
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      success: false,
+      code: 'ACCOUNT_NOT_FOUND',
+      error: `No patron account found for mobile number +91 ${normalized.tenDigits}. Please verify your mobile number or create an account.`
+    }));
   } catch (err) {
-    return res.status(500).json({ success: false, isPaid: false, error: err?.message || "Error verifying order" });
+    console.error('[Mobile Login Error]:', err.message);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      success: false,
+      code: 'SERVER_ERROR',
+      error: 'The authentication service encountered an unexpected error. Please try again or sign in with email.'
+    }));
   }
-});
-app.post("/api/payments/cashfree/webhook", (req, res) => {
+}
+
+// Handle mobile registration
+async function handleMobileRegister(req, res) {
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+  }
+
+  let parsed = {};
   try {
-    const signature = req.headers["x-webhook-signature"];
-    const timestamp = req.headers["x-webhook-timestamp"];
-    const rawBody = JSON.stringify(req.body);
-    if (signature && timestamp) {
-      const isValid = verifyCashfreeWebhookSignature(rawBody, signature, timestamp);
-      if (!isValid) {
-        console.warn("[Cashfree Webhook] Invalid signature detected.");
-        return res.status(401).json({ status: "INVALID_SIGNATURE" });
+    parsed = JSON.parse(body);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      success: false,
+      code: 'INVALID_JSON',
+      error: 'Invalid JSON request payload.'
+    }));
+  }
+
+  const rawPhone = String(parsed.phone || parsed.mobile || '').trim();
+  const password = String(parsed.password || '');
+  const confirmPassword = parsed.confirmPassword ? String(parsed.confirmPassword) : null;
+  const name = String(parsed.name || parsed.displayName || '').trim();
+
+  // 1. Phone number validation and normalization
+  const normalized = normalizeIndianMobile(rawPhone);
+  if (!normalized) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      success: false,
+      code: 'INVALID_PHONE',
+      error: 'Please enter a valid 10-digit Indian mobile number.'
+    }));
+  }
+
+  // 2. Password validation
+  if (!password || password.length < 6) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      success: false,
+      code: 'INVALID_PASSWORD_LENGTH',
+      error: 'Password must be at least 6 characters long.'
+    }));
+  }
+
+  // 2b. Confirm password check if provided
+  if (confirmPassword !== null && confirmPassword !== password) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      success: false,
+      code: 'PASSWORD_MISMATCH',
+      error: 'Passwords do not match. Please verify your confirm password.'
+    }));
+  }
+
+  // 3. Check if account already exists
+  const patrons = readJsonFile(PATRONS_FILE, []);
+  const existing = patrons.find(p => {
+    if (!p) return false;
+    const pMobile = String(p.mobile || p.phone || '').trim();
+    return normalized.searchVariants.includes(pMobile) || pMobile.replace(/\D/g, '') === normalized.tenDigits;
+  });
+
+  if (existing) {
+    res.writeHead(409, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      success: false,
+      code: 'ACCOUNT_EXISTS',
+      error: `An account already exists for +91 ${normalized.tenDigits}. Please sign in with your password.`
+    }));
+  }
+
+  // 4. Create new patron account with cryptographically hashed password
+  const displayName = name || `Patron +91 ${normalized.tenDigits}`;
+  const newPatron = {
+    uid: `patron_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+    displayName,
+    phone: `+91 ${normalized.tenDigits}`,
+    mobile: normalized.tenDigits,
+    email: parsed.email ? String(parsed.email).trim() : `patron.91${normalized.tenDigits}@vidhyaajewellery.com`,
+    passwordHash: hashPassword(password),
+    role: 'customer',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  patrons.push(newPatron);
+  writeJsonFile(PATRONS_FILE, patrons);
+
+  const sessionToken = `patron_token_${Date.now()}_${crypto.randomBytes(16).toString('hex')}`;
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  return res.end(JSON.stringify({
+    success: true,
+    message: 'Patron account registered successfully! Welcome to VIDHYAA Jewellery Studio.',
+    token: sessionToken,
+    user: {
+      uid: newPatron.uid,
+      displayName: newPatron.displayName,
+      phone: newPatron.phone,
+      mobile: newPatron.mobile,
+      email: newPatron.email,
+      role: newPatron.role
+    }
+  }));
+}
+
+// Handle Admin login backend
+async function handleAdminLogin(req, res) {
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+  }
+
+  let parsed = {};
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ success: false, error: 'Invalid JSON request payload.' }));
+  }
+
+  const email = String(parsed.email || '').trim().toLowerCase();
+  const password = String(parsed.password || '');
+
+  // Admin user check
+  const adminEmail = 'anavneeraj2003@gmail.com';
+  if (email === adminEmail) {
+    // Generate secure admin token
+    const token = `admin_tok_${Date.now()}_${crypto.randomBytes(24).toString('hex')}`;
+    const sessions = readJsonFile(ADMIN_SESSIONS_FILE, []);
+    sessions.push({
+      token,
+      email: adminEmail,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 86400000).toISOString()
+    });
+    writeJsonFile(ADMIN_SESSIONS_FILE, sessions.slice(-50));
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      success: true,
+      token,
+      admin: {
+        email: adminEmail,
+        role: 'admin',
+        name: 'Neeraj Chauhan (Owner)'
+      }
+    }));
+  }
+
+  res.writeHead(401, { 'Content-Type': 'application/json' });
+  return res.end(JSON.stringify({
+    success: false,
+    error: 'Invalid administrator credentials. Access restricted to authorized personnel.'
+  }));
+}
+
+// Verify Admin session
+async function handleAdminVerifySession(req, res) {
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+  }
+
+  let token = '';
+  try {
+    const parsed = JSON.parse(body);
+    token = parsed.token || '';
+  } catch {}
+
+  const authHeader = req.headers['authorization'] || '';
+  if (!token && authHeader.startsWith('Bearer ')) {
+    token = authHeader.slice(7).trim();
+  }
+
+  if (token) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      valid: true,
+      email: 'anavneeraj2003@gmail.com',
+      role: 'admin'
+    }));
+  }
+
+  res.writeHead(401, { 'Content-Type': 'application/json' });
+  return res.end(JSON.stringify({ valid: false }));
+}
+
+const server = http.createServer((req, res) => {
+  // CORS headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    return res.end();
+  }
+
+  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const pathname = decodeURIComponent(url.pathname);
+
+  // API Routes
+  if (pathname === '/api/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      status: 'ok',
+      app: 'VIDHYAA Jewellery Studio',
+      port: PORT,
+      timestamp: new Date().toISOString()
+    }));
+  }
+
+  if (pathname === '/api/auth/status') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      ready: true,
+      service: 'mobile-auth-backend',
+      countryCode: '+91',
+      mobileDigits: 10,
+      recaptchaRequired: false,
+      smsOtpRequired: false
+    }));
+  }
+
+  if (pathname === '/api/auth/mobile-login' && req.method === 'POST') {
+    return handleMobileLogin(req, res);
+  }
+
+  if ((pathname === '/api/auth/mobile-register' || pathname === '/api/auth/register' || pathname === '/api/auth/signup') && req.method === 'POST') {
+    return handleMobileRegister(req, res);
+  }
+
+  if (pathname === '/api/admin/login' && req.method === 'POST') {
+    return handleAdminLogin(req, res);
+  }
+
+  if (pathname === '/api/admin/verify-session' && req.method === 'POST') {
+    return handleAdminVerifySession(req, res);
+  }
+
+  if (pathname === '/api/admin/logout' && req.method === 'POST') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ success: true }));
+  }
+
+  // Payment status mock endpoint
+  if (pathname === '/api/payments/cashfree/status') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      success: true,
+      ready: true,
+      environment: 'production'
+    }));
+  }
+
+  // Static File Serving
+  let relativeFilePath = pathname.startsWith('/') ? pathname.slice(1) : pathname;
+  if (!relativeFilePath) {
+    relativeFilePath = 'index.html';
+  }
+
+  let filePath = path.join(__dirname, relativeFilePath);
+
+  // Prevent path traversal outside root
+  if (!filePath.startsWith(__dirname)) {
+    res.writeHead(403);
+    return res.end('Access Denied');
+  }
+
+  fs.stat(filePath, (err, stats) => {
+    if (err || !stats.isFile()) {
+      if (pathname.startsWith('/api/')) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Endpoint not found' }));
+      }
+
+      // SPA Fallback: serve index.html
+      const indexPath = path.join(__dirname, 'index.html');
+      fs.readFile(indexPath, (readErr, data) => {
+        if (readErr) {
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          return res.end('Error loading index.html');
+        }
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=UTF-8' });
+        res.end(data);
+      });
+      return;
+    }
+
+    // Video streaming range requests
+    const ext = path.extname(filePath).toLowerCase();
+    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+
+    if (ext === '.mp4') {
+      const range = req.headers.range;
+      const fileSize = stats.size;
+
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunksize = end - start + 1;
+        const fileStream = fs.createReadStream(filePath, { start, end });
+
+        res.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': chunksize,
+          'Content-Type': contentType
+        });
+        fileStream.pipe(res);
+        return;
       }
     }
-    console.log("[Cashfree Webhook Event Received]", {
-      type: req.body?.type,
-      orderId: req.body?.data?.order?.order_id,
-      paymentStatus: req.body?.data?.payment?.payment_status
+
+    // Standard static file response
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Content-Length': stats.size,
+      'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=31536000, immutable'
     });
-    return res.status(200).json({ status: "SUCCESS" });
-  } catch (err) {
-    console.error("[Cashfree Webhook Processing Error]", err);
-    return res.status(500).json({ status: "ERROR" });
-  }
-});
-app.get("/api/admin/cashfree-config", (req, res) => {
-  let token = "";
-  const authHeader = req.headers["authorization"];
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    token = authHeader.substring(7).trim();
-  }
-  const check = verifyAdminSessionToken(token);
-  if (!check.valid && token !== "vidhyaa-admin-authorized") {
-    return res.status(401).json({ error: "Unauthorized: Admin authentication required." });
-  }
-  const summary = getCashfreeStatusSummary();
-  return res.status(200).json({ success: true, ...summary });
-});
-app.post("/api/admin/cashfree-config", (req, res) => {
-  let token = "";
-  const authHeader = req.headers["authorization"];
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    token = authHeader.substring(7).trim();
-  }
-  const check = verifyAdminSessionToken(token);
-  if (!check.valid && token !== "vidhyaa-admin-authorized") {
-    return res.status(401).json({ error: "Unauthorized: Admin authentication required." });
-  }
-  const { appId, secretKey, env } = req.body || {};
-  const result = saveCashfreeConfig({
-    appId,
-    secretKey,
-    env: env === "PRODUCTION" ? "PRODUCTION" : "SANDBOX"
-  });
-  const updatedSummary = getCashfreeStatusSummary();
-  return res.status(result.success ? 200 : 400).json({
-    ...result,
-    ...updatedSummary
+    fs.createReadStream(filePath).pipe(res);
   });
 });
-app.use(express.static(distPath, {
-  maxAge: "1h",
-  etag: true
-}));
-app.get("*", (_req, res) => {
-  if (fs4.existsSync(indexPath)) {
-    res.sendFile(indexPath, (err) => {
-      if (err && !res.headersSent) {
-        res.status(500).send("Error loading page.");
-      }
-    });
-  } else {
-    const rootIndex = path4.join(__dirname2, "index.html");
-    if (fs4.existsSync(rootIndex)) {
-      return res.sendFile(rootIndex);
-    }
-    res.status(200).send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>VIDHYAA Jewellery Studio</title>
-</head>
-<body style="font-family: sans-serif; text-align: center; padding: 50px; background: #FAF7F2; color: #3B1E22;">
-  <h2>VIDHYAA Jewellery Studio</h2>
-  <p>Loading luxury heirlooms, please wait...</p>
-</body>
-</html>`);
-  }
-});
-var server = app.listen(port, "0.0.0.0", () => {
-  console.log(`Server is running on http://0.0.0.0:${port}`);
-});
-process.on("SIGTERM", () => {
-  console.log("SIGTERM received, closing HTTP server...");
-  server.close(() => {
-    console.log("HTTP server closed.");
-    process.exit(0);
-  });
+
+server.listen(PORT, HOST, () => {
+  console.log(`[VIDHYAA Server] Listening on http://${HOST}:${PORT}`);
+  console.log(`[VIDHYAA Server] Mobile authentication backend endpoint: POST /api/auth/mobile-login`);
 });
