@@ -586,6 +586,9 @@ const server = http.createServer((req, res) => {
   }
 
   let filePath = path.join(__dirname, relativeFilePath);
+  if (!fs.existsSync(filePath) && fs.existsSync(path.join(__dirname, 'dist', relativeFilePath))) {
+    filePath = path.join(__dirname, 'dist', relativeFilePath);
+  }
 
   // Prevent path traversal outside root
   if (!filePath.startsWith(__dirname)) {
