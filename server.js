@@ -643,11 +643,15 @@ const server = http.createServer((req, res) => {
     }
 
     // Standard static file response
-    res.writeHead(200, {
+    const staticHeaders = {
       'Content-Type': contentType,
       'Content-Length': stats.size,
       'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=31536000, immutable'
-    });
+    };
+    if (ext === '.mp4') {
+      staticHeaders['Accept-Ranges'] = 'bytes';
+    }
+    res.writeHead(200, staticHeaders);
     fs.createReadStream(filePath).pipe(res);
   });
 });

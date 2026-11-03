@@ -40,8 +40,9 @@ function staticAssetsPlugin() {
         }
       }
 
-      // Root media assets
+      // Root media assets and server config
       const files = [
+        '.htaccess',
         'google-pay-logo.svg',
         'google-pay-mark.svg',
         'hero section image.png',
