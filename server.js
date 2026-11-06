@@ -7,11 +7,14 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.NGINX_PORT ? (parseInt(process.env.DEFAULT_APP_PORT, 10) || 3000) : (parseInt(process.env.PORT, 10) || 3000);
 const HOST = '0.0.0.0';
 
 // Firebase project web API key
 const FIREBASE_API_KEY = process.env.VITE_FIREBASE_API_KEY || 'AIzaSyBLPj2e2dCfXiFM_lI_TIpMAc2ShzJ1p_4';
+
+// Persistent storage paths
+const PRODUCTS_FILE = path.join(__dirname, 'data', 'products.json');
 
 // Ensure data directory exists for persistent storage
 const DATA_DIR = path.join(__dirname, 'data');
@@ -25,6 +28,7 @@ if (!fs.existsSync(DATA_DIR)) {
 
 const PATRONS_FILE = path.join(DATA_DIR, 'patrons.json');
 const ADMIN_SESSIONS_FILE = path.join(DATA_DIR, 'admin_sessions.json');
+const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
 
 // Helper to safely read JSON files
 function readJsonFile(filePath, defaultValue = []) {
@@ -511,11 +515,201 @@ async function handleAdminVerifySession(req, res) {
   return res.end(JSON.stringify({ valid: false }));
 }
 
+// Orders Handlers
+function handleGetOrders(req, res) {
+  const orders = readJsonFile(ORDERS_FILE, []);
+  res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+  res.end(JSON.stringify(orders));
+}
+
+function handleGetSingleOrder(req, res, idOrNum) {
+  const orders = readJsonFile(ORDERS_FILE, []);
+  const found = orders.find(o => o.id === idOrNum || o.orderNumber === idOrNum);
+  if (found) {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    return res.end(JSON.stringify(found));
+  }
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  return res.end(JSON.stringify({ error: 'Order not found' }));
+}
+
+async function handleCreateOrder(req, res) {
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+  }
+  try {
+    const newOrder = JSON.parse(body);
+    const orders = readJsonFile(ORDERS_FILE, []);
+    const idx = orders.findIndex(o => o.id === newOrder.id || (o.orderNumber && o.orderNumber === newOrder.orderNumber));
+    if (idx !== -1) {
+      orders[idx] = { ...orders[idx], ...newOrder, updatedAt: new Date().toISOString() };
+    } else {
+      orders.unshift({ ...newOrder, createdAt: newOrder.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() });
+    }
+    writeJsonFile(ORDERS_FILE, orders);
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    return res.end(JSON.stringify({ success: true, order: idx !== -1 ? orders[idx] : orders[0] }));
+  } catch (err) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'Invalid order JSON: ' + err.message }));
+  }
+}
+
+async function handleUpdateOrder(req, res, idOrNum) {
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+  }
+  try {
+    const updates = JSON.parse(body);
+    const orders = readJsonFile(ORDERS_FILE, []);
+    const idx = orders.findIndex(o => o.id === idOrNum || o.orderNumber === idOrNum);
+    if (idx !== -1) {
+      orders[idx] = { ...orders[idx], ...updates, updatedAt: new Date().toISOString() };
+      writeJsonFile(ORDERS_FILE, orders);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      return res.end(JSON.stringify({ success: true, order: orders[idx] }));
+    }
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'Order not found for update' }));
+  } catch (err) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'Invalid update JSON: ' + err.message }));
+  }
+}
+
+// Products API Handlers
+function handleGetProducts(req, res) {
+  const products = readJsonFile(PRODUCTS_FILE, []);
+  res.writeHead(200, {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*'
+  });
+  res.end(JSON.stringify(products));
+}
+
+async function handleSaveProduct(req, res) {
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+  }
+  try {
+    const product = JSON.parse(body);
+    if (!product || !product.id) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Valid product with ID required.' }));
+    }
+    const products = readJsonFile(PRODUCTS_FILE, []);
+    const idx = products.findIndex(p => p.id === product.id);
+    if (idx !== -1) {
+      products[idx] = { ...products[idx], ...product, updatedAt: new Date().toISOString() };
+    } else {
+      products.unshift({
+        ...product,
+        createdAt: product.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+    }
+    writeJsonFile(PRODUCTS_FILE, products);
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*'
+    });
+    return res.end(JSON.stringify({ success: true, product }));
+  } catch (err) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'Invalid product data: ' + err.message }));
+  }
+}
+
+function handleDeleteProduct(req, res, productId) {
+  const products = readJsonFile(PRODUCTS_FILE, []);
+  const filtered = products.filter(p => p.id !== productId);
+  writeJsonFile(PRODUCTS_FILE, filtered);
+  res.writeHead(200, {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*'
+  });
+  return res.end(JSON.stringify({ success: true, deletedId: productId }));
+}
+
+// Video Upload Handler for Admin Panel Shopping Videos
+async function handleVideoUpload(req, res) {
+  try {
+    const rawFileNameHeader = req.headers['x-file-name'] || '';
+    let originalName = 'video.mp4';
+    try {
+      originalName = rawFileNameHeader ? decodeURIComponent(rawFileNameHeader) : 'video.mp4';
+    } catch {
+      originalName = rawFileNameHeader || 'video.mp4';
+    }
+
+    const cleanName = path.basename(originalName).replace(/[^a-zA-Z0-9._-]/g, '_');
+    const ext = (path.extname(cleanName) || '.mp4').toLowerCase();
+    const base = path.basename(cleanName, ext).slice(0, 50) || 'video';
+    const rand = Math.random().toString(36).substring(2, 6);
+    const finalFileName = `${base}_${Date.now()}_${rand}${ext}`;
+
+    const uploadsDir = path.join(__dirname, 'videos', 'uploads');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    const targetFilePath = path.join(uploadsDir, finalFileName);
+    const fileWriteStream = fs.createWriteStream(targetFilePath);
+
+    req.pipe(fileWriteStream);
+
+    fileWriteStream.on('finish', () => {
+      const stats = fs.statSync(targetFilePath);
+
+      // Also mirror to dist/videos/uploads if dist exists
+      const distUploadsDir = path.join(__dirname, 'dist', 'videos', 'uploads');
+      if (fs.existsSync(path.join(__dirname, 'dist'))) {
+        if (!fs.existsSync(distUploadsDir)) {
+          fs.mkdirSync(distUploadsDir, { recursive: true });
+        }
+        try {
+          fs.copyFileSync(targetFilePath, path.join(distUploadsDir, finalFileName));
+        } catch (copyErr) {
+          console.warn('[Video Upload] Copy to dist notice:', copyErr.message);
+        }
+      }
+
+      const publicUrl = `/videos/uploads/${finalFileName}`;
+      console.log(`[VIDHYAA Video Upload] Successfully saved: ${finalFileName} (${stats.size} bytes)`);
+
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      });
+      res.end(JSON.stringify({
+        success: true,
+        url: publicUrl,
+        fileName: finalFileName,
+        sizeBytes: stats.size,
+        mimeType: req.headers['x-file-type'] || 'video/mp4'
+      }));
+    });
+
+    fileWriteStream.on('error', (err) => {
+      console.error('[VIDHYAA Video Upload] Stream error:', err);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Failed to write video file to storage.' }));
+    });
+  } catch (err) {
+    console.error('[VIDHYAA Video Upload] Unexpected error:', err);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: false, error: err.message || 'Video upload processing error.' }));
+  }
+}
+
 const server = http.createServer((req, res) => {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-file-name, x-file-type, x-admin-token');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -579,6 +773,44 @@ const server = http.createServer((req, res) => {
     }));
   }
 
+  // Orders API
+  if (pathname === '/api/orders' && req.method === 'GET') {
+    return handleGetOrders(req, res);
+  }
+
+  if (pathname.startsWith('/api/orders/') && req.method === 'GET') {
+    const idOrNum = decodeURIComponent(pathname.slice('/api/orders/'.length));
+    return handleGetSingleOrder(req, res, idOrNum);
+  }
+
+  if (pathname === '/api/orders' && req.method === 'POST') {
+    return handleCreateOrder(req, res);
+  }
+
+  if (pathname.startsWith('/api/orders/') && (req.method === 'PUT' || req.method === 'PATCH')) {
+    const idOrNum = decodeURIComponent(pathname.slice('/api/orders/'.length));
+    return handleUpdateOrder(req, res, idOrNum);
+  }
+
+  // Products API
+  if (pathname === '/api/products' && req.method === 'GET') {
+    return handleGetProducts(req, res);
+  }
+
+  if (pathname === '/api/products' && req.method === 'POST') {
+    return handleSaveProduct(req, res);
+  }
+
+  if (pathname.startsWith('/api/products/') && req.method === 'DELETE') {
+    const productId = decodeURIComponent(pathname.slice('/api/products/'.length));
+    return handleDeleteProduct(req, res, productId);
+  }
+
+  // Video upload endpoint for Admin Panel Shopping Videos
+  if (pathname === '/api/videos/upload' && req.method === 'POST') {
+    return handleVideoUpload(req, res);
+  }
+
   // Static File Serving
   let relativeFilePath = pathname.startsWith('/') ? pathname.slice(1) : pathname;
   if (!relativeFilePath) {
@@ -601,6 +833,12 @@ const server = http.createServer((req, res) => {
       if (pathname.startsWith('/api/')) {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: 'Endpoint not found' }));
+      }
+
+      // Never serve HTML for static asset requests with extensions or in media/asset directories
+      if (pathname.startsWith('/assets/') || pathname.startsWith('/videos/') || pathname.startsWith('/products/') || pathname.startsWith('/categories/') || path.extname(pathname)) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        return res.end('Asset not found: ' + pathname);
       }
 
       // SPA Fallback: serve index.html
@@ -643,10 +881,11 @@ const server = http.createServer((req, res) => {
     }
 
     // Standard static file response
+    const isCodeAsset = ext === '.html' || ext === '.js' || ext === '.css';
     const staticHeaders = {
       'Content-Type': contentType,
       'Content-Length': stats.size,
-      'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=31536000, immutable'
+      'Cache-Control': isCodeAsset ? 'no-cache, no-store, must-revalidate' : 'public, max-age=86400'
     };
     if (ext === '.mp4') {
       staticHeaders['Accept-Ranges'] = 'bytes';

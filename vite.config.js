@@ -31,7 +31,7 @@ function staticAssetsPlugin() {
       }
 
       // Directories that must be available in production deployment
-      const directories = ['categories', 'products', 'videos', 'data'];
+      const directories = ['categories', 'products', 'videos', 'data', 'api'];
       for (const dir of directories) {
         const srcDir = path.resolve(__dirname, dir);
         const destDir = path.resolve(outDir, dir);
@@ -66,9 +66,7 @@ function staticAssetsPlugin() {
         for (const entry of assetEntries) {
           if (!entry.isDirectory()) {
             const destPath = path.join(destAssets, entry.name);
-            if (!fs.existsSync(destPath)) {
-              fs.copyFileSync(path.join(srcAssets, entry.name), destPath);
-            }
+            fs.copyFileSync(path.join(srcAssets, entry.name), destPath);
           }
         }
       }

@@ -5,6 +5,13 @@
   AddType image/jpeg .jpg .jpeg
   AddType image/png .png
   AddType image/svg+xml .svg
+  AddType application/json .json
+  <Files "products">
+    ForceType application/json
+  </Files>
+  <Files "orders">
+    ForceType application/json
+  </Files>
 </IfModule>
 
 <IfModule mod_headers.c>

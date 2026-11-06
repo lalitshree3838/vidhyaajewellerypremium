@@ -1,0 +1,40 @@
+[
+  {
+    "id": "order_vdh_630424",
+    "orderNumber": "VDH-630424",
+    "customerName": "Radhika Sharma",
+    "customerEmail": "radhika.sharma@example.com",
+    "customerPhone": "+91 9876543210",
+    "shippingAddress": {
+      "street": "123 MG Road, Solani Puram",
+      "landmark": "Near IIT Roorkee",
+      "city": "Roorkee",
+      "state": "Uttarakhand",
+      "pincode": "247667"
+    },
+    "items": [
+      {
+        "productId": "prod-user-001",
+        "productName": "Gold Rajwada Kada",
+        "variationName": "Gold Plated",
+        "quantity": 1,
+        "price": 1500,
+        "mrp": 3000,
+        "image": "/products/uploads/gold_rajwada_kada_op_1792945686369.jpg"
+      }
+    ],
+    "subtotal": 1500,
+    "discount": 0,
+    "deliveryCharge": 0,
+    "total": 1500,
+    "totalAmount": 1500,
+    "paymentMethod": "UPI QR (neerajchauhan2000-1@oksbi)",
+    "paymentStatus": "pending",
+    "orderStatus": "Pending",
+    "upiReference": "PENDING VERIFICATION",
+    "trackingNumber": "",
+    "courierName": "",
+    "createdAt": "2026-11-04T08:41:35.146Z",
+    "updatedAt": "2026-11-04T08:41:35.147Z"
+  }
+]
