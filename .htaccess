@@ -49,9 +49,20 @@
   RewriteCond %{REQUEST_FILENAME} -d
   RewriteRule ^ - [L]
 
+  # Admin API routes on Hostinger Apache
+  RewriteRule ^api/admin/login/?$ /api/admin/login.php [QSA,L]
+  RewriteRule ^api/admin/verify-session/?$ /api/admin/verify-session.php [QSA,L]
+  RewriteRule ^api/admin/logout/?$ /api/admin/logout.php [QSA,L]
+
   # Media and asset files must never fall back to index.html (return 404 instead of HTML)
   RewriteCond %{REQUEST_URI} \.(mp4|webm|ogv|mov|jpg|jpeg|png|gif|webp|svg|ico|css|js|json|woff|woff2|ttf|eot)$ [NC]
   RewriteRule .* - [R=404,L]
+
+  # API requests must NEVER fall back to index.html (return 404 instead of HTML)
+  RewriteCond %{REQUEST_URI} ^/api/ [NC]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^api/.* - [R=404,L]
 
   # Direct pass for index.html
   RewriteRule ^index\.html$ - [L]

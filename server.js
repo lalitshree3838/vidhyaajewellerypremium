@@ -750,15 +750,15 @@ const server = http.createServer((req, res) => {
     return handleMobileRegister(req, res);
   }
 
-  if (pathname === '/api/admin/login' && req.method === 'POST') {
+  if ((pathname === '/api/admin/login' || pathname === '/api/admin/login.php') && req.method === 'POST') {
     return handleAdminLogin(req, res);
   }
 
-  if (pathname === '/api/admin/verify-session' && req.method === 'POST') {
+  if ((pathname === '/api/admin/verify-session' || pathname === '/api/admin/verify-session.php') && req.method === 'POST') {
     return handleAdminVerifySession(req, res);
   }
 
-  if (pathname === '/api/admin/logout' && req.method === 'POST') {
+  if ((pathname === '/api/admin/logout' || pathname === '/api/admin/logout.php') && req.method === 'POST') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ success: true }));
   }
