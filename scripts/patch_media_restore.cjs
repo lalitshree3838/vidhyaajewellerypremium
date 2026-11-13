@@ -20,14 +20,15 @@ function replaceExact(label, oldStr, newStr) {
 // ============================================================================
 // 1. Fix Product Cache, Media Preservation, & Firestore Real-time Sync
 // ============================================================================
+const alreadyDbPatched = bundle.includes('__vidhyaaMemProducts');
 const oldDbStart = 'var OE=`vidhyaa_products_cache`;';
 const oldDbEnd = 'typeof window<`u`&&window.dispatchEvent(new CustomEvent(`vidhyaa_products_updated`,{detail:t}))}';
 const dbStartIdx = bundle.indexOf(oldDbStart);
 const dbEndIdx = bundle.indexOf(oldDbEnd, dbStartIdx);
-if (dbStartIdx === -1 || dbEndIdx === -1) {
+if (!alreadyDbPatched && (dbStartIdx === -1 || dbEndIdx === -1)) {
   throw new Error('Could not locate dbService product block');
 }
-const oldDbBlock = bundle.slice(dbStartIdx, dbEndIdx + oldDbEnd.length);
+const oldDbBlock = (!alreadyDbPatched && dbStartIdx !== -1 && dbEndIdx !== -1) ? bundle.slice(dbStartIdx, dbEndIdx + oldDbEnd.length) : '';
 
 const newDbBlock = `var OE=\`vidhyaa_products_cache\`;
 let __vidhyaaMemProducts=[];
@@ -255,7 +256,11 @@ async function qE(e){
   typeof window<\`u\`&&window.dispatchEvent(new CustomEvent(\`vidhyaa_products_updated\`,{detail:t}));
 }`;
 
-replaceExact('dbService product cache & sync', oldDbBlock, newDbBlock);
+if (alreadyDbPatched) {
+  console.log('[PATCH SKIP] dbService product cache & sync already patched');
+} else {
+  replaceExact('dbService product cache & sync', oldDbBlock, newDbBlock);
+}
 
 // ============================================================================
 // 2. Fix SeamlessLoopVideo.tsx (Lk)
@@ -387,9 +392,9 @@ const newLkBlock = `var Ik=\`/app/applet/src/components/SeamlessLoopVideo.tsx\`,
       "aria-hidden":h,
       tabIndex:g
     },void 0,!1,{fileName:Ik,lineNumber:368,columnNumber:9},void 0),
-    l&&ne&&!ee&&!o&&(0,I.jsxDEV)(\`div\`,{onClick:me,className:\`absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center z-20 cursor-pointer transition-all duration-300 hover:bg-black/50\`,title:\`Click to play video\`,children:[(0,I.jsxDEV)(\`div\`,{className:\`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-[#DFB982]/95 hover:bg-[#DFB982] text-[#241C1A] flex items-center justify-center shadow-2xl transition-transform hover:scale-105 active:scale-95 border-2 border-white/40\`,children:(0,I.jsxDEV)(VO,{className:\`w-7 h-7 sm:w-8 sm:h-8 fill-[#241C1A] ml-1\`},void 0,!1,{fileName:Ik,lineNumber:404,columnNumber:15},void 0)},void 0,!1,{fileName:Ik,lineNumber:403,columnNumber:13},void 0),(0,I.jsxDEV)(\`span\`,{className:\`absolute bottom-4 bg-black/75 text-[#DFB982] text-[10px] font-bold tracking-wider uppercase px-3 py-1 rounded-full border border-white/20\`,children:\`Tap to Play\`},void 0,!1,{fileName:Ik,lineNumber:406,columnNumber:13},void 0)]},void 0,!0,{fileName:Ik,lineNumber:398,columnNumber:11},void 0),
+    l&&ne&&!ee&&!o&&(0,I.jsxDEV)(\`div\`,{onClick:me,className:\`absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center z-20 cursor-pointer transition-all duration-300 hover:bg-black/50\`,style:{backgroundColor:\`rgba(0,0,0,0.45)\`},title:\`Click to play video\`,children:[(0,I.jsxDEV)(\`div\`,{className:\`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-[#DFB982]/95 hover:bg-[#DFB982] text-[#241C1A] flex items-center justify-center shadow-2xl transition-transform hover:scale-105 active:scale-95 border-2 border-white/40\`,children:(0,I.jsxDEV)(VO,{className:\`w-7 h-7 sm:w-8 sm:h-8 fill-[#241C1A] ml-1\`},void 0,!1,{fileName:Ik,lineNumber:404,columnNumber:15},void 0)},void 0,!1,{fileName:Ik,lineNumber:403,columnNumber:13},void 0),(0,I.jsxDEV)(\`span\`,{className:\`absolute bottom-4 bg-black/75 text-[#DFB982] text-[10px] font-bold tracking-wider uppercase px-3 py-1 rounded-full border border-white/20\`,style:{backgroundColor:\`rgba(0,0,0,0.75)\`,fontSize:\`10px\`},children:\`Tap to Play\`},void 0,!1,{fileName:Ik,lineNumber:406,columnNumber:13},void 0)]},void 0,!0,{fileName:Ik,lineNumber:398,columnNumber:11},void 0),
     w&&!ee&&(0,I.jsxDEV)(\`img\`,{src:w,alt:r||\`Product jewellery showcase\`,className:\`absolute inset-0 w-full h-full object-contain pointer-events-none z-0 transition-opacity duration-500\`,style:{zIndex:1},loading:\`eager\`},void 0,!1,{fileName:Ik,lineNumber:414,columnNumber:11},void 0),
-    S&&!ee&&!o&&(0,I.jsxDEV)(\`div\`,{onClick:he,className:\`absolute inset-0 bg-black/60 flex flex-col items-center justify-center z-20 cursor-pointer p-4 text-center text-white\`,title:\`Click to retry video playback\`,children:[(0,I.jsxDEV)(\`div\`,{className:\`w-12 h-12 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center mb-2 transition-transform hover:scale-105 border border-white/30\`,children:(0,I.jsxDEV)(VO,{className:\`w-5 h-5 fill-white ml-0.5\`},void 0,!1,{fileName:Ik,lineNumber:429,columnNumber:15},void 0)},void 0,!1,{fileName:Ik,lineNumber:428,columnNumber:13},void 0),(0,I.jsxDEV)(\`span\`,{className:\`text-xs font-semibold tracking-wider uppercase text-[#DFB982]\`,children:\`Tap to Retry Video\`},void 0,!1,{fileName:Ik,lineNumber:431,columnNumber:13},void 0),(0,I.jsxDEV)(\`span\`,{className:\`text-[10px] text-white/75 mt-1\`,children:\`Preview loading...\`,},void 0,!1,{fileName:Ik,lineNumber:432,columnNumber:13},void 0)]},void 0,!0,{fileName:Ik,lineNumber:423,columnNumber:11},void 0)
+    S&&!ee&&!o&&(0,I.jsxDEV)(\`div\`,{onClick:he,className:\`absolute inset-0 bg-black/60 flex flex-col items-center justify-center z-20 cursor-pointer p-4 text-center text-white\`,style:{backgroundColor:\`rgba(0,0,0,0.65)\`},title:\`Click to retry video playback\`,children:[(0,I.jsxDEV)(\`div\`,{className:\`w-12 h-12 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center mb-2 transition-transform hover:scale-105 border border-white/30\`,children:(0,I.jsxDEV)(VO,{className:\`w-5 h-5 fill-white ml-0.5\`},void 0,!1,{fileName:Ik,lineNumber:429,columnNumber:15},void 0)},void 0,!1,{fileName:Ik,lineNumber:428,columnNumber:13},void 0),(0,I.jsxDEV)(\`span\`,{className:\`text-xs font-semibold tracking-wider uppercase text-[#DFB982]\`,children:\`Tap to Retry Video\`},void 0,!1,{fileName:Ik,lineNumber:431,columnNumber:13},void 0),(0,I.jsxDEV)(\`span\`,{className:\`text-[10px] text-white/75 mt-1\`,style:{fontSize:\`10px\`},children:\`Preview loading...\`,},void 0,!1,{fileName:Ik,lineNumber:432,columnNumber:13},void 0)]},void 0,!0,{fileName:Ik,lineNumber:423,columnNumber:11},void 0)
   ]},void 0,!0,{fileName:Ik,lineNumber:363,columnNumber:7},void 0)
 })`;
 
@@ -410,14 +415,29 @@ const newPcMedia = `wN=({product:e,onOpenQuickView:t,onSelectProduct:n})=>{
   if(!hE(e))return null;
   let[s,c]=(0,x.useState)(e.variations&&(e?.variations?.length||0)>0?e.variations[0]:void 0),
       [l,u]=(0,x.useState)(!1),
+      [imgIdx,setImgIdx]=(0,x.useState)(0),
       imgRef=(0,x.useRef)(null);
-  (0,x.useEffect)(()=>{e.variations&&(e?.variations?.length||0)>0?c(e.variations[0]):c(void 0)},[e.id]);
-  let ee=(Array.isArray(e.images)?e.images.find(x=>!!(x&&typeof x===\`string\`&&x.trim()&&pE(x.trim()))):\`\`)?.trim()
-        ||(Array.isArray(e.images)&&e.images[0]?String(e.images[0]).trim():\`\`)
-        ||(Array.isArray(e.variations)?e.variations.map(v=>v?.image?.trim()).find(x=>!!(x&&pE(x))):\`\`)||\`\`,
-      te=s?.image?.trim(),
-      ne=te&&pE(te)?te:ee&&pE(ee)?ee:ee||te||\`\`,
-      hasRealImg=!!ne,
+  (0,x.useEffect)(()=>{
+    if(Array.isArray(e.variations)&&e.variations.length>0){
+      c(prev=>(prev&&e.variations.find(v=>v&&v.id===prev.id))||e.variations[0]);
+    }else c(void 0);
+  },[e.id,e.variations]);
+  (0,x.useEffect)(()=>{setImgIdx(0)},[e.id,s?.id]);
+  let imgCandidates=(0,x.useMemo)(()=>{
+        let raw=[];
+        s?.image&&typeof s.image===\`string\`&&raw.push(s.image.trim());
+        Array.isArray(e.images)&&e.images.forEach(x=>{typeof x===\`string\`&&x.trim()&&raw.push(x.trim())});
+        Array.isArray(e.variations)&&e.variations.forEach(v=>{v?.image&&typeof v.image===\`string\`&&v.image.trim()&&raw.push(v.image.trim())});
+        let seen=new Set(),valid=[],fallback=[];
+        raw.forEach(u=>{
+          if(!u||seen.has(u)||u.startsWith(\`data:image/svg+xml\`))return;
+          seen.add(u);
+          (pE(u)?valid:fallback).push(u);
+        });
+        return valid.length>0?valid:fallback;
+      },[e.images,e.variations,s?.image]),
+      ne=imgCandidates[imgIdx]||\`\`,
+      hasRealImg=imgCandidates.length>0,
       isInstantImg=!hasRealImg||ne.startsWith(\`data:image/\`)||ne.startsWith(\`blob:\`),
       [d,f]=(0,x.useState)(()=>isInstantImg),
       [p,m]=(0,x.useState)(!1),
@@ -431,9 +451,9 @@ const newPcMedia = `wN=({product:e,onOpenQuickView:t,onSelectProduct:n})=>{
       return;
     }
     let el=imgRef.current;
-    if(el&&el.complete&&el.src&&!el.src.startsWith(\`data:image/svg+xml\`)){
-      if(el.naturalWidth>0){f(!0);return;}
-      m(!0);f(!0);return;
+    if(el&&el.complete&&el.naturalWidth>0){
+      f(!0);
+      return;
     }
     f(!1);
     let timer=setTimeout(()=>f(!0),4500);
@@ -445,14 +465,20 @@ const newPcMedia = `wN=({product:e,onOpenQuickView:t,onSelectProduct:n})=>{
       ce=!p&&ne?ne:Rk,
       le=t=>{t.stopPropagation();let n=s||{id:\`default\`,name:\`Standard\`,colorFinish:\`Default\`,hexCode:\`#D4AF37\`,sku:e.id,stock:e.stock,image:e.images[0]||ne||\`\`,active:!0};r(e,n,1),u(!0),setTimeout(()=>u(!1),1500)},
       ue=t=>{t.stopPropagation();let n=s||{id:\`default\`,name:\`Standard\`,colorFinish:\`Default\`,hexCode:\`#D4AF37\`,sku:e.id,stock:e.stock,image:e.images[0]||ne||\`\`,active:!0};r(e,n,1),i()},
-      de=(ev,vObj)=>{ev.stopPropagation(),c(vObj),m(!1),vObj.image&&pE(vObj.image)&&b(!1)};
+      de=(ev,vObj)=>{ev.stopPropagation(),c(vObj),m(!1),setImgIdx(0),vObj.image&&pE(vObj.image)&&b(!1)},
+      handleImgError=()=>{
+        if(imgIdx+1<imgCandidates.length){
+          setImgIdx(imgIdx+1);
+          f(!1);
+          return;
+        }
+        m(!0);
+        f(!0);
+      };
   (0,x.useEffect)(()=>{
     if(d||se||p||!hasRealImg)return;
     let el=imgRef.current;
-    if(el&&el.complete&&el.src&&!el.src.startsWith(\`data:image/svg+xml\`)){
-      if(el.naturalWidth>0)f(!0);
-      else{m(!0);f(!0);}
-    }
+    if(el&&el.complete&&el.naturalWidth>0)f(!0);
   },[d,ne,se,p,hasRealImg]);
   (0,x.useEffect)(()=>{
     if(!se)return;
@@ -464,12 +490,9 @@ const newPcMedia = `wN=({product:e,onOpenQuickView:t,onSelectProduct:n})=>{
     (0,I.jsxDEV)(\`div\`,{className:\`relative aspect-[4/5] bg-white overflow-hidden flex items-center justify-center p-3 border-b border-[#F4EBE1]/60\`,children:[
       !d&&!se&&!p&&hasRealImg&&(0,I.jsxDEV)(\`div\`,{className:\`absolute inset-0 bg-[#FAF7F2] animate-pulse flex items-center justify-center z-10\`,children:(0,I.jsxDEV)(\`div\`,{className:\`w-8 h-8 rounded-full border-2 border-[#DFB982]/40 border-t-[#0F5B46] animate-spin\`},void 0,!1,{fileName:CN,lineNumber:141,columnNumber:13},void 0)},void 0,!1,{fileName:CN,lineNumber:140,columnNumber:11},void 0),
       se?(0,I.jsxDEV)(\`div\`,{className:\`relative w-full h-full flex items-center justify-center overflow-hidden bg-white\`,children:[
-        (0,I.jsxDEV)(Lk,{src:e.videoUrl,poster:ce,title:e.name,autoPlay:!0,isMuted:_,enableObserver:!0,observerThreshold:.05,onError:()=>{g(!0),f(!0)},onLoadedData:()=>f(!0),onCanPlay:()=>f(!0),className:\`w-full h-full object-contain object-center group-hover:scale-105 transition-transform duration-500 ease-out\`,style:{width:\`100%\`,height:\`100%\`,objectFit:\`contain\`}},void 0,!1,{fileName:CN,lineNumber:147,columnNumber:13},void 0),
-        (0,I.jsxDEV)(\`button\`,{type:\`button\`,onClick:ev=>{ev.stopPropagation(),v(x=>!x)},className:\`absolute top-12 right-3 z-20 w-7 h-7 rounded-full bg-black/60 hover:bg-black/85 backdrop-blur-md text-white border border-white/20 transition-all cursor-pointer shadow-md flex items-center justify-center active:scale-90\`,title:_?\`Click to Unmute video\`:\`Click to Mute video\`,"aria-label":_?\`Unmute video audio\`:\`Mute video audio\`,children:_?(0,I.jsxDEV)(xk,{className:\`w-3.5 h-3.5 text-white/90\`},void 0,!1,{fileName:CN,lineNumber:177,columnNumber:17},void 0):(0,I.jsxDEV)(bk,{className:\`w-3.5 h-3.5 text-emerald-400\`},void 0,!1,{fileName:CN,lineNumber:179,columnNumber:17},void 0)},void 0,!1,{fileName:CN,lineNumber:166,columnNumber:13},void 0)
-      ]},void 0,!0,{fileName:CN,lineNumber:146,columnNumber:11},void 0):(0,I.jsxDEV)(I.Fragment,{children:[
-        (0,I.jsxDEV)(\`img\`,{ref:imgRef,src:ce,alt:e.name,className:\`w-full h-full object-contain object-center group-hover:scale-105 transition-transform duration-500 ease-out \${d||!hasRealImg||p?\`opacity-100\`:\`opacity-0\`}\`,loading:isInstantImg?\`eager\`:\`lazy\`,onLoad:()=>f(!0),onError:()=>{m(!0),f(!0)}},void 0,!1,{fileName:CN,lineNumber:184,columnNumber:11},void 0),
-        p&&(0,I.jsxDEV)(\`span\`,{className:\`absolute bottom-2 left-1/2 -translate-x-1/2 bg-white/90 text-[#802336] text-[10px] font-semibold px-2 py-0.5 rounded border border-[#E8DCCF] shadow-xs pointer-events-none whitespace-nowrap\`,children:\`Image Unavailable\`},void 0,!1,{fileName:CN,lineNumber:195,columnNumber:13},void 0)
-      ]},void 0,!0,{fileName:CN,lineNumber:183,columnNumber:11},void 0),
+        (0,I.jsxDEV)(Lk,{src:e.videoUrl,poster:hasRealImg&&!p?ne:void 0,title:e.name,autoPlay:!0,isMuted:_,enableObserver:!0,observerThreshold:.05,onError:()=>{g(!0),f(!0)},onLoadedData:()=>f(!0),onCanPlay:()=>f(!0),className:\`w-full h-full object-contain object-center group-hover:scale-105 transition-transform duration-500 ease-out\`,style:{width:\`100%\`,height:\`100%\`,objectFit:\`contain\`}},void 0,!1,{fileName:CN,lineNumber:147,columnNumber:13},void 0),
+        (0,I.jsxDEV)(\`button\`,{type:\`button\`,onClick:ev=>{ev.stopPropagation(),v(x=>!x)},className:\`absolute top-12 right-3 z-20 w-7 h-7 rounded-full bg-black/60 hover:bg-black/85 backdrop-blur-md text-white border border-white/20 transition-all cursor-pointer shadow-md flex items-center justify-center active:scale-90\`,style:{backgroundColor:\`rgba(0,0,0,0.6)\`},title:_?\`Click to Unmute video\`:\`Click to Mute video\`,"aria-label":_?\`Unmute video audio\`:\`Mute video audio\`,children:_?(0,I.jsxDEV)(xk,{className:\`w-3.5 h-3.5 text-white/90\`},void 0,!1,{fileName:CN,lineNumber:177,columnNumber:17},void 0):(0,I.jsxDEV)(bk,{className:\`w-3.5 h-3.5 text-emerald-400\`},void 0,!1,{fileName:CN,lineNumber:179,columnNumber:17},void 0)},void 0,!1,{fileName:CN,lineNumber:166,columnNumber:13},void 0)
+      ]},void 0,!0,{fileName:CN,lineNumber:146,columnNumber:11},void 0):(hasRealImg&&p?(0,I.jsxDEV)(\`div\`,{className:\`w-full h-full flex flex-col items-center justify-center text-center p-4 bg-[#FAF7F2] rounded-lg border border-[#E8DCCF]/80\`,children:[(0,I.jsxDEV)(ak,{className:\`w-7 h-7 text-[#D4AF37] mb-2 opacity-70\`},void 0,!1,{fileName:CN,lineNumber:186,columnNumber:13},void 0),(0,I.jsxDEV)(\`span\`,{className:\`text-[11px] font-semibold text-[#802336]\`,children:\`Image Unavailable\`},void 0,!1,{fileName:CN,lineNumber:187,columnNumber:13},void 0),(0,I.jsxDEV)(\`span\`,{className:\`text-[10px] text-gray-500 mt-0.5 line-clamp-2\`,children:e.name},void 0,!1,{fileName:CN,lineNumber:188,columnNumber:13},void 0)]},void 0,!0,{fileName:CN,lineNumber:185,columnNumber:11},void 0):(0,I.jsxDEV)(\`img\`,{ref:imgRef,src:ce,alt:e.name,className:\`w-full h-full object-contain object-center group-hover:scale-105 transition-transform duration-500 ease-out \${d||!hasRealImg?\`opacity-100\`:\`opacity-0\`}\`,loading:\`eager\`,referrerPolicy:ce.startsWith(\`http\`)?\`no-referrer\`:void 0,onLoad:()=>f(!0),onError:handleImgError},void 0,!1,{fileName:CN,lineNumber:184,columnNumber:11},void 0)),
       (0,I.jsxDEV)(\`div\`,{className:\`absolute top-3 left-3 flex flex-col gap-1 z-10 pointer-events-none\`,children:[
         oe&&(0,I.jsxDEV)(\`span\`,{className:\`bg-[#0F5C4D] text-[#FAF7F2] text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded shadow-sm flex items-center gap-1\`,children:[(0,I.jsxDEV)(\`span\`,{className:\`w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse\`},void 0,!1,{fileName:CN,lineNumber:203,columnNumber:15},void 0),(0,I.jsxDEV)(\`span\`,{children:\`360° Reel\`},void 0,!1,{fileName:CN,lineNumber:204,columnNumber:15},void 0)]},void 0,!0,{fileName:CN,lineNumber:202,columnNumber:13},void 0),
         e.isBestseller&&(0,I.jsxDEV)(\`span\`,{className:\`bg-[#802336] text-[#FAF7F2] text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded shadow-sm\`,children:\`Bestseller\`},void 0,!1,{fileName:CN,lineNumber:208,columnNumber:13},void 0),
@@ -583,6 +606,7 @@ PN=({videoUrl:e,fallbackImage:t,title:n,isMuted:r=!0,isActive:i=!0})=>{
   return(0,I.jsxDEV)(\`div\`,{
     ref:boxRef,
     className:\`absolute inset-0 w-full h-full overflow-hidden bg-black select-none\`,
+    style:{position:\`absolute\`,inset:0,width:\`100%\`,height:\`100%\`,overflow:\`hidden\`,backgroundColor:\`#000\`},
     children:[
       (0,I.jsxDEV)(\`video\`,{
         ref:v,
@@ -603,7 +627,7 @@ PN=({videoUrl:e,fallbackImage:t,title:n,isMuted:r=!0,isActive:i=!0})=>{
         onPause:()=>setPlaying(!1),
         onError:()=>{let el=v.current;if(!el||el.readyState===0)setHasErr(!0);},
         className:\`w-full h-full object-cover select-none block\`,
-        style:{width:\`100%\`,height:\`100%\`,objectFit:\`cover\`,position:\`relative\`,zIndex:2,opacity:hasErr&&validFallback?0:1},
+        style:{width:\`100%\`,height:\`100%\`,objectFit:\`cover\`,display:\`block\`,position:\`relative\`,zIndex:2,opacity:hasErr&&validFallback?0:1},
         "aria-hidden":\`true\`,
         tabIndex:-1
       },void 0,!1,{fileName:NN,lineNumber:60,columnNumber:7},void 0),
@@ -618,6 +642,7 @@ PN=({videoUrl:e,fallbackImage:t,title:n,isMuted:r=!0,isActive:i=!0})=>{
         type:\`button\`,
         onClick:ev=>{ev.stopPropagation();setHasErr(!1);let el=v.current;if(el){try{el.load()}catch{}tryPlay();}},
         className:\`absolute inset-0 flex flex-col items-center justify-center bg-black/50 text-white z-10 cursor-pointer\`,
+        style:{backgroundColor:\`rgba(0,0,0,0.55)\`},
         children:[
           (0,I.jsxDEV)(\`div\`,{className:\`w-12 h-12 rounded-full bg-[#DFB982]/90 text-[#241C1A] flex items-center justify-center shadow-lg mb-1.5\`,children:(0,I.jsxDEV)(VO,{className:\`w-5 h-5 fill-[#241C1A] ml-0.5\`},void 0,!1,{fileName:NN,lineNumber:62,columnNumber:11},void 0)},void 0,!1,{fileName:NN,lineNumber:62,columnNumber:9},void 0),
           (0,I.jsxDEV)(\`span\`,{className:\`text-[11px] font-semibold tracking-wider uppercase text-[#DFB982]\`,children:\`Tap to Play Video\`},void 0,!1,{fileName:NN,lineNumber:63,columnNumber:9},void 0)
@@ -731,6 +756,7 @@ var FN=({products:e,onSelectProduct:t})=>{
     id:\'shopping-video\',
     className:\'relative overflow-hidden py-16 sm:py-20 bg-[#FAF7F2] border-y border-[#E8DCCF]\',
     children:[
+      (0,I.jsxDEV)(\'style\',{children:\`#shopping-video .vidhyaa-reel-card{width:78vw;min-width:245px;max-width:310px;aspect-ratio:9 / 16}@media (min-width:640px){#shopping-video .vidhyaa-reel-card{width:290px}}@media (min-width:1024px){#shopping-video .vidhyaa-reel-card{width:310px}}\`},void 0,!1,{fileName:NN,lineNumber:291,columnNumber:7},void 0),
       (0,I.jsxDEV)(\'div\',{className:\'absolute inset-0 bg-radial from-white/80 via-[#FAF7F2]/95 to-[#FAF7F2] pointer-events-none\'},void 0,!1,{fileName:NN,lineNumber:292,columnNumber:7},void 0),
       (0,I.jsxDEV)(\'div\',{className:\'absolute top-0 right-1/4 w-96 h-96 bg-[#DFB982]/10 rounded-full blur-3xl pointer-events-none\'},void 0,!1,{fileName:NN,lineNumber:293,columnNumber:7},void 0),
       (0,I.jsxDEV)(\'div\',{className:\'absolute bottom-0 left-1/4 w-96 h-96 bg-[#FAF7F2] rounded-full blur-3xl pointer-events-none\'},void 0,!1,{fileName:NN,lineNumber:294,columnNumber:7},void 0),
@@ -766,25 +792,27 @@ var FN=({products:e,onSelectProduct:t})=>{
               let isSoundOn=mutedId===reel.id;
               return(0,I.jsxDEV)(\'div\',{
                 key:reel.id,
-                onClick:()=>{if(activeSlide!==idx)scrollToSlide(idx);},
-                className:\`group relative flex-none w-[76vw] xs:w-[68vw] sm:w-[290px] lg:w-[310px] aspect-[9/16] snap-center rounded-3xl overflow-hidden cursor-pointer transition-all duration-300 \${isCurrent?\'ring-2 ring-[#DFB982] shadow-2xl scale-[1.01]\':\'ring-1 ring-[#E8DCCF]/80 shadow-md opacity-90 hover:opacity-100 hover:ring-[#DFB982]/60\'}\`,
+                onClick:()=>{if(activeSlide!==idx)scrollToSlide(idx);else setModalIdx(idx);},
+                className:\`vidhyaa-reel-card group relative flex-none w-[78vw] sm:w-[280px] lg:w-[285px] aspect-[9/16] snap-center rounded-3xl overflow-hidden cursor-pointer transition-all duration-300 \${isCurrent?\'ring-2 ring-[#DFB982] shadow-2xl scale-[1.01]\':\'ring-1 ring-[#E8DCCF]/80 shadow-md opacity-90 hover:opacity-100 hover:ring-[#DFB982]/60\'}\`,
+                style:{aspectRatio:\`9 / 16\`,minHeight:\`420px\`,backgroundColor:\`#120C0B\`},
                 children:[
                   (0,I.jsxDEV)(PN,{videoUrl:reel.videoUrl,fallbackImage:reel.posterImage,title:reel.title,isMuted:!isSoundOn,isActive:isCurrent},void 0,!1,{fileName:NN,lineNumber:350,columnNumber:17},void 0),
-                  (0,I.jsxDEV)(\'div\',{className:\'absolute inset-0 bg-gradient-to-t from-black/85 via-transparent to-black/35 pointer-events-none z-10\'},void 0,!1,{fileName:NN,lineNumber:358,columnNumber:17},void 0),
+                  (0,I.jsxDEV)(\'div\',{className:\'absolute inset-0 bg-gradient-to-t from-black/85 via-transparent pointer-events-none z-10\',style:{background:\`linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.12) 48%, rgba(0,0,0,0.35) 100%)\`}},void 0,!1,{fileName:NN,lineNumber:358,columnNumber:17},void 0),
                   (0,I.jsxDEV)(\'div\',{
                     className:\'absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between z-20\',
                     children:[
                       (0,I.jsxDEV)(\'div\',{
                         className:\'flex items-center gap-1.5 pointer-events-none\',
                         children:[
-                          (0,I.jsxDEV)(\'span\',{className:\'bg-white/90 backdrop-blur-md text-[#802336] text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider shadow-xs border border-[#E8DCCF]\',children:reel.category},void 0,!1,{fileName:NN,lineNumber:363,columnNumber:21},void 0),
-                          (0,I.jsxDEV)(\'span\',{className:\'bg-black/50 backdrop-blur-md text-white text-[10px] font-mono px-2 py-0.5 rounded-full flex items-center gap-1 border border-white/20\',children:[(0,I.jsxDEV)(\'span\',{className:\'w-1.5 h-1.5 rounded-full bg-red-500 animate-ping\'},void 0,!1,{fileName:NN,lineNumber:368,columnNumber:23},void 0),(0,I.jsxDEV)(\'span\',{children:reel.duration},void 0,!1,{fileName:NN,lineNumber:369,columnNumber:23},void 0)]},void 0,!0,{fileName:NN,lineNumber:367,columnNumber:21},void 0)
+                          (0,I.jsxDEV)(\'span\',{className:\'bg-white/90 backdrop-blur-md text-[#802336] text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider shadow-xs border border-[#E8DCCF]\',style:{backgroundColor:\`rgba(255,255,255,0.92)\`},children:reel.category},void 0,!1,{fileName:NN,lineNumber:363,columnNumber:21},void 0),
+                          (0,I.jsxDEV)(\'span\',{className:\'bg-black/50 backdrop-blur-md text-white text-[10px] font-mono px-2 py-0.5 rounded-full flex items-center gap-1 border border-white/20\',style:{backgroundColor:\`rgba(0,0,0,0.55)\`},children:[(0,I.jsxDEV)(\'span\',{className:\'w-1.5 h-1.5 rounded-full bg-red-500 animate-ping\'},void 0,!1,{fileName:NN,lineNumber:368,columnNumber:23},void 0),(0,I.jsxDEV)(\'span\',{children:reel.duration},void 0,!1,{fileName:NN,lineNumber:369,columnNumber:23},void 0)]},void 0,!0,{fileName:NN,lineNumber:367,columnNumber:21},void 0)
                         ]
                       },void 0,!0,{fileName:NN,lineNumber:362,columnNumber:19},void 0),
                       (0,I.jsxDEV)(\'button\',{
                         type:\'button\',
                         onClick:evt=>{evt.stopPropagation();setMutedId(mutedId===reel.id?null:reel.id);},
                         className:\'w-8 h-8 rounded-full bg-black/60 hover:bg-black/90 backdrop-blur-md text-white flex items-center justify-center transition-all cursor-pointer border border-white/25 shadow-md active:scale-90\',
+                        style:{backgroundColor:\'rgba(0,0,0,0.6)\'},
                         title:isSoundOn?\'Click to Mute\':\'Click to Unmute Sound\',
                         \'aria-label\':isSoundOn?\'Mute video sound\':\'Unmute video sound\',
                         children:isSoundOn?(0,I.jsxDEV)(bk,{className:\'w-4 h-4 text-emerald-400\'},void 0,!1,{fileName:NN,lineNumber:385,columnNumber:23},void 0):(0,I.jsxDEV)(xk,{className:\'w-4 h-4 text-white/90\'},void 0,!1,{fileName:NN,lineNumber:387,columnNumber:23},void 0)
@@ -794,8 +822,9 @@ var FN=({products:e,onSelectProduct:t})=>{
                   (0,I.jsxDEV)(\'div\',{
                     onClick:evt=>{evt.stopPropagation();handleSelectProduct(reel);},
                     className:\'absolute bottom-3 inset-x-3 bg-white/95 backdrop-blur-md p-3 rounded-2xl shadow-xl border border-[#DFB982]/50 z-20 flex items-center gap-2.5 transition-all duration-300 hover:bg-white\',
+                    style:{backgroundColor:\`rgba(255,255,255,0.95)\`},
                     children:[
-                      reel.posterImage&&(0,I.jsxDEV)(\'img\',{src:reel.posterImage,alt:reel.title,className:\'w-12 h-12 rounded-xl object-cover border border-[#E8DCCF] flex-shrink-0 bg-white\',loading:\'lazy\'},void 0,!1,{fileName:NN,lineNumber:395,columnNumber:21},void 0),
+                      reel.posterImage&&(0,I.jsxDEV)(\'img\',{src:reel.posterImage,alt:reel.title,className:\`w-12 h-12 rounded-xl object-cover border border-[#E8DCCF] flex-shrink-0 bg-white\`,loading:\`lazy\`},void 0,!1,{fileName:NN,lineNumber:395,columnNumber:21},void 0),
                       (0,I.jsxDEV)(\'div\',{
                         className:\'flex-1 min-w-0 pr-1\',
                         children:[
@@ -804,7 +833,7 @@ var FN=({products:e,onSelectProduct:t})=>{
                             className:\'flex items-baseline gap-1.5 pt-0.5 flex-wrap\',
                             children:[
                               (0,I.jsxDEV)(\'span\',{className:\'text-xs sm:text-sm font-bold text-[#802336]\',children:Nk(reel.price)},void 0,!1,{fileName:NN,lineNumber:405,columnNumber:25},void 0),
-                              reel.mrp>reel.price&&(0,I.jsxDEV)(I.Fragment,{children:[(0,I.jsxDEV)(\'span\',{className:\'text-[10px] text-gray-400 line-through\',children:Nk(reel.mrp)},void 0,!1,{fileName:NN,lineNumber:410,columnNumber:29},void 0),(0,I.jsxDEV)(\'span\',{className:\'text-[9px] bg-[#802336] text-white px-1 py-0.2 rounded font-bold\',children:[Pk(reel.mrp,reel.price),\'% OFF\']},void 0,!0,{fileName:NN,lineNumber:415,columnNumber:29},void 0)]},void 0,!0,{fileName:NN,lineNumber:409,columnNumber:25},void 0)
+                              reel.mrp>reel.price&&(0,I.jsxDEV)(I.Fragment,{children:[(0,I.jsxDEV)(\'span\',{className:\'text-[10px] text-gray-400 line-through\',children:Nk(reel.mrp)},void 0,!1,{fileName:NN,lineNumber:410,columnNumber:29},void 0),(0,I.jsxDEV)(\'span\',{className:\'text-[9px] bg-[#802336] text-white px-1 py-0.5 rounded font-bold\',style:{paddingTop:\`1px\`,paddingBottom:\`1px\`},children:[Pk(reel.mrp,reel.price),\'% OFF\']},void 0,!0,{fileName:NN,lineNumber:415,columnNumber:29},void 0)]},void 0,!0,{fileName:NN,lineNumber:409,columnNumber:25},void 0)
                             ]
                           },void 0,!0,{fileName:NN,lineNumber:404,columnNumber:23},void 0)
                         ]
@@ -812,7 +841,7 @@ var FN=({products:e,onSelectProduct:t})=>{
                       (0,I.jsxDEV)(\'button\',{
                         type:\'button\',
                         onClick:evt=>{evt.stopPropagation();handleSelectProduct(reel);},
-                        className:\'btn-teak-green py-2 px-2.5 sm:px-3 rounded-xl text-[10px] sm:text-xs font-bold uppercase tracking-wider transition-all duration-200 cursor-pointer flex items-center gap-1 shadow-xs hover:shadow flex-shrink-0\',
+                        className:\'btn-teak-green py-2 px-3 rounded-xl text-[10px] sm:text-xs font-bold uppercase tracking-wider transition-all duration-200 cursor-pointer flex items-center gap-1 shadow-xs hover:shadow flex-shrink-0\',
                         children:[(0,I.jsxDEV)(\'span\',{children:\'SHOP NOW\'},void 0,!1,{fileName:NN,lineNumber:425,columnNumber:25},void 0),(0,I.jsxDEV)(BD,{className:\'w-3 h-3 text-white\'},void 0,!1,{fileName:NN,lineNumber:426,columnNumber:25},void 0)]
                       },void 0,!0,{fileName:NN,lineNumber:424,columnNumber:21},void 0)
                     ]
@@ -829,7 +858,8 @@ var FN=({products:e,onSelectProduct:t})=>{
         ]
       },void 0,!0,{fileName:NN,lineNumber:296,columnNumber:7},void 0),
       activeModalReel&&(0,I.jsxDEV)(\'div\',{
-        className:\'fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-md animate-fadeIn\',
+        className:\'fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-md\',
+        style:{backgroundColor:\`rgba(0,0,0,0.8)\`},
         onClick:()=>setModalIdx(null),
         children:(0,I.jsxDEV)(\'div\',{
           className:\'relative w-full max-w-4xl bg-[#FAF7F2] rounded-3xl overflow-hidden shadow-2xl border border-[#DFB982]/50 flex flex-col md:flex-row max-h-[92vh]\',
@@ -888,7 +918,11 @@ replaceExact('ShopByVideoSection PN & FN', oldShopByVid, newShopByVid);
 // ============================================================================
 const oldAppState = `[S,ie]=(0,x.useState)(()=>{let e=kE();return e.length>0?e:[]}),[ae,oe]=(0,x.useState)(()=>{let e=YE();return e.length>0?e:gE}),[se,ce]=(0,x.useState)(vE),[le,ue]=(0,x.useState)(()=>kE().length===0)`;
 const newAppState = `[S,ie]=(0,x.useState)(()=>{let e=kE();return e.length>0&&!e.some(p=>p&&p._strippedImg&&(!p.images||p.images.length===0))?e:[]}),[ae,oe]=(0,x.useState)(()=>{let e=YE();return e.length>0?e:gE}),[se,ce]=(0,x.useState)(vE),[le,ue]=(0,x.useState)(()=>{let e=kE();return e.length===0||e.some(p=>p&&p._strippedImg&&(!p.images||p.images.length===0))})`;
-replaceExact('App.tsx initial products state', oldAppState, newAppState);
+if (bundle.includes('!e.some(p=>p&&p._strippedImg')) {
+  console.log('[PATCH SKIP] App.tsx initial products state already patched');
+} else {
+  replaceExact('App.tsx initial products state', oldAppState, newAppState);
+}
 
 const oldAppEffects = `let e=GE(e=>{Array.isArray(e)&&e.length>0&&ie(e)},e=>{console.warn(\`[Storefront] Firestore real-time notice:\`,e?.message||e)}),t=e=>{e.detail&&Array.isArray(e.detail)&&e.detail.length>0&&ie(e.detail)};`;
 const newAppEffects = `let safeSet=next=>ie(prev=>{
@@ -898,7 +932,11 @@ const newAppEffects = `let safeSet=next=>ie(prev=>{
 });
 let e=GE(list=>{Array.isArray(list)&&list.length>0&&safeSet(list)},err=>{console.warn(\`[Storefront] Firestore real-time notice:\`,err?.message||err)}),
     t=ev=>{ev.detail&&Array.isArray(ev.detail)&&ev.detail.length>0&&safeSet(ev.detail)};`;
-replaceExact('App.tsx real-time product merge guard', oldAppEffects, newAppEffects);
+if (bundle.includes('let safeSet=next=>')) {
+  console.log('[PATCH SKIP] App.tsx real-time product merge guard already patched');
+} else {
+  replaceExact('App.tsx real-time product merge guard', oldAppEffects, newAppEffects);
+}
 
 // Syntax validation BEFORE writing
 console.log('Running vm.Script syntax validation...');
