@@ -272,7 +272,7 @@ if (lkStart === -1 || lkEnd === -1) {
 }
 const oldLkBlock = bundle.slice(lkStart, lkEnd);
 
-const newLkBlock = `var Ik=\`/app/applet/src/components/SeamlessLoopVideo.tsx\`,Lk=(0,x.forwardRef)(({src:e,poster:t,fallbackImage:n,title:r,autoPlay:i=!0,isMuted:a=!0,controls:o=!1,enableObserver:s=!0,observerThreshold:c=.05,showPlayButtonFallback:l=!0,onError:u,onLoadedData:d,onCanPlay:f,className:p=\`\`,style:m,"aria-hidden":h,tabIndex:g},_)=>{
+const newLkBlock = `var Ik=\`/app/applet/src/components/SeamlessLoopVideo.tsx\`,Lk=(0,x.forwardRef)(({src:e,poster:t,fallbackImage:n,title:r,autoPlay:i=!0,isMuted:a=!0,controls:o=!1,enableObserver:s=!0,observerThreshold:c=.05,showPlayButtonFallback:l=!0,onError:u,onLoadedData:d,onCanPlay:f,onPlayStateChange:onPlayStateChange,className:p=\`\`,style:m,"aria-hidden":h,tabIndex:g},_)=>{
   let cleanSrc=typeof e===\`string\`?e.trim().replace(/^https?:\\/\\/(?:localhost|127\\.0\\.0\\.1)(?::\\d+)?(\\/.*)$/i,\`$1\`).replace(/^(videos\\/uploads\\/)/i,\`/$1\`):\`\`;
   let v=(0,x.useRef)(null),y=(0,x.useRef)(null),b=(0,x.useRef)(!1),prevSrc=(0,x.useRef)(cleanSrc),
       [ee,te]=(0,x.useState)(!1),[ne,re]=(0,x.useState)(!1),[S,ie]=(0,x.useState)(!1),[ae,oe]=(0,x.useState)(!0),
@@ -284,18 +284,21 @@ const newLkBlock = `var Ik=\`/app/applet/src/components/SeamlessLoopVideo.tsx\`,
       el.muted=a,el.defaultMuted=a,a?el.setAttribute(\`muted\`,\`\`):el.removeAttribute(\`muted\`);
       el.playsInline=!0,el.setAttribute(\`playsinline\`,\`\`),el.setAttribute(\`webkit-playsinline\`,\`true\`);
       let pr=el.play();
-      pr!==void 0&&(await pr,te(!0),re(!1),ie(!1));
+      if(pr!==void 0){
+        await pr;
+        if(!el.paused){te(!0),re(!1),ie(!1),onPlayStateChange?.(!0);}
+      }
     }catch(err){
       if(err?.name===\`NotAllowedError\`){
         if(!el.muted){
-          try{el.muted=!0,el.defaultMuted=!0,el.setAttribute(\`muted\`,\`\`),await el.play(),te(!0),re(!1),ie(!1);return}catch{}
+          try{el.muted=!0,el.defaultMuted=!0,el.setAttribute(\`muted\`,\`\`),await el.play();if(!el.paused){te(!0),re(!1),ie(!1),onPlayStateChange?.(!0);return}}catch{}
         }
-        re(!0),te(!1);
+        re(!0),te(!1),onPlayStateChange?.(!1);
       }else if(err?.name!==\`AbortError\`){
-        console.warn(\`[Video Player] Playback attempt notice:\`,err?.message||err);
+        console.warn(\`[SeamlessLoopVideo] Autoplay attempt rejected:\`,{title:r,videoUrl:cleanSrc,name:err?.name,message:err?.message||err});
       }
     }
-  },[a,cleanSrc]);
+  },[a,cleanSrc,r,onPlayStateChange]);
   let ce=(0,x.useCallback)(el=>{
     v.current=el;
     if(el){
@@ -311,8 +314,15 @@ const newLkBlock = `var Ik=\`/app/applet/src/components/SeamlessLoopVideo.tsx\`,
     if(i&&ae&&!b.current&&el.paused)se();
   },[a,i,ae,se]);
   (0,x.useImperativeHandle)(_,()=>({
-    play:async()=>(b.current=!1,v.current?(re(!1),v.current.play()):void 0),
-    pause:()=>{b.current=!0,v.current&&(v.current.pause(),te(!1))},
+    play:async()=>{
+      b.current=!1;
+      let el=v.current;
+      console.log(\`[SeamlessLoopVideo Ref.play] Called\`,{title:r,hasVideoEl:!!el,videoUrl:cleanSrc,readyState:el?.readyState});
+      if(!el)return;
+      if(el.error||el.networkState===3){try{el.load()}catch{}}
+      return el.play();
+    },
+    pause:()=>{b.current=!0,v.current&&(v.current.pause(),te(!1),onPlayStateChange?.(!1))},
     toggleMute:()=>{
       if(v.current){
         let m2=!v.current.muted;
@@ -321,7 +331,7 @@ const newLkBlock = `var Ik=\`/app/applet/src/components/SeamlessLoopVideo.tsx\`,
       return!0;
     },
     get videoElement(){return v.current}
-  }),[]);
+  }),[r,cleanSrc,onPlayStateChange]);
   (0,x.useEffect)(()=>{
     if(!s){oe(!0);return}
     let el=y.current||v.current;
@@ -333,12 +343,12 @@ const newLkBlock = `var Ik=\`/app/applet/src/components/SeamlessLoopVideo.tsx\`,
         let vid=v.current;
         if(vid){
           if(vis){i&&vid.paused&&!b.current&&se();}
-          else if(!vid.paused){try{vid.pause(),te(!1)}catch{}}
+          else if(!vid.paused){try{vid.pause(),te(!1),onPlayStateChange?.(!1)}catch{}}
         }
       });
     },{threshold:[0,.05,.2],rootMargin:\`150px 150px 150px 150px\`});
     return obs.observe(el),()=>obs.disconnect();
-  },[s,i,se]);
+  },[s,i,se,onPlayStateChange]);
   (0,x.useEffect)(()=>{
     if(!i||!ae)return;
     let resume=()=>{let el=v.current;el&&el.paused&&!b.current&&se()};
@@ -348,7 +358,7 @@ const newLkBlock = `var Ik=\`/app/applet/src/components/SeamlessLoopVideo.tsx\`,
            ()=>{window.removeEventListener(\`touchstart\`,resume),window.removeEventListener(\`click\`,resume),window.removeEventListener(\`scroll\`,resume)};
   },[i,ae,se]);
   (0,x.useEffect)(()=>{
-    ie(!1),re(!1);
+    ie(!1),re(!1),te(!1),onPlayStateChange?.(!1);
     let el=v.current;
     if(el&&cleanSrc){
       if(prevSrc.current!==cleanSrc){
@@ -360,11 +370,61 @@ const newLkBlock = `var Ik=\`/app/applet/src/components/SeamlessLoopVideo.tsx\`,
   },[cleanSrc]);
   let le=()=>{let el=v.current;if(el){el.currentTime=0;let pr=el.play();pr!==void 0&&pr.catch(()=>{})}},
       ue=()=>{let el=v.current;if(el&&el.duration>.5&&(el.ended||el.currentTime>=el.duration-.08)){el.currentTime=0;let pr=el.play();pr!==void 0&&pr.catch(()=>{})}},
-      de=()=>{te(!1);let el=v.current;if(el&&!b.current&&ae&&i&&(el.ended||el.duration>0&&el.currentTime>=el.duration-.2)){el.currentTime=0;let pr=el.play();pr!==void 0&&pr.catch(()=>{})}},
+      de=()=>{te(!1);onPlayStateChange?.(!1);let el=v.current;if(el&&!b.current&&ae&&i&&(el.ended||el.duration>0&&el.currentTime>=el.duration-.2)){el.currentTime=0;let pr=el.play();pr!==void 0&&pr.catch(()=>{})}},
       fe=ev=>{i&&ae&&!b.current&&se(),f?.(ev)},
-      pe=ev=>{console.warn(\`[Video Player] Video error notice on src:\`,cleanSrc);let el=v.current;(!el||el.readyState===0)&&(ie(!0),te(!1)),u?.(ev)},
-      me=ev=>{ev.stopPropagation(),b.current=!1,re(!1),ie(!1);let el=v.current;el&&(el.muted=a,el.play().then(()=>te(!0)).catch(()=>{}))},
-      he=ev=>{ev.stopPropagation(),b.current=!1,ie(!1),re(!1);let el=v.current;el&&(el.load(),el.play().then(()=>te(!0)).catch(()=>{}))};
+      pe=ev=>{
+        let el=v.current;
+        console.error(\`[SeamlessLoopVideo] Playback error\`,{title:r,videoUrl:cleanSrc,errorCode:el?.error?.code,errorMessage:el?.error?.message,readyState:el?.readyState,networkState:el?.networkState});
+        (!el||el.readyState===0||el.error)&&(ie(!0),te(!1),onPlayStateChange?.(!1)),u?.(ev);
+      },
+      handleManualPlay=ev=>{
+        if(ev){ev.preventDefault();ev.stopPropagation();}
+        b.current=!1;
+        let el=v.current;
+        console.log(\`[SeamlessLoopVideo] Play button clicked\`,{title:r,hasVideoEl:!!el,videoUrl:cleanSrc,currentSrc:el?.currentSrc,readyState:el?.readyState,networkState:el?.networkState,paused:el?.paused});
+        if(!el){
+          console.error(\`[SeamlessLoopVideo] Video ref is null for:\`,r,cleanSrc);
+          return;
+        }
+        if(!cleanSrc){
+          console.error(\`[SeamlessLoopVideo] Missing video URL for:\`,r);
+          ie(!0);
+          return;
+        }
+        if(!el.getAttribute(\`src\`))el.setAttribute(\`src\`,cleanSrc);
+        if(el.error||el.networkState===3){try{el.load()}catch{}}
+        el.muted=a,el.defaultMuted=a,a?el.setAttribute(\`muted\`,\`\`):el.removeAttribute(\`muted\`);
+        el.playsInline=!0,el.setAttribute(\`playsinline\`,\`\`),el.setAttribute(\`webkit-playsinline\`,\`true\`);
+        try{
+          let pr=el.play();
+          if(pr!==void 0){
+            pr.then(()=>{
+              console.log(\`[SeamlessLoopVideo] play() Promise RESOLVED\`,{title:r,videoUrl:cleanSrc,paused:el.paused,readyState:el.readyState});
+              if(!el.paused){te(!0),re(!1),ie(!1),onPlayStateChange?.(!0);}
+            }).catch(err=>{
+              console.error(\`[SeamlessLoopVideo] play() Promise REJECTED\`,{title:r,videoUrl:cleanSrc,name:err?.name,message:err?.message});
+              if(!el.muted){
+                el.muted=!0,el.defaultMuted=!0,el.setAttribute(\`muted\`,\`\`);
+                let retryP=el.play();
+                retryP!==void 0&&retryP.then(()=>{
+                  console.log(\`[SeamlessLoopVideo] muted fallback play() RESOLVED\`,{title:r,videoUrl:cleanSrc});
+                  if(!el.paused){te(!0),re(!1),ie(!1),onPlayStateChange?.(!0);}
+                }).catch(err2=>{
+                  console.error(\`[SeamlessLoopVideo] muted fallback play() REJECTED\`,{title:r,videoUrl:cleanSrc,name:err2?.name,message:err2?.message});
+                  te(!1),re(!0),onPlayStateChange?.(!1);
+                });
+              }else{
+                te(!1),ie(!0),onPlayStateChange?.(!1);
+              }
+            });
+          }else if(!el.paused){
+            te(!0),re(!1),ie(!1),onPlayStateChange?.(!0);
+          }
+        }catch(err){
+          console.error(\`[SeamlessLoopVideo] play() threw synchronously\`,err);
+          te(!1),ie(!0),onPlayStateChange?.(!1);
+        }
+      };
   return(0,I.jsxDEV)(\`div\`,{ref:y,className:\`relative w-full h-full flex items-center justify-center overflow-hidden\`,style:m,children:[
     (0,I.jsxDEV)(\`video\`,{
       ref:ce,
@@ -384,17 +444,16 @@ const newLkBlock = `var Ik=\`/app/applet/src/components/SeamlessLoopVideo.tsx\`,
       onLoadedMetadata:ev=>{i&&ae&&!b.current&&se(),d?.(ev)},
       onLoadedData:ev=>{d?.(ev)},
       onCanPlay:fe,
-      onPlaying:ev=>{te(!0),re(!1),ie(!1),d?.(ev)},
-      onPlay:()=>{te(!0),re(!1)},
+      onPlaying:ev=>{te(!0),re(!1),ie(!1),onPlayStateChange?.(!0),d?.(ev)},
       onPause:de,
       className:\`\${p} relative\`,
-      style:{width:\`100%\`,height:\`100%\`,...m,position:\`relative\`,zIndex:2,opacity:S&&w?0:1},
+      style:{width:\`100%\`,height:\`100%\`,...m,position:\`relative\`,zIndex:2,opacity:S&&w&&!ee?0:1},
       "aria-hidden":h,
       tabIndex:g
     },void 0,!1,{fileName:Ik,lineNumber:368,columnNumber:9},void 0),
-    l&&ne&&!ee&&!o&&(0,I.jsxDEV)(\`div\`,{onClick:me,className:\`absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center z-20 cursor-pointer transition-all duration-300 hover:bg-black/50\`,style:{backgroundColor:\`rgba(0,0,0,0.45)\`},title:\`Click to play video\`,children:[(0,I.jsxDEV)(\`div\`,{className:\`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-[#DFB982]/95 hover:bg-[#DFB982] text-[#241C1A] flex items-center justify-center shadow-2xl transition-transform hover:scale-105 active:scale-95 border-2 border-white/40\`,children:(0,I.jsxDEV)(VO,{className:\`w-7 h-7 sm:w-8 sm:h-8 fill-[#241C1A] ml-1\`},void 0,!1,{fileName:Ik,lineNumber:404,columnNumber:15},void 0)},void 0,!1,{fileName:Ik,lineNumber:403,columnNumber:13},void 0),(0,I.jsxDEV)(\`span\`,{className:\`absolute bottom-4 bg-black/75 text-[#DFB982] text-[10px] font-bold tracking-wider uppercase px-3 py-1 rounded-full border border-white/20\`,style:{backgroundColor:\`rgba(0,0,0,0.75)\`,fontSize:\`10px\`},children:\`Tap to Play\`},void 0,!1,{fileName:Ik,lineNumber:406,columnNumber:13},void 0)]},void 0,!0,{fileName:Ik,lineNumber:398,columnNumber:11},void 0),
-    w&&!ee&&(0,I.jsxDEV)(\`img\`,{src:w,alt:r||\`Product jewellery showcase\`,className:\`absolute inset-0 w-full h-full object-contain pointer-events-none z-0 transition-opacity duration-500\`,style:{zIndex:1},loading:\`eager\`},void 0,!1,{fileName:Ik,lineNumber:414,columnNumber:11},void 0),
-    S&&!ee&&!o&&(0,I.jsxDEV)(\`div\`,{onClick:he,className:\`absolute inset-0 bg-black/60 flex flex-col items-center justify-center z-20 cursor-pointer p-4 text-center text-white\`,style:{backgroundColor:\`rgba(0,0,0,0.65)\`},title:\`Click to retry video playback\`,children:[(0,I.jsxDEV)(\`div\`,{className:\`w-12 h-12 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center mb-2 transition-transform hover:scale-105 border border-white/30\`,children:(0,I.jsxDEV)(VO,{className:\`w-5 h-5 fill-white ml-0.5\`},void 0,!1,{fileName:Ik,lineNumber:429,columnNumber:15},void 0)},void 0,!1,{fileName:Ik,lineNumber:428,columnNumber:13},void 0),(0,I.jsxDEV)(\`span\`,{className:\`text-xs font-semibold tracking-wider uppercase text-[#DFB982]\`,children:\`Tap to Retry Video\`},void 0,!1,{fileName:Ik,lineNumber:431,columnNumber:13},void 0),(0,I.jsxDEV)(\`span\`,{className:\`text-[10px] text-white/75 mt-1\`,style:{fontSize:\`10px\`},children:\`Preview loading...\`,},void 0,!1,{fileName:Ik,lineNumber:432,columnNumber:13},void 0)]},void 0,!0,{fileName:Ik,lineNumber:423,columnNumber:11},void 0)
+    l&&(ne||!ee)&&!S&&!o&&(0,I.jsxDEV)(\`button\`,{type:\`button\`,onClick:handleManualPlay,className:\`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-[#DFB982]/95 hover:bg-[#DFB982] text-[#241C1A] flex items-center justify-center shadow-2xl transition-transform hover:scale-105 active:scale-95 border-2 border-white/40 cursor-pointer\`,style:{position:\`absolute\`,left:\`50%\`,top:\`50%\`,transform:\`translate(-50%, -50%)\`,zIndex:30,pointerEvents:\`auto\`,cursor:\`pointer\`,backgroundColor:\`rgba(223,185,130,0.95)\`},title:\`Click to play video\`,"aria-label":\`Play video\`,children:(0,I.jsxDEV)(VO,{className:\`w-7 h-7 sm:w-8 sm:h-8 fill-[#241C1A] ml-1\`},void 0,!1,{fileName:Ik,lineNumber:404,columnNumber:15},void 0)},void 0,!1,{fileName:Ik,lineNumber:398,columnNumber:11},void 0),
+    w&&!ee&&(0,I.jsxDEV)(\`img\`,{src:w,alt:r||\`Product jewellery showcase\`,className:\`absolute inset-0 w-full h-full object-contain pointer-events-none z-0 transition-opacity duration-500\`,style:{zIndex:1,pointerEvents:\`none\`},loading:\`eager\`},void 0,!1,{fileName:Ik,lineNumber:414,columnNumber:11},void 0),
+    S&&!ee&&!o&&(0,I.jsxDEV)(\`button\`,{type:\`button\`,onClick:handleManualPlay,className:\`flex flex-col items-center justify-center p-4 rounded-2xl text-center text-white cursor-pointer\`,style:{position:\`absolute\`,left:\`50%\`,top:\`50%\`,transform:\`translate(-50%, -50%)\`,zIndex:30,pointerEvents:\`auto\`,cursor:\`pointer\`,backgroundColor:\`rgba(0,0,0,0.72)\`},title:\`Click to retry video playback\`,"aria-label":\`Retry video playback\`,children:[(0,I.jsxDEV)(\`div\`,{className:\`w-12 h-12 rounded-full bg-[#DFB982]/95 text-[#241C1A] flex items-center justify-center mb-2 transition-transform hover:scale-105 border border-white/30\`,children:(0,I.jsxDEV)(VO,{className:\`w-5 h-5 fill-[#241C1A] ml-0.5\`},void 0,!1,{fileName:Ik,lineNumber:429,columnNumber:15},void 0)},void 0,!1,{fileName:Ik,lineNumber:428,columnNumber:13},void 0),(0,I.jsxDEV)(\`span\`,{className:\`text-xs font-semibold tracking-wider uppercase text-[#DFB982]\`,children:\`Tap to Retry Video\`},void 0,!1,{fileName:Ik,lineNumber:431,columnNumber:13},void 0),(0,I.jsxDEV)(\`span\`,{className:\`text-[10px] text-white/75 mt-1\`,style:{fontSize:\`10px\`},children:\`Tap to play MP4\`},void 0,!1,{fileName:Ik,lineNumber:432,columnNumber:13},void 0)]},void 0,!0,{fileName:Ik,lineNumber:423,columnNumber:11},void 0)
   ]},void 0,!0,{fileName:Ik,lineNumber:363,columnNumber:7},void 0)
 })`;
 
@@ -519,6 +578,7 @@ PN=({videoUrl:e,fallbackImage:t,title:n,isMuted:r=!0,isActive:i=!0})=>{
       cleanSrc=uN(e),
       prevSrc=(0,x.useRef)(cleanSrc),
       [hasErr,setHasErr]=(0,x.useState)(!1),
+      [autoplayBlocked,setAutoplayBlocked]=(0,x.useState)(!1),
       [playing,setPlaying]=(0,x.useState)(!1),
       [ready,setReady]=(0,x.useState)(!1),
       [inView,setInView]=(0,x.useState)(!0),
@@ -535,17 +595,104 @@ PN=({videoUrl:e,fallbackImage:t,title:n,isMuted:r=!0,isActive:i=!0})=>{
       el.setAttribute(\`playsinline\`,\`\`);
       el.setAttribute(\`webkit-playsinline\`,\`true\`);
       let p=el.play();
-      p!==void 0&&p.then(()=>{setPlaying(!0);setHasErr(!1);}).catch(err=>{
+      p!==void 0&&p.then(()=>{
+        if(!el.paused){setPlaying(!0);setHasErr(!1);setAutoplayBlocked(!1);}
+      }).catch(err=>{
         if(err?.name===\`NotAllowedError\`||!el.muted){
           el.muted=!0;
           el.defaultMuted=!0;
           el.setAttribute(\`muted\`,\`\`);
           let p2=el.play();
-          p2!==void 0&&p2.then(()=>{setPlaying(!0);setHasErr(!1);}).catch(()=>{});
+          p2!==void 0&&p2.then(()=>{
+            if(!el.paused){setPlaying(!0);setHasErr(!1);setAutoplayBlocked(!1);}
+          }).catch(err2=>{
+            console.warn(\`[ShopByVideo] Autoplay blocked:\`,{title:n,videoUrl:cleanSrc,name:err2?.name,message:err2?.message});
+            setPlaying(!1);
+            setAutoplayBlocked(!0);
+          });
+        }else if(err?.name!==\`AbortError\`){
+          console.warn(\`[ShopByVideo] Autoplay rejected:\`,{title:n,videoUrl:cleanSrc,name:err?.name,message:err?.message});
         }
       });
     }catch{}
-  },[r,cleanSrc]);
+  },[r,cleanSrc,n]);
+
+  let handlePlayButtonClick=(0,x.useCallback)(ev=>{
+    if(ev){ev.preventDefault();ev.stopPropagation();}
+    let el=v.current;
+    console.log(\`[ShopByVideo] Play button clicked\`,{
+      title:n,
+      hasVideoEl:!!el,
+      videoUrl:cleanSrc,
+      currentSrc:el?.currentSrc,
+      readyState:el?.readyState,
+      networkState:el?.networkState,
+      paused:el?.paused
+    });
+    if(!el){
+      console.error(\`[ShopByVideo] Video element ref missing for:\`,n,cleanSrc);
+      return;
+    }
+    if(!cleanSrc){
+      console.error(\`[ShopByVideo] Empty videoUrl for:\`,n);
+      setHasErr(!0);
+      return;
+    }
+    setHasErr(!1);
+    setAutoplayBlocked(!1);
+    if(!el.getAttribute(\`src\`)){
+      el.setAttribute(\`src\`,cleanSrc);
+    }
+    if(el.error||el.networkState===3){
+      try{el.load()}catch{}
+    }
+    el.muted=r;
+    el.defaultMuted=r;
+    r?el.setAttribute(\`muted\`,\`\`):el.removeAttribute(\`muted\`);
+    el.playsInline=!0;
+    el.setAttribute(\`playsinline\`,\`\`);
+    el.setAttribute(\`webkit-playsinline\`,\`true\`);
+    try{
+      let playPromise=el.play();
+      if(playPromise!==void 0){
+        playPromise.then(()=>{
+          console.log(\`[ShopByVideo] play() Promise RESOLVED\`,{title:n,videoUrl:cleanSrc,paused:el.paused,readyState:el.readyState});
+          if(!el.paused){
+            setPlaying(!0);
+            setHasErr(!1);
+            setAutoplayBlocked(!1);
+          }
+        }).catch(err=>{
+          console.error(\`[ShopByVideo] play() Promise REJECTED\`,{title:n,videoUrl:cleanSrc,name:err?.name,message:err?.message});
+          if(!el.muted){
+            el.muted=!0;
+            el.defaultMuted=!0;
+            el.setAttribute(\`muted\`,\`\`);
+            let p2=el.play();
+            p2!==void 0&&p2.then(()=>{
+              console.log(\`[ShopByVideo] Muted fallback play() RESOLVED\`,{title:n,videoUrl:cleanSrc,paused:el.paused});
+              if(!el.paused){setPlaying(!0);setHasErr(!1);setAutoplayBlocked(!1);}
+            }).catch(err2=>{
+              console.error(\`[ShopByVideo] Muted fallback play() REJECTED\`,{title:n,videoUrl:cleanSrc,name:err2?.name,message:err2?.message});
+              setPlaying(!1);
+              setHasErr(!0);
+            });
+          }else{
+            setPlaying(!1);
+            if(err?.name===\`NotAllowedError\`)setAutoplayBlocked(!0);
+            else setHasErr(!0);
+          }
+        });
+      }else if(!el.paused){
+        setPlaying(!0);
+        setHasErr(!1);
+      }
+    }catch(err){
+      console.error(\`[ShopByVideo] play() threw synchronously\`,err);
+      setPlaying(!1);
+      setHasErr(!0);
+    }
+  },[cleanSrc,n,r]);
 
   (0,x.useEffect)(()=>{
     let el=v.current;
@@ -560,7 +707,7 @@ PN=({videoUrl:e,fallbackImage:t,title:n,isMuted:r=!0,isActive:i=!0})=>{
   },[r,inView,tryPlay]);
 
   (0,x.useEffect)(()=>{
-    setHasErr(!1);setReady(!1);setPlaying(!1);
+    setHasErr(!1);setAutoplayBlocked(!1);setReady(!1);setPlaying(!1);
     let el=v.current;
     if(el&&cleanSrc){
       if(prevSrc.current!==cleanSrc){
@@ -622,32 +769,47 @@ PN=({videoUrl:e,fallbackImage:t,title:n,isMuted:r=!0,isActive:i=!0})=>{
         onLoadedMetadata:()=>{setReady(!0);if(inView)tryPlay();},
         onLoadedData:()=>{setReady(!0);setHasErr(!1);if(inView)tryPlay();},
         onCanPlay:()=>{setReady(!0);setHasErr(!1);if(inView)tryPlay();},
-        onPlaying:()=>{setPlaying(!0);setReady(!0);setHasErr(!1);},
-        onPlay:()=>{setPlaying(!0);setHasErr(!1);},
+        onPlaying:()=>{let el=v.current;if(!el||!el.paused){setPlaying(!0);setReady(!0);setHasErr(!1);setAutoplayBlocked(!1);}},
         onPause:()=>setPlaying(!1),
-        onError:()=>{let el=v.current;if(!el||el.readyState===0)setHasErr(!0);},
+        onError:()=>{
+          let el=v.current;
+          console.error(\`[ShopByVideo] Video playback error event\`,{title:n,videoUrl:cleanSrc,errorCode:el?.error?.code,errorMessage:el?.error?.message,readyState:el?.readyState,networkState:el?.networkState});
+          if(!el||el.readyState===0||el.error){setHasErr(!0);setPlaying(!1);}
+        },
         className:\`w-full h-full object-cover select-none block\`,
-        style:{width:\`100%\`,height:\`100%\`,objectFit:\`cover\`,display:\`block\`,position:\`relative\`,zIndex:2,opacity:hasErr&&validFallback?0:1},
+        style:{width:\`100%\`,height:\`100%\`,objectFit:\`cover\`,display:\`block\`,position:\`relative\`,zIndex:2,opacity:hasErr&&validFallback&&!playing?0:1},
         "aria-hidden":\`true\`,
         tabIndex:-1
       },void 0,!1,{fileName:NN,lineNumber:60,columnNumber:7},void 0),
-      validFallback&&(!ready||hasErr)&&!playing&&(0,I.jsxDEV)(\`img\`,{
+      validFallback&&!playing&&(0,I.jsxDEV)(\`img\`,{
         src:validFallback,
         alt:n||\`VIDHYAA Jewellery\`,
         className:\`absolute inset-0 w-full h-full object-cover pointer-events-none transition-opacity duration-300\`,
-        style:{zIndex:1},
+        style:{zIndex:1,pointerEvents:\`none\`},
         loading:\`eager\`
       },void 0,!1,{fileName:NN,lineNumber:58,columnNumber:9},void 0),
-      hasErr&&(0,I.jsxDEV)(\`button\`,{
+      !playing&&(0,I.jsxDEV)(\`button\`,{
         type:\`button\`,
-        onClick:ev=>{ev.stopPropagation();setHasErr(!1);let el=v.current;if(el){try{el.load()}catch{}tryPlay();}},
-        className:\`absolute inset-0 flex flex-col items-center justify-center bg-black/50 text-white z-10 cursor-pointer\`,
-        style:{backgroundColor:\`rgba(0,0,0,0.55)\`},
-        children:[
-          (0,I.jsxDEV)(\`div\`,{className:\`w-12 h-12 rounded-full bg-[#DFB982]/90 text-[#241C1A] flex items-center justify-center shadow-lg mb-1.5\`,children:(0,I.jsxDEV)(VO,{className:\`w-5 h-5 fill-[#241C1A] ml-0.5\`},void 0,!1,{fileName:NN,lineNumber:62,columnNumber:11},void 0)},void 0,!1,{fileName:NN,lineNumber:62,columnNumber:9},void 0),
-          (0,I.jsxDEV)(\`span\`,{className:\`text-[11px] font-semibold tracking-wider uppercase text-[#DFB982]\`,children:\`Tap to Play Video\`},void 0,!1,{fileName:NN,lineNumber:63,columnNumber:9},void 0)
-        ]
-      },void 0,!0,{fileName:NN,lineNumber:61,columnNumber:7},void 0)
+        onClick:handlePlayButtonClick,
+        className:\`flex flex-col items-center justify-center rounded-full shadow-2xl transition-transform hover:scale-105 active:scale-95 cursor-pointer\`,
+        style:{
+          position:\`absolute\`,
+          left:\`50%\`,
+          top:\`50%\`,
+          transform:\`translate(-50%, -50%)\`,
+          width:\`64px\`,
+          height:\`64px\`,
+          borderRadius:\`9999px\`,
+          zIndex:25,
+          pointerEvents:\`auto\`,
+          cursor:\`pointer\`,
+          backgroundColor:\`rgba(223,185,130,0.95)\`,
+          border:\`2px solid rgba(255,255,255,0.65)\`
+        },
+        title:hasErr?\`Retry video playback\`:(autoplayBlocked?\`Tap to play video\`:(\`Play \${n||\`video\`}\`)),
+        "aria-label":hasErr?\`Retry video playback\`:\`Play video\`,
+        children:(0,I.jsxDEV)(VO,{className:\`w-7 h-7 fill-[#241C1A] ml-0.5\`},void 0,!1,{fileName:NN,lineNumber:62,columnNumber:11},void 0)
+      },void 0,!1,{fileName:NN,lineNumber:61,columnNumber:7},void 0)
     ]
   },void 0,!0,{fileName:NN,lineNumber:59,columnNumber:5},void 0);
 };
@@ -699,7 +861,7 @@ var FN=({products:e,onSelectProduct:t})=>{
       [activeSlide,setActiveSlide]=(0,x.useState)(0),
       [mutedId,setMutedId]=(0,x.useState)(null),
       [modalIdx,setModalIdx]=(0,x.useState)(null),
-      [modalPlaying,setModalPlaying]=(0,x.useState)(!0),
+      [modalPlaying,setModalPlaying]=(0,x.useState)(!1),
       [modalMuted,setModalMuted]=(0,x.useState)(!0),
       [addedId,setAddedId]=(0,x.useState)(null),
       modalVideoRef=(0,x.useRef)(null);
@@ -792,7 +954,7 @@ var FN=({products:e,onSelectProduct:t})=>{
               let isSoundOn=mutedId===reel.id;
               return(0,I.jsxDEV)(\'div\',{
                 key:reel.id,
-                onClick:()=>{if(activeSlide!==idx)scrollToSlide(idx);else setModalIdx(idx);},
+                onClick:()=>{if(activeSlide!==idx)scrollToSlide(idx);else{setModalPlaying(!1);setModalIdx(idx);}},
                 className:\`vidhyaa-reel-card group relative flex-none w-[78vw] sm:w-[280px] lg:w-[285px] aspect-[9/16] snap-center rounded-3xl overflow-hidden cursor-pointer transition-all duration-300 \${isCurrent?\'ring-2 ring-[#DFB982] shadow-2xl scale-[1.01]\':\'ring-1 ring-[#E8DCCF]/80 shadow-md opacity-90 hover:opacity-100 hover:ring-[#DFB982]/60\'}\`,
                 style:{aspectRatio:\`9 / 16\`,minHeight:\`420px\`,backgroundColor:\`#120C0B\`},
                 children:[
@@ -868,19 +1030,51 @@ var FN=({products:e,onSelectProduct:t})=>{
             (0,I.jsxDEV)(\'button\',{onClick:()=>setModalIdx(null),className:\'absolute top-3 right-3 z-30 w-9 h-9 rounded-full bg-black/60 hover:bg-black text-white flex items-center justify-center transition-colors cursor-pointer\',title:\'Close video viewer (Esc)\',\'aria-label\':\'Close video viewer\',children:(0,I.jsxDEV)(Sk,{className:\'w-5 h-5\'},void 0,!1,{fileName:NN,lineNumber:477,columnNumber:15},void 0)},void 0,!1,{fileName:NN,lineNumber:471,columnNumber:13},void 0),
             (0,I.jsxDEV)(\'div\',{
               className:\'relative md:w-3/5 bg-black flex items-center justify-center overflow-hidden select-none\',
+              style:{minHeight:\`360px\`},
               children:[
                 (0,I.jsxDEV)(\'div\',{
                   className:\'relative w-full h-full max-h-[550px] md:max-h-[640px] flex items-center justify-center cursor-pointer\',
-                  onClick:()=>{let vEl=modalVideoRef.current;if(vEl){if(modalPlaying){vEl.pause();setModalPlaying(!1);}else{vEl.play().catch(()=>{});setModalPlaying(!0);}}},
+                  style:{minHeight:\`360px\`},
+                  onClick:()=>{
+                    let handle=modalVideoRef.current,vEl=handle?.videoElement;
+                    console.log(\'[ShopByVideo Modal] Video container clicked\',{hasHandle:!!handle,hasVideoEl:!!vEl,videoUrl:activeModalReel.videoUrl,paused:vEl?.paused});
+                    if(!handle)return;
+                    if(vEl&&!vEl.paused){handle.pause();setModalPlaying(!1);}
+                    else{
+                      let pr=handle.play();
+                      pr&&typeof pr.then===\'function\'&&pr.then(()=>{console.log(\'[ShopByVideo Modal] play() RESOLVED\',{videoUrl:activeModalReel.videoUrl});setModalPlaying(!0);}).catch(err=>{console.error(\'[ShopByVideo Modal] play() REJECTED\',{videoUrl:activeModalReel.videoUrl,name:err?.name,message:err?.message});setModalPlaying(!1);});
+                    }
+                  },
                   children:[
-                    (0,I.jsxDEV)(Lk,{ref:modalVideoRef,src:activeModalReel.videoUrl,poster:void 0,fallbackImage:activeModalReel.posterImage,title:activeModalReel.title,autoPlay:!0,isMuted:modalMuted,enableObserver:!1,showPlayButtonFallback:!0,className:\'w-full h-full max-h-[550px] md:max-h-[640px] object-contain select-none\',style:{width:\'100%\',height:\'100%\',objectFit:\'contain\'}},activeModalReel.id,!1,{fileName:NN,lineNumber:486,columnNumber:17},void 0),
-                    !modalPlaying&&(0,I.jsxDEV)(\'div\',{className:\'absolute inset-0 bg-black/40 flex items-center justify-center pointer-events-none\',children:(0,I.jsxDEV)(\'div\',{className:\'w-16 h-16 rounded-full bg-black/70 backdrop-blur-md flex items-center justify-center border border-white/20 text-[#DFB982]\',children:(0,I.jsxDEV)(VO,{className:\'w-8 h-8 fill-[#DFB982] ml-1\'},void 0,!1,{fileName:NN,lineNumber:504,columnNumber:23},void 0)},void 0,!1,{fileName:NN,lineNumber:503,columnNumber:21},void 0)},void 0,!1,{fileName:NN,lineNumber:502,columnNumber:19},void 0),
-                    (0,I.jsxDEV)(\'button\',{onClick:evt=>{evt.stopPropagation();if(modalVideoRef.current){let isM=modalVideoRef.current.toggleMute();setModalMuted(isM);}else setModalMuted(!modalMuted);},className:\'absolute top-4 left-4 z-20 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 backdrop-blur-md text-white flex items-center justify-center transition-colors cursor-pointer border border-white/20\',title:modalMuted?\'Click to Unmute\':\'Click to Mute\',children:modalMuted?(0,I.jsxDEV)(xk,{className:\'w-4 h-4 text-red-300\'},void 0,!1,{fileName:NN,lineNumber:520,columnNumber:21},void 0):(0,I.jsxDEV)(bk,{className:\'w-4 h-4 text-emerald-400\'},void 0,!1,{fileName:NN,lineNumber:522,columnNumber:21},void 0)},void 0,!1,{fileName:NN,lineNumber:510,columnNumber:17},void 0)
+                    (0,I.jsxDEV)(Lk,{ref:modalVideoRef,src:activeModalReel.videoUrl,poster:void 0,fallbackImage:activeModalReel.posterImage,title:activeModalReel.title,autoPlay:!0,isMuted:modalMuted,enableObserver:!1,showPlayButtonFallback:!1,onPlayStateChange:isP=>setModalPlaying(!!isP),className:\'w-full h-full max-h-[550px] md:max-h-[640px] object-contain select-none\',style:{width:\'100%\',height:\'100%\',objectFit:\'contain\'}},activeModalReel.id,!1,{fileName:NN,lineNumber:486,columnNumber:17},void 0),
+                    !modalPlaying&&(0,I.jsxDEV)(\'button\',{
+                      type:\'button\',
+                      onClick:evt=>{
+                        evt.preventDefault();evt.stopPropagation();
+                        let handle=modalVideoRef.current,vEl=handle?.videoElement;
+                        console.log(\'[ShopByVideo Modal] Play button clicked\',{hasHandle:!!handle,hasVideoEl:!!vEl,videoUrl:activeModalReel.videoUrl,readyState:vEl?.readyState});
+                        if(!handle)return;
+                        let pr=handle.play();
+                        pr&&typeof pr.then===\'function\'&&pr.then(()=>{
+                          console.log(\'[ShopByVideo Modal] Play button play() RESOLVED\',{videoUrl:activeModalReel.videoUrl,paused:vEl?.paused});
+                          if(!vEl||!vEl.paused)setModalPlaying(!0);
+                        }).catch(err=>{
+                          console.error(\'[ShopByVideo Modal] Play button play() REJECTED\',{videoUrl:activeModalReel.videoUrl,name:err?.name,message:err?.message});
+                          setModalPlaying(!1);
+                        });
+                      },
+                      className:\'w-16 h-16 rounded-full bg-black/70 backdrop-blur-md flex items-center justify-center border border-white/30 text-[#DFB982] shadow-2xl transition-transform hover:scale-105 active:scale-95 cursor-pointer\',
+                      style:{position:\`absolute\`,left:\`50%\`,top:\`50%\`,transform:\`translate(-50%, -50%)\`,zIndex:30,pointerEvents:\`auto\`,cursor:\`pointer\`,backgroundColor:\`rgba(0,0,0,0.75)\`},
+                      title:\'Play video\',
+                      \'aria-label\':\'Play video\',
+                      children:(0,I.jsxDEV)(VO,{className:\'w-8 h-8 fill-[#DFB982] ml-1\'},void 0,!1,{fileName:NN,lineNumber:504,columnNumber:23},void 0)
+                    },void 0,!1,{fileName:NN,lineNumber:502,columnNumber:19},void 0),
+                    (0,I.jsxDEV)(\'button\',{onClick:evt=>{evt.stopPropagation();if(modalVideoRef.current){let isM=modalVideoRef.current.toggleMute();setModalMuted(isM);}else setModalMuted(!modalMuted);},className:\'absolute top-4 left-4 z-20 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 backdrop-blur-md text-white flex items-center justify-center transition-colors cursor-pointer border border-white/20\',style:{zIndex:30,pointerEvents:\`auto\`},title:modalMuted?\'Click to Unmute\':\'Click to Mute\',children:modalMuted?(0,I.jsxDEV)(xk,{className:\'w-4 h-4 text-red-300\'},void 0,!1,{fileName:NN,lineNumber:520,columnNumber:21},void 0):(0,I.jsxDEV)(bk,{className:\'w-4 h-4 text-emerald-400\'},void 0,!1,{fileName:NN,lineNumber:522,columnNumber:21},void 0)},void 0,!1,{fileName:NN,lineNumber:510,columnNumber:17},void 0)
                   ]
                 },void 0,!0,{fileName:NN,lineNumber:482,columnNumber:15},void 0),
                 (0,I.jsxDEV)(\'div\',{className:\'absolute bottom-4 left-4 z-20 pointer-events-none\',children:(0,I.jsxDEV)(\'div\',{className:\'bg-black/60 backdrop-blur-md px-3 py-1 rounded-full text-xs font-mono border border-white/20 text-[#DFB982]\',children:[modalIdx+1,\' / \',reels.length]},void 0,!0,{fileName:NN,lineNumber:529,columnNumber:17},void 0)},void 0,!1,{fileName:NN,lineNumber:528,columnNumber:15},void 0),
-                (0,I.jsxDEV)(\'button\',{onClick:evt=>{evt.stopPropagation();setModalIdx((modalIdx-1+reels.length)%reels.length);},className:\'absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 hover:bg-black/80 text-white flex items-center justify-center transition-colors cursor-pointer z-20 border border-white/20\',title:\'Previous jewellery reel\',children:(0,I.jsxDEV)(qD,{className:\'w-5 h-5\'},void 0,!1,{fileName:NN,lineNumber:543,columnNumber:17},void 0)},void 0,!1,{fileName:NN,lineNumber:535,columnNumber:15},void 0),
-                (0,I.jsxDEV)(\'button\',{onClick:evt=>{evt.stopPropagation();setModalIdx((modalIdx+1)%reels.length);},className:\'absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 hover:bg-black/80 text-white flex items-center justify-center transition-colors cursor-pointer z-20 border border-white/20\',title:\'Next jewellery reel\',children:(0,I.jsxDEV)(JD,{className:\'w-5 h-5\'},void 0,!1,{fileName:NN,lineNumber:554,columnNumber:17},void 0)},void 0,!1,{fileName:NN,lineNumber:546,columnNumber:15},void 0)
+                (0,I.jsxDEV)(\'button\',{onClick:evt=>{evt.stopPropagation();setModalPlaying(!1);setModalIdx((modalIdx-1+reels.length)%reels.length);},className:\'absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 hover:bg-black/80 text-white flex items-center justify-center transition-colors cursor-pointer z-20 border border-white/20\',style:{zIndex:30,pointerEvents:\`auto\`},title:\'Previous jewellery reel\',children:(0,I.jsxDEV)(qD,{className:\'w-5 h-5\'},void 0,!1,{fileName:NN,lineNumber:543,columnNumber:17},void 0)},void 0,!1,{fileName:NN,lineNumber:535,columnNumber:15},void 0),
+                (0,I.jsxDEV)(\'button\',{onClick:evt=>{evt.stopPropagation();setModalPlaying(!1);setModalIdx((modalIdx+1)%reels.length);},className:\'absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 hover:bg-black/80 text-white flex items-center justify-center transition-colors cursor-pointer z-20 border border-white/20\',style:{zIndex:30,pointerEvents:\`auto\`},title:\'Next jewellery reel\',children:(0,I.jsxDEV)(JD,{className:\'w-5 h-5\'},void 0,!1,{fileName:NN,lineNumber:554,columnNumber:17},void 0)},void 0,!1,{fileName:NN,lineNumber:546,columnNumber:15},void 0)
               ]
             },void 0,!0,{fileName:NN,lineNumber:481,columnNumber:13},void 0),
             (0,I.jsxDEV)(\'div\',{

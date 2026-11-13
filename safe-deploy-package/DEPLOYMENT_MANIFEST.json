@@ -5,19 +5,19 @@
   "localBuildVerified": true,
   "liveDeploymentVerified": false,
   "gitRepositoryConnected": false,
-  "previousProductionBundle": "/assets/index-_P-bKwFU.js",
+  "previousProductionBundle": "/assets/index-DfwSxkcQ.js",
   "newProductionAssets": {
     "html": "/index.html",
-    "js": "/assets/index-DfwSxkcQ.js",
+    "js": "/assets/index-BaL4kABd.js",
     "css": "/assets/index-CD1gwki0.css"
   },
   "uploadFilesToHostingerPublicHtml": [
     {
-      "localSource": "safe-deploy-package/assets/index-DfwSxkcQ.js",
-      "hostingerTarget": "public_html/assets/index-DfwSxkcQ.js",
+      "localSource": "safe-deploy-package/assets/index-BaL4kABd.js",
+      "hostingerTarget": "public_html/assets/index-BaL4kABd.js",
       "uploadOrder": 1,
-      "bytes": 9808851,
-      "sha256": "c78af37f883d3e82d225d4441e3558a19534288357cf47ee72bcc00e7fa1941d",
+      "bytes": 9813691,
+      "sha256": "093452b274f5a1640940c724091bb23c3ca8657b4adc834d4c538a50dd56882d",
       "notes": "Upload BEFORE index.html so no visitor hits a 404 on the new bundle."
     },
     {
@@ -26,27 +26,27 @@
       "uploadOrder": 2,
       "bytes": 117722,
       "sha256": "f88af2fef19b660d85a0f96eeea88e6f6d72e386b1cba77b3740b648168423ae",
-      "notes": "Referenced by dist/index.html."
+      "notes": "Referenced by dist/index.html (unchanged CSS)."
     },
     {
       "localSource": "safe-deploy-package/index.html",
       "hostingerTarget": "public_html/index.html",
       "uploadOrder": 3,
       "bytes": 1861,
-      "sha256": "41dd79b03beab5d796639859b37571f7754436db1e277769c909c1750cb72d1f",
-      "notes": "Upload LAST; switches live entrypoint from index-_P-bKwFU.js to index-DfwSxkcQ.js."
+      "sha256": "9f75e38d231de6202d7d29a145138f7020724781d0e5da5d9b574b07fe1b4688",
+      "notes": "Upload LAST; switches live entrypoint from index-DfwSxkcQ.js to index-BaL4kABd.js."
     }
   ],
   "githubManualSyncFiles": [
     {
       "path": "assets/index-D2RoHgHG.js",
-      "bytes": 9840087,
-      "sha256": "8d48774721e2d1cad4ad4d42d27e9504038962f35806eccb599ffe2f0b296799"
+      "bytes": 9848745,
+      "sha256": "6b9d1de6c30c1c834b66942249bb18145fd8fad26b3f3ee28000813fab7d42b2"
     },
     {
       "path": "scripts/patch_media_restore.cjs",
-      "bytes": 74845,
-      "sha256": "2f4e96fc613a7065e4619ddde203c489a44a84ede90b777526ce4e93a97cbd41"
+      "bytes": 83680,
+      "sha256": "9053fc78b200b03991c0a5982193b51a8f81e95b7831448cc0a8eae7bca06f09"
     }
   ],
   "strictlyDoNotOverwrite": [
@@ -57,8 +57,9 @@
     "public_html/.htaccess"
   ],
   "includedFixes": [
-    "ShopByVideoSection: scoped #shopping-video .vidhyaa-reel-card 9:16 sizing + minHeight 420px + inline gradient/badge/card styles",
-    "SeamlessLoopVideo: inline overlay background and font-size fallbacks",
-    "ProductCard: multi-candidate imgCandidates retry on onError, variation sync, referrerPolicy for external URLs, proper 'Image Unavailable' panel replacing failed URLs instead of Rk"
+    "ShopByVideoSection PN card Play Arrow button: removed destructive el.load() before play(), added inline zIndex:25 and pointerEvents:'auto', synchronous el.play() on real video ref, stopPropagation/preventDefault, honest playing state only after play() resolves with !el.paused or onPlaying event, diagnostic console logs",
+    "ShopByVideoSection FN modal: initialized modalPlaying=false instead of fake true, replaced non-clickable pointer-events-none div with real <button type='button'> at zIndex:30 and pointerEvents:'auto', removed fake setModalPlaying(true) when play() rejects",
+    "SeamlessLoopVideo Lk: converted non-button play/retry overlays to real <button type='button'> with zIndex:30 and pointerEvents:'auto', removed destructive el.load() on normal play clicks, honest state updates on real play() resolution/rejection + diagnostic console logs",
+    "Preserved earlier fixes: ShopByVideoSection 9:16 sizing & ProductCard multi-candidate image fallback"
   ]
 }
