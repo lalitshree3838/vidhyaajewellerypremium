@@ -1,0 +1,146 @@
+[
+  {
+    "orderId": "VDH-WA-8948",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-13T04:42:23.781Z",
+    "type": "CUSTOMER_WHATSAPP_CONFIRMATION",
+    "status": "CONFIRMED_BY_CUSTOMER",
+    "customerName": "Pooja Kashyap",
+    "customerPhone": "+91 9988776655"
+  },
+  {
+    "orderId": "VDH-WA-2841",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-12T11:08:41.821Z",
+    "type": "CUSTOMER_WHATSAPP_CONFIRMATION",
+    "status": "CONFIRMED_BY_CUSTOMER",
+    "customerName": "Pooja Kashyap",
+    "customerPhone": "+91 9988776655"
+  },
+  {
+    "orderId": "VDH-PEND-5356",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-12T05:06:06.799Z",
+    "messageText": "VIDHYAA JEWELLERY STUDIO\n🟢 NEW ORDER CONFIRMED ✓\n\nOrder ID: VDH-PEND-5356\nCustomer Name: Ananya Verma\nMobile: +91 9811122233\nProduct: Royal Polki Choker\nQuantity: 1\nPayment Status: SUCCESSFUL\nPayment Method: UPI\nTotal Amount: ₹3,500\n\nDelivery Address:\nAddress provided at checkout\n\nPlease prepare this order for delivery.",
+    "directLink": "https://wa.me/917302187770?text=VIDHYAA%20JEWELLERY%20STUDIO%0A%F0%9F%9F%A2%20NEW%20ORDER%20CONFIRMED%20%E2%9C%93%0A%0AOrder%20ID%3A%20VDH-PEND-5356%0ACustomer%20Name%3A%20Ananya%20Verma%0AMobile%3A%20%2B91%209811122233%0AProduct%3A%20Royal%20Polki%20Choker%0AQuantity%3A%201%0APayment%20Status%3A%20SUCCESSFUL%0APayment%20Method%3A%20UPI%0ATotal%20Amount%3A%20%E2%82%B93%2C500%0A%0ADelivery%20Address%3A%0AAddress%20provided%20at%20checkout%0A%0APlease%20prepare%20this%20order%20for%20delivery.",
+    "status": "PENDING_CREDENTIALS",
+    "note": "WhatsApp Business Cloud API credentials (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID) not configured in environment. Notification logged and prepared for +91 7302187770."
+  },
+  {
+    "orderId": "VDH-PEND-5356",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-12T05:06:06.783Z",
+    "messageText": "VIDHYAA JEWELLERY STUDIO\n🟢 NEW ORDER CONFIRMED ✓\n\nOrder ID: VDH-PEND-5356\nCustomer Name: Ananya Verma\nMobile: +91 9811122233\nProduct: Royal Polki Choker\nQuantity: 1\nPayment Status: SUCCESSFUL\nPayment Method: UPI\nTotal Amount: ₹3,500\n\nDelivery Address:\nAddress provided at checkout\n\nPlease prepare this order for delivery.",
+    "directLink": "https://wa.me/917302187770?text=VIDHYAA%20JEWELLERY%20STUDIO%0A%F0%9F%9F%A2%20NEW%20ORDER%20CONFIRMED%20%E2%9C%93%0A%0AOrder%20ID%3A%20VDH-PEND-5356%0ACustomer%20Name%3A%20Ananya%20Verma%0AMobile%3A%20%2B91%209811122233%0AProduct%3A%20Royal%20Polki%20Choker%0AQuantity%3A%201%0APayment%20Status%3A%20SUCCESSFUL%0APayment%20Method%3A%20UPI%0ATotal%20Amount%3A%20%E2%82%B93%2C500%0A%0ADelivery%20Address%3A%0AAddress%20provided%20at%20checkout%0A%0APlease%20prepare%20this%20order%20for%20delivery.",
+    "status": "PENDING_CREDENTIALS",
+    "note": "WhatsApp Business Cloud API credentials (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID) not configured in environment. Notification logged and prepared for +91 7302187770."
+  },
+  {
+    "orderId": "VDH-TEST-001",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-12T05:06:06.760Z",
+    "messageText": "VIDHYAA JEWELLERY STUDIO\n🟢 NEW ORDER CONFIRMED ✓\n\nOrder ID: VDH-TEST-001\nCustomer Name: Demo Customer\nMobile: +91 9876543210\nProduct: Gold Rajwada Kada\nQuantity: 1\nPayment Status: SUCCESSFUL\nPayment Method: Cashfree / UPI (Verified)\nTotal Amount: ₹1,500\n\nDelivery Address:\n123 Test Street, Roorkee, Uttarakhand - 247667\n\nPlease prepare this order for delivery.",
+    "directLink": "https://wa.me/917302187770?text=VIDHYAA%20JEWELLERY%20STUDIO%0A%F0%9F%9F%A2%20NEW%20ORDER%20CONFIRMED%20%E2%9C%93%0A%0AOrder%20ID%3A%20VDH-TEST-001%0ACustomer%20Name%3A%20Demo%20Customer%0AMobile%3A%20%2B91%209876543210%0AProduct%3A%20Gold%20Rajwada%20Kada%0AQuantity%3A%201%0APayment%20Status%3A%20SUCCESSFUL%0APayment%20Method%3A%20Cashfree%20%2F%20UPI%20(Verified)%0ATotal%20Amount%3A%20%E2%82%B91%2C500%0A%0ADelivery%20Address%3A%0A123%20Test%20Street%2C%20Roorkee%2C%20Uttarakhand%20-%20247667%0A%0APlease%20prepare%20this%20order%20for%20delivery.",
+    "status": "PENDING_CREDENTIALS",
+    "note": "WhatsApp Business Cloud API credentials (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID) not configured in environment. Notification logged and prepared for +91 7302187770."
+  },
+  {
+    "orderId": "VDH-WA-3015",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-12T05:06:05.522Z",
+    "type": "CUSTOMER_WHATSAPP_CONFIRMATION",
+    "status": "CONFIRMED_BY_CUSTOMER",
+    "customerName": "Pooja Kashyap",
+    "customerPhone": "+91 9988776655"
+  },
+  {
+    "orderId": "VDH-WA-3015",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-12T05:06:05.498Z",
+    "messageText": "VIDHYAA JEWELLERY STUDIO\n🟢 NEW ORDER CONFIRMED ✓\n\nOrder ID: VDH-WA-3015\nCustomer Name: Pooja Kashyap\nMobile: +91 9988776655\nProduct: Royal Kundan Choker Set, Gold Rajwada Kada\nQuantity: 3\nPayment Status: SUCCESSFUL\nPayment Method: Cashfree / UPI\nTotal Amount: ₹6,700\n\nDelivery Address:\n45 Civil Lines, Opposite Clock Tower, Roorkee, Uttarakhand - 247667\n\nPlease prepare this order for delivery.",
+    "directLink": "https://wa.me/917302187770?text=VIDHYAA%20JEWELLERY%20STUDIO%0A%F0%9F%9F%A2%20NEW%20ORDER%20CONFIRMED%20%E2%9C%93%0A%0AOrder%20ID%3A%20VDH-WA-3015%0ACustomer%20Name%3A%20Pooja%20Kashyap%0AMobile%3A%20%2B91%209988776655%0AProduct%3A%20Royal%20Kundan%20Choker%20Set%2C%20Gold%20Rajwada%20Kada%0AQuantity%3A%203%0APayment%20Status%3A%20SUCCESSFUL%0APayment%20Method%3A%20Cashfree%20%2F%20UPI%0ATotal%20Amount%3A%20%E2%82%B96%2C700%0A%0ADelivery%20Address%3A%0A45%20Civil%20Lines%2C%20Opposite%20Clock%20Tower%2C%20Roorkee%2C%20Uttarakhand%20-%20247667%0A%0APlease%20prepare%20this%20order%20for%20delivery.",
+    "status": "PENDING_CREDENTIALS",
+    "note": "WhatsApp Business Cloud API credentials (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID) not configured in environment. Notification logged and prepared for +91 7302187770."
+  },
+  {
+    "orderId": "VDH-WA-1762",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-12T05:05:33.588Z",
+    "type": "CUSTOMER_WHATSAPP_CONFIRMATION",
+    "status": "CONFIRMED_BY_CUSTOMER",
+    "customerName": "Pooja Kashyap",
+    "customerPhone": "+91 9988776655"
+  },
+  {
+    "orderId": "VDH-WA-1762",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-12T05:05:33.542Z",
+    "messageText": "VIDHYAA JEWELLERY STUDIO\n🟢 NEW ORDER CONFIRMED ✓\n\nOrder ID: VDH-WA-1762\nCustomer Name: Pooja Kashyap\nMobile: +91 9988776655\nProduct: Royal Kundan Choker Set, Gold Rajwada Kada\nQuantity: 3\nPayment Status: SUCCESSFUL\nPayment Method: Cashfree / UPI\nTotal Amount: ₹6,700\n\nDelivery Address:\n45 Civil Lines, Opposite Clock Tower, Roorkee, Uttarakhand - 247667\n\nPlease prepare this order for delivery.",
+    "directLink": "https://wa.me/917302187770?text=VIDHYAA%20JEWELLERY%20STUDIO%0A%F0%9F%9F%A2%20NEW%20ORDER%20CONFIRMED%20%E2%9C%93%0A%0AOrder%20ID%3A%20VDH-WA-1762%0ACustomer%20Name%3A%20Pooja%20Kashyap%0AMobile%3A%20%2B91%209988776655%0AProduct%3A%20Royal%20Kundan%20Choker%20Set%2C%20Gold%20Rajwada%20Kada%0AQuantity%3A%203%0APayment%20Status%3A%20SUCCESSFUL%0APayment%20Method%3A%20Cashfree%20%2F%20UPI%0ATotal%20Amount%3A%20%E2%82%B96%2C700%0A%0ADelivery%20Address%3A%0A45%20Civil%20Lines%2C%20Opposite%20Clock%20Tower%2C%20Roorkee%2C%20Uttarakhand%20-%20247667%0A%0APlease%20prepare%20this%20order%20for%20delivery.",
+    "status": "PENDING_CREDENTIALS",
+    "note": "WhatsApp Business Cloud API credentials (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID) not configured in environment. Notification logged and prepared for +91 7302187770."
+  },
+  {
+    "orderId": "VDH-PEND-3553",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-11T08:41:26.951Z",
+    "messageText": "VIDHYAA JEWELLERY STUDIO\n🟢 NEW ORDER CONFIRMED ✓\n\nOrder ID: VDH-PEND-3553\nCustomer Name: Ananya Verma\nMobile: +91 9811122233\nProduct: Royal Polki Choker\nQuantity: 1\nPayment Status: SUCCESSFUL\nPayment Method: UPI\nTotal Amount: ₹3,500\n\nDelivery Address:\nAddress provided at checkout\n\nPlease prepare this order for delivery.",
+    "directLink": "https://wa.me/917302187770?text=VIDHYAA%20JEWELLERY%20STUDIO%0A%F0%9F%9F%A2%20NEW%20ORDER%20CONFIRMED%20%E2%9C%93%0A%0AOrder%20ID%3A%20VDH-PEND-3553%0ACustomer%20Name%3A%20Ananya%20Verma%0AMobile%3A%20%2B91%209811122233%0AProduct%3A%20Royal%20Polki%20Choker%0AQuantity%3A%201%0APayment%20Status%3A%20SUCCESSFUL%0APayment%20Method%3A%20UPI%0ATotal%20Amount%3A%20%E2%82%B93%2C500%0A%0ADelivery%20Address%3A%0AAddress%20provided%20at%20checkout%0A%0APlease%20prepare%20this%20order%20for%20delivery.",
+    "status": "PENDING_CREDENTIALS",
+    "note": "WhatsApp Business Cloud API credentials (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID) not configured in environment. Notification logged and prepared for +91 7302187770."
+  },
+  {
+    "orderId": "VDH-PEND-3553",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-11T08:41:26.947Z",
+    "messageText": "VIDHYAA JEWELLERY STUDIO\n🟢 NEW ORDER CONFIRMED ✓\n\nOrder ID: VDH-PEND-3553\nCustomer Name: Ananya Verma\nMobile: +91 9811122233\nProduct: Royal Polki Choker\nQuantity: 1\nPayment Status: SUCCESSFUL\nPayment Method: UPI\nTotal Amount: ₹3,500\n\nDelivery Address:\nAddress provided at checkout\n\nPlease prepare this order for delivery.",
+    "directLink": "https://wa.me/917302187770?text=VIDHYAA%20JEWELLERY%20STUDIO%0A%F0%9F%9F%A2%20NEW%20ORDER%20CONFIRMED%20%E2%9C%93%0A%0AOrder%20ID%3A%20VDH-PEND-3553%0ACustomer%20Name%3A%20Ananya%20Verma%0AMobile%3A%20%2B91%209811122233%0AProduct%3A%20Royal%20Polki%20Choker%0AQuantity%3A%201%0APayment%20Status%3A%20SUCCESSFUL%0APayment%20Method%3A%20UPI%0ATotal%20Amount%3A%20%E2%82%B93%2C500%0A%0ADelivery%20Address%3A%0AAddress%20provided%20at%20checkout%0A%0APlease%20prepare%20this%20order%20for%20delivery.",
+    "status": "PENDING_CREDENTIALS",
+    "note": "WhatsApp Business Cloud API credentials (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID) not configured in environment. Notification logged and prepared for +91 7302187770."
+  },
+  {
+    "orderId": "VDH-TEST-001",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-11T08:41:26.931Z",
+    "messageText": "VIDHYAA JEWELLERY STUDIO\n🟢 NEW ORDER CONFIRMED ✓\n\nOrder ID: VDH-TEST-001\nCustomer Name: Demo Customer\nMobile: +91 9876543210\nProduct: Gold Rajwada Kada\nQuantity: 1\nPayment Status: SUCCESSFUL\nPayment Method: Cashfree / UPI (Verified)\nTotal Amount: ₹1,500\n\nDelivery Address:\n123 Test Street, Roorkee, Uttarakhand - 247667\n\nPlease prepare this order for delivery.",
+    "directLink": "https://wa.me/917302187770?text=VIDHYAA%20JEWELLERY%20STUDIO%0A%F0%9F%9F%A2%20NEW%20ORDER%20CONFIRMED%20%E2%9C%93%0A%0AOrder%20ID%3A%20VDH-TEST-001%0ACustomer%20Name%3A%20Demo%20Customer%0AMobile%3A%20%2B91%209876543210%0AProduct%3A%20Gold%20Rajwada%20Kada%0AQuantity%3A%201%0APayment%20Status%3A%20SUCCESSFUL%0APayment%20Method%3A%20Cashfree%20%2F%20UPI%20(Verified)%0ATotal%20Amount%3A%20%E2%82%B91%2C500%0A%0ADelivery%20Address%3A%0A123%20Test%20Street%2C%20Roorkee%2C%20Uttarakhand%20-%20247667%0A%0APlease%20prepare%20this%20order%20for%20delivery.",
+    "status": "PENDING_CREDENTIALS",
+    "note": "WhatsApp Business Cloud API credentials (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID) not configured in environment. Notification logged and prepared for +91 7302187770."
+  },
+  {
+    "orderId": "VDH-PEND-7030",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-11T08:40:27.428Z",
+    "messageText": "VIDHYAA JEWELLERY STUDIO\n🟢 NEW ORDER CONFIRMED ✓\n\nOrder ID: VDH-PEND-7030\nCustomer Name: Ananya Verma\nMobile: +91 9811122233\nProduct: Royal Polki Choker\nQuantity: 1\nPayment Status: SUCCESSFUL\nPayment Method: UPI\nTotal Amount: ₹3,500\n\nDelivery Address:\nAddress provided at checkout\n\nPlease prepare this order for delivery.",
+    "directLink": "https://wa.me/917302187770?text=VIDHYAA%20JEWELLERY%20STUDIO%0A%F0%9F%9F%A2%20NEW%20ORDER%20CONFIRMED%20%E2%9C%93%0A%0AOrder%20ID%3A%20VDH-PEND-7030%0ACustomer%20Name%3A%20Ananya%20Verma%0AMobile%3A%20%2B91%209811122233%0AProduct%3A%20Royal%20Polki%20Choker%0AQuantity%3A%201%0APayment%20Status%3A%20SUCCESSFUL%0APayment%20Method%3A%20UPI%0ATotal%20Amount%3A%20%E2%82%B93%2C500%0A%0ADelivery%20Address%3A%0AAddress%20provided%20at%20checkout%0A%0APlease%20prepare%20this%20order%20for%20delivery.",
+    "status": "PENDING_CREDENTIALS",
+    "note": "WhatsApp Business Cloud API credentials (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID) not configured in environment. Notification logged and prepared for +91 7302187770."
+  },
+  {
+    "orderId": "VDH-PEND-7030",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-11T08:40:27.423Z",
+    "messageText": "VIDHYAA JEWELLERY STUDIO\n🟢 NEW ORDER CONFIRMED ✓\n\nOrder ID: VDH-PEND-7030\nCustomer Name: Ananya Verma\nMobile: +91 9811122233\nProduct: Royal Polki Choker\nQuantity: 1\nPayment Status: SUCCESSFUL\nPayment Method: UPI\nTotal Amount: ₹3,500\n\nDelivery Address:\nAddress provided at checkout\n\nPlease prepare this order for delivery.",
+    "directLink": "https://wa.me/917302187770?text=VIDHYAA%20JEWELLERY%20STUDIO%0A%F0%9F%9F%A2%20NEW%20ORDER%20CONFIRMED%20%E2%9C%93%0A%0AOrder%20ID%3A%20VDH-PEND-7030%0ACustomer%20Name%3A%20Ananya%20Verma%0AMobile%3A%20%2B91%209811122233%0AProduct%3A%20Royal%20Polki%20Choker%0AQuantity%3A%201%0APayment%20Status%3A%20SUCCESSFUL%0APayment%20Method%3A%20UPI%0ATotal%20Amount%3A%20%E2%82%B93%2C500%0A%0ADelivery%20Address%3A%0AAddress%20provided%20at%20checkout%0A%0APlease%20prepare%20this%20order%20for%20delivery.",
+    "status": "PENDING_CREDENTIALS",
+    "note": "WhatsApp Business Cloud API credentials (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID) not configured in environment. Notification logged and prepared for +91 7302187770."
+  },
+  {
+    "orderId": "VDH-TEST-001",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-11T08:40:27.404Z",
+    "messageText": "VIDHYAA JEWELLERY STUDIO\n🟢 NEW ORDER CONFIRMED ✓\n\nOrder ID: VDH-TEST-001\nCustomer Name: Demo Customer\nMobile: +91 9876543210\nProduct: Gold Rajwada Kada\nQuantity: 1\nPayment Status: SUCCESSFUL\nPayment Method: Cashfree / UPI (Verified)\nTotal Amount: ₹1,500\n\nDelivery Address:\n123 Test Street, Roorkee, Uttarakhand - 247667\n\nPlease prepare this order for delivery.",
+    "directLink": "https://wa.me/917302187770?text=VIDHYAA%20JEWELLERY%20STUDIO%0A%F0%9F%9F%A2%20NEW%20ORDER%20CONFIRMED%20%E2%9C%93%0A%0AOrder%20ID%3A%20VDH-TEST-001%0ACustomer%20Name%3A%20Demo%20Customer%0AMobile%3A%20%2B91%209876543210%0AProduct%3A%20Gold%20Rajwada%20Kada%0AQuantity%3A%201%0APayment%20Status%3A%20SUCCESSFUL%0APayment%20Method%3A%20Cashfree%20%2F%20UPI%20(Verified)%0ATotal%20Amount%3A%20%E2%82%B91%2C500%0A%0ADelivery%20Address%3A%0A123%20Test%20Street%2C%20Roorkee%2C%20Uttarakhand%20-%20247667%0A%0APlease%20prepare%20this%20order%20for%20delivery.",
+    "status": "PENDING_CREDENTIALS",
+    "note": "WhatsApp Business Cloud API credentials (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID) not configured in environment. Notification logged and prepared for +91 7302187770."
+  },
+  {
+    "orderId": "VDH-TEST-001",
+    "recipient": "+917302187770",
+    "timestamp": "2026-11-11T08:34:29.299Z",
+    "messageText": "VIDHYAA JEWELLERY STUDIO\n🟢 NEW ORDER CONFIRMED ✓\n\nOrder ID: VDH-TEST-001\nCustomer Name: Demo Customer\nMobile: +91 9876543210\nProduct: Gold Rajwada Kada\nQuantity: 1\nPayment Status: SUCCESSFUL\nPayment Method: Cashfree / UPI (Verified)\nTotal Amount: ₹1,500\n\nDelivery Address:\n123 Test Street, Roorkee, Uttarakhand - 247667\n\nPlease prepare this order for delivery.",
+    "directLink": "https://wa.me/917302187770?text=VIDHYAA%20JEWELLERY%20STUDIO%0A%F0%9F%9F%A2%20NEW%20ORDER%20CONFIRMED%20%E2%9C%93%0A%0AOrder%20ID%3A%20VDH-TEST-001%0ACustomer%20Name%3A%20Demo%20Customer%0AMobile%3A%20%2B91%209876543210%0AProduct%3A%20Gold%20Rajwada%20Kada%0AQuantity%3A%201%0APayment%20Status%3A%20SUCCESSFUL%0APayment%20Method%3A%20Cashfree%20%2F%20UPI%20(Verified)%0ATotal%20Amount%3A%20%E2%82%B91%2C500%0A%0ADelivery%20Address%3A%0A123%20Test%20Street%2C%20Roorkee%2C%20Uttarakhand%20-%20247667%0A%0APlease%20prepare%20this%20order%20for%20delivery.",
+    "status": "PENDING_CREDENTIALS",
+    "note": "WhatsApp Business Cloud API credentials (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID) not configured in environment. Notification logged and prepared for +91 7302187770."
+  }
+]

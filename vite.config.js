@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { handleApiMiddleware } from './api-middleware.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -74,12 +75,27 @@ function staticAssetsPlugin() {
   };
 }
 
+function apiServerPlugin() {
+  return {
+    name: 'api-server-middleware',
+    configureServer(server) {
+      server.middlewares.use(handleApiMiddleware);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(handleApiMiddleware);
+    }
+  };
+}
+
 export default defineConfig({
-  plugins: [staticAssetsPlugin()],
+  plugins: [apiServerPlugin(), staticAssetsPlugin()],
   server: {
     port: 3000,
     host: '0.0.0.0',
     allowedHosts: true,
+    watch: {
+      ignored: ['**/videos/**', '**/data/**', '**/api/**', '**/dist/**', '**/scripts/**']
+    }
   },
   preview: {
     port: 3000,
