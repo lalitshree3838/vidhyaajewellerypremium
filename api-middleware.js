@@ -203,6 +203,8 @@ function sendJson(res, statusCode, data) {
   res.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(jsonStr),
+    'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+    'Pragma': 'no-cache',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-file-name, x-file-type, x-admin-token'
@@ -456,19 +458,39 @@ export function handleApiMiddleware(req, res, next) {
             return sendJson(res, 400, { success: false, error: 'Product payload requires an id' });
           }
 
+          const rawVideo = typeof incoming.videoUrl === 'string'
+            ? incoming.videoUrl
+            : (typeof incoming.video === 'string'
+              ? incoming.video
+              : (typeof incoming.videoURL === 'string' ? incoming.videoURL : ''));
+          let normalizedVideo = rawVideo.trim()
+            .replace(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?(\/.*)$/i, '$1');
+          if (/^videos\/uploads\//i.test(normalizedVideo)) {
+            normalizedVideo = `/${normalizedVideo}`;
+          }
+          if (normalizedVideo) {
+            incoming.videoUrl = normalizedVideo;
+            if (typeof incoming.showInShoppingVideos !== 'boolean') {
+              incoming.showInShoppingVideos = true;
+            }
+          }
+
           const products = readJsonFile(PRODUCTS_FILE, []);
           const existingIdx = products.findIndex((p) => p.id === incoming.id);
+          let savedProduct;
           if (existingIdx >= 0) {
-            products[existingIdx] = { ...products[existingIdx], ...incoming, updatedAt: new Date().toISOString() };
+            savedProduct = { ...products[existingIdx], ...incoming, updatedAt: new Date().toISOString() };
+            products[existingIdx] = savedProduct;
           } else {
-            products.unshift({ ...incoming, createdAt: incoming.createdAt || new Date().toISOString() });
+            savedProduct = { ...incoming, createdAt: incoming.createdAt || new Date().toISOString() };
+            products.unshift(savedProduct);
           }
 
           fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(products, null, 2), 'utf8');
           if (fs.existsSync(path.dirname(API_PRODUCTS_FILE))) {
             fs.writeFileSync(API_PRODUCTS_FILE, JSON.stringify(products, null, 2), 'utf8');
           }
-          return sendJson(res, 200, { success: true, product: incoming });
+          return sendJson(res, 200, { success: true, product: savedProduct });
         }
 
         if (req.method === 'DELETE') {
