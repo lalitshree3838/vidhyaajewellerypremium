@@ -226,7 +226,38 @@ function readJsonFile(filePath, fallback = []) {
 export function handleApiMiddleware(req, res, next) {
   const rawUrl = req.url || '';
   const parsedUrl = new URL(rawUrl, 'http://localhost');
-  const pathname = parsedUrl.pathname.replace(/\/+$/, ''); // normalize trailing slash
+  let decodedPathname = parsedUrl.pathname;
+  try {
+    decodedPathname = decodeURIComponent(parsedUrl.pathname);
+  } catch {
+    decodedPathname = parsedUrl.pathname;
+  }
+  const pathname = decodedPathname.replace(/\/+$/, ''); // normalize trailing slash
+
+  // Prevent Vite SPA index.html fallback (200 text/html) for missing static media files
+  if (
+    (req.method === 'GET' || req.method === 'HEAD') &&
+    /^\/(?:videos|products|categories|uploads)\/.+\.(?:mp4|mov|webm|m4v|jpg|jpeg|png|webp|gif|svg|avif)$/i.test(pathname)
+  ) {
+    const relPath = pathname.replace(/^\/+/, '');
+    const rootCandidate = path.resolve(__dirname, relPath);
+    const distCandidate = path.resolve(__dirname, 'dist', relPath);
+    const isSafeRoot = rootCandidate.startsWith(__dirname + path.sep);
+    const isSafeDist = distCandidate.startsWith(path.resolve(__dirname, 'dist') + path.sep);
+
+    const existsInRoot = isSafeRoot && fs.existsSync(rootCandidate) && fs.statSync(rootCandidate).isFile();
+    const existsInDist = isSafeDist && fs.existsSync(distCandidate) && fs.statSync(distCandidate).isFile();
+
+    if (!existsInRoot && !existsInDist) {
+      res.writeHead(404, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-store'
+      });
+      res.end('Not Found');
+      return;
+    }
+    return next();
+  }
 
   // Only intercept /api routes
   if (!pathname.startsWith('/api')) {

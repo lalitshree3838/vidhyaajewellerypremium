@@ -1,4 +1,6 @@
 import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -88,11 +90,17 @@ function apiServerPlugin() {
 }
 
 export default defineConfig({
-  plugins: [apiServerPlugin(), staticAssetsPlugin()],
+  plugins: [react(), tailwindcss(), apiServerPlugin(), staticAssetsPlugin()],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, '.'),
+    },
+  },
   server: {
     port: 3000,
     host: '0.0.0.0',
     allowedHosts: true,
+    hmr: process.env.DISABLE_HMR !== 'true',
     watch: {
       ignored: ['**/videos/**', '**/data/**', '**/api/**', '**/dist/**', '**/scripts/**']
     }

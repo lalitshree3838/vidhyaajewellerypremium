@@ -1,0 +1,13 @@
+[
+  {
+    "uid": "patron_1793522881734_4f066004",
+    "displayName": "Radhika Sharma",
+    "phone": "+91 9876543210",
+    "mobile": "9876543210",
+    "email": "radhika.sharma@example.com",
+    "passwordHash": "e873e91bf5b45f0c5556d4446ed678a7:ed67ad3484c0b153304d8fac145c3f50ebaa6662963b404a3f6765a4dc9516fbdcb69c99c8b38ff0b6e5654dbeb3a3147a7dd6ede793f03d2858b728c3ee0158",
+    "role": "customer",
+    "createdAt": "2026-11-01T08:48:01.807Z",
+    "updatedAt": "2026-11-01T08:48:01.807Z"
+  }
+]
