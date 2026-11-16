@@ -42,7 +42,8 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSearch,
   onOpenAuth
 }) => {
-  const { user, userProfile, isAdmin, signOut } = useAuth();
+  const { user, patronSession, userProfile, isAdmin, signOut } = useAuth();
+  const activeCustomer = user || patronSession;
   const { items, openCart, finalTotal } = useCart();
   const { wishlistCount } = useWishlist();
 
@@ -501,29 +502,31 @@ export const Header: React.FC<HeaderProps> = ({
             <div className="relative">
               <button
                 onClick={() => {
-                  if (!user) {
+                  if (!activeCustomer) {
                     onOpenAuth();
                   } else {
                     setUserDropdownOpen(!userDropdownOpen);
                   }
                 }}
                 className="p-2 text-[#3B1E22] hover:text-[#802336] transition-colors flex items-center gap-1 cursor-pointer"
-                title={user ? user.displayName || user.email || 'My Account' : 'Sign In'}
+                title={activeCustomer ? activeCustomer.displayName || activeCustomer.email || patronSession?.phone || user?.phoneNumber || 'My Account' : 'Sign In'}
                 aria-label="Account"
               >
                 <UserIcon className="w-5 h-5" />
                 <span className="hidden xl:inline text-xs font-medium tracking-normal">
-                  {user ? (user.displayName?.split(' ')[0] || 'Patron') : 'Sign In'}
+                  {activeCustomer ? (activeCustomer.displayName?.split(' ')[0] || 'Patron') : 'Sign In'}
                 </span>
               </button>
 
-              {user && userDropdownOpen && (
+              {activeCustomer && userDropdownOpen && (
                 <div className="absolute right-0 top-full mt-2 w-56 bg-[#FAF7F2] rounded-lg shadow-xl border border-[#E8DCCF] py-2 z-50 animate-fadeIn">
                   <div className="px-4 py-2 border-b border-[#E8DCCF]">
                     <p className="text-xs font-semibold text-[#3B1E22] truncate">
-                      {user.displayName || 'VIDHYAA Patron'}
+                      {activeCustomer.displayName || 'VIDHYAA Patron'}
                     </p>
-                    <p className="text-[11px] text-gray-500 truncate">{user.email}</p>
+                    <p className="text-[11px] text-gray-500 truncate">
+                      {activeCustomer.email || (activeCustomer as any).phone || ''}
+                    </p>
                     {isAdmin && (
                       <span className="inline-block mt-1 bg-[#802336] text-[#FAF7F2] text-[9px] font-bold px-1.5 py-0.5 rounded uppercase">
                         Admin Access

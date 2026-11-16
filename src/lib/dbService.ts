@@ -1099,71 +1099,189 @@ export async function updateStoreSettings(settings: Partial<StoreSettings>): Pro
   }
 }
 
+export function formatIndianPhone(raw?: string | null): string {
+  const str = String(raw || '').trim();
+  if (!str) return '';
+  const digits = str.replace(/\D/g, '');
+  if (digits.length === 10) return `+91 ${digits}`;
+  if (digits.length === 12 && digits.startsWith('91')) return `+91 ${digits.slice(2)}`;
+  if (digits.length === 11 && digits.startsWith('0')) return `+91 ${digits.slice(1)}`;
+  return str;
+}
+
+export function formatFullAddress(addr?: Partial<Address> | string | null): string {
+  if (!addr) return '';
+  if (typeof addr === 'string') return addr.trim();
+  const streetParts = [addr.houseNo, addr.area].filter(Boolean).join(', ');
+  const mainStreet = addr.street || streetParts;
+  const cityStatePin = [addr.city, addr.state].filter(Boolean).join(', ');
+  const withPin = addr.pincode ? (cityStatePin ? `${cityStatePin} - ${addr.pincode}` : addr.pincode) : cityStatePin;
+  return [mainStreet, addr.landmark, withPin].filter(Boolean).join(', ');
+}
+
+export function isOrderPaid(order?: Partial<Order> | null): boolean {
+  if (!order) return false;
+  if (order.isPaid === true) return true;
+  const s = String(order.paymentStatus || '').trim().toLowerCase();
+  return s === 'paid' || s === 'success' || s === 'captured' || s === 'completed';
+}
+
+function parseMoney(val: any, fallback = 0): number {
+  if (typeof val === 'number' && Number.isFinite(val)) return val;
+  if (typeof val === 'string') {
+    const cleaned = val.replace(/[₹,\s]/g, '');
+    const parsed = Number(cleaned);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function stripUndefinedDeep<T>(input: T): T {
+  if (Array.isArray(input)) {
+    return input.map((item) => stripUndefinedDeep(item)) as unknown as T;
+  }
+  if (input && typeof input === 'object') {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(input as Record<string, any>)) {
+      if (v !== undefined) {
+        out[k] = stripUndefinedDeep(v);
+      }
+    }
+    return out as T;
+  }
+  return input;
+}
+
 export function $sanitizeOrder(raw: any): Order | null {
   if (!raw || typeof raw !== 'object') return null;
 
   const items: OrderItem[] = Array.isArray(raw.items)
-    ? raw.items.map((it: any) => ({
-        productId: String(it?.productId || 'prod-custom'),
-        productName: String(it?.productName || it?.title || 'Jewellery Item'),
-        variationId: String(it?.variationId || 'default'),
-        variationName: String(it?.variationName || ''),
-        quantity: typeof it?.quantity === 'number' ? it.quantity : Number(it?.quantity) || 1,
-        price: typeof it?.price === 'number' ? it.price : Number(it?.price) || 0,
-        mrp: typeof it?.mrp === 'number' ? it.mrp : (typeof it?.price === 'number' ? it.price : Number(it?.price) || 0),
-        image: String(it?.image || ''),
-        sku: String(it?.sku || '')
-      }))
+    ? raw.items.map((it: any) => {
+        const price = Math.max(0, parseMoney(it?.price ?? it?.unitPrice, 0));
+        const qty = Math.max(1, Math.round(parseMoney(it?.quantity ?? it?.qty, 1)));
+        const mrp = Math.max(0, parseMoney(it?.mrp, price));
+        return {
+          productId: String(it?.productId || it?.id || 'prod-custom'),
+          productName: String(it?.productName || it?.title || it?.name || 'Jewellery Item'),
+          variationId: String(it?.variationId || 'default'),
+          variationName: String(it?.variationName || it?.variation || ''),
+          quantity: qty,
+          price,
+          mrp,
+          image: String(it?.image || it?.thumbnail || ''),
+          sku: String(it?.sku || '')
+        };
+      })
     : [];
 
-  const rawTotal =
-    typeof raw.totalAmount === 'number'
-      ? raw.totalAmount
-      : typeof raw.total === 'number'
-      ? raw.total
-      : Number(raw.totalAmount || raw.total) || 0;
-  const totalAmount =
-    rawTotal || items.reduce((sum, it) => sum + (it.price || 0) * (it.quantity || 1), 0);
+  const itemsSubtotal = items.reduce((sum, it) => sum + (it.price || 0) * (it.quantity || 1), 0);
+  const parsedSubtotal = parseMoney(raw.subtotal ?? raw.subTotal, 0);
+  const subtotal = parsedSubtotal > 0 ? parsedSubtotal : itemsSubtotal;
+  const discount = Math.max(0, parseMoney(raw.discount ?? raw.couponSavings, 0));
+  const deliveryCharge = Math.max(0, parseMoney(raw.deliveryCharge ?? raw.shippingCharge, 0));
+  const computedTotal = Math.max(0, subtotal - discount + deliveryCharge);
 
-  const shipping: Address =
+  let rawTotal = parseMoney(raw.totalAmount, 0);
+  if (rawTotal <= 0) rawTotal = parseMoney(raw.total, 0);
+  if (rawTotal <= 0) rawTotal = parseMoney(raw.orderAmount ?? raw.order_amount ?? raw.finalAmount ?? raw.amount, 0);
+  const totalAmount = rawTotal > 0 ? rawTotal : computedTotal;
+
+  const rawCustomer = raw.customer && typeof raw.customer === 'object' ? raw.customer : raw.customer_details || {};
+  const rawAddrObj =
     raw.shippingAddress && typeof raw.shippingAddress === 'object'
-      ? {
-          id: String(raw.shippingAddress.id || 'ship_addr'),
-          name: String(raw.shippingAddress.name || raw.shippingAddress.fullName || raw.customerName || 'Customer'),
-          phone: String(raw.shippingAddress.phone || raw.customerPhone || ''),
-          street: String(raw.shippingAddress.street || ''),
-          landmark: String(raw.shippingAddress.landmark || ''),
-          city: String(raw.shippingAddress.city || ''),
-          state: String(raw.shippingAddress.state || ''),
-          pincode: String(raw.shippingAddress.pincode || '')
-        }
-      : {
-          id: 'ship_addr',
-          name: String(raw.customerName || 'Customer'),
-          phone: String(raw.customerPhone || ''),
-          street: typeof raw.shippingAddress === 'string' ? raw.shippingAddress : '',
-          landmark: '',
-          city: '',
-          state: '',
-          pincode: ''
-        };
+      ? raw.shippingAddress
+      : raw.shipping_address && typeof raw.shipping_address === 'object'
+      ? raw.shipping_address
+      : null;
+
+  const customerName = String(
+    raw.customerName ||
+      raw.name ||
+      rawCustomer.name ||
+      rawCustomer.customer_name ||
+      rawAddrObj?.name ||
+      rawAddrObj?.fullName ||
+      'Customer'
+  ).trim();
+  const customerEmail = String(
+    raw.customerEmail || raw.email || rawCustomer.email || rawCustomer.customer_email || ''
+  ).trim();
+  const customerPhone = formatIndianPhone(
+    raw.customerPhone ||
+      raw.phone ||
+      raw.mobile ||
+      rawCustomer.phone ||
+      rawCustomer.customer_phone ||
+      rawAddrObj?.phone ||
+      ''
+  );
+
+  const houseNo = rawAddrObj
+    ? String(rawAddrObj.houseNo || rawAddrObj.houseNumber || rawAddrObj.flatNo || '').trim()
+    : '';
+  const area = rawAddrObj
+    ? String(rawAddrObj.area || rawAddrObj.addressLine2 || '').trim()
+    : '';
+  const rawStreet = rawAddrObj
+    ? String(rawAddrObj.street || rawAddrObj.addressLine1 || [houseNo, area].filter(Boolean).join(', ')).trim()
+    : typeof raw.shippingAddress === 'string'
+    ? raw.shippingAddress.trim()
+    : '';
+
+  const shipping: Address = {
+    id: String(rawAddrObj?.id || 'ship_addr'),
+    name: String(rawAddrObj?.name || rawAddrObj?.fullName || customerName),
+    phone: formatIndianPhone(rawAddrObj?.phone || customerPhone),
+    ...(houseNo ? { houseNo } : {}),
+    ...(area ? { area } : {}),
+    street: rawStreet || [houseNo, area].filter(Boolean).join(', '),
+    landmark: String(rawAddrObj?.landmark || '').trim(),
+    city: String(rawAddrObj?.city || '').trim(),
+    state: String(rawAddrObj?.state || '').trim(),
+    pincode: String(rawAddrObj?.pincode || rawAddrObj?.zip || '').trim()
+  };
+
+  const rawPayStatus = String(raw.paymentStatus || raw.payment_status || '').trim().toLowerCase();
+  let paymentStatus: Order['paymentStatus'] = 'pending';
+  if (
+    raw.isPaid === true ||
+    ['paid', 'success', 'captured', 'completed'].includes(rawPayStatus)
+  ) {
+    paymentStatus = 'paid';
+  } else if (['failed', 'cancelled', 'canceled', 'terminated'].includes(rawPayStatus)) {
+    paymentStatus = 'failed';
+  }
+
+  const validStatuses: OrderStatus[] = ['Pending', 'Confirmed', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
+  let orderStatus: OrderStatus = validStatuses.includes(raw.orderStatus) ? raw.orderStatus : 'Pending';
+  if (paymentStatus === 'paid' && orderStatus === 'Pending') {
+    orderStatus = 'Confirmed';
+  }
+  if (paymentStatus === 'failed' && orderStatus === 'Confirmed') {
+    orderStatus = 'Pending';
+  }
+
+  const orderNumber = String(raw.orderNumber || raw.order_id || raw.id || 'VDH-ORD');
+  const orderId = String(raw.id || `order_${orderNumber.replace(/[^a-zA-Z0-9_-]/g, '_')}`);
 
   const sanitized: Order & { total?: number } = {
-    id: String(raw.id || raw.orderNumber || `order_${Date.now()}`),
-    orderNumber: String(raw.orderNumber || raw.id || 'VDH-ORD'),
-    customerName: String(raw.customerName || 'Customer'),
-    customerEmail: String(raw.customerEmail || ''),
-    customerPhone: String(raw.customerPhone || ''),
+    id: orderId,
+    orderNumber,
+    customerName,
+    customerEmail,
+    customerPhone,
     shippingAddress: shipping,
     items,
-    subtotal: typeof raw.subtotal === 'number' ? raw.subtotal : Number(raw.subtotal) || totalAmount,
-    discount: typeof raw.discount === 'number' ? raw.discount : Number(raw.discount) || 0,
-    deliveryCharge: typeof raw.deliveryCharge === 'number' ? raw.deliveryCharge : Number(raw.deliveryCharge) || 0,
+    subtotal: subtotal > 0 ? subtotal : totalAmount,
+    discount,
+    deliveryCharge,
     total: totalAmount,
     totalAmount,
-    paymentMethod: String(raw.paymentMethod || 'UPI QR'),
-    paymentStatus: (raw.paymentStatus || 'pending') as Order['paymentStatus'],
-    orderStatus: (raw.orderStatus || 'Pending') as OrderStatus,
+    paymentMethod: String(raw.paymentMethod || 'Online Payment'),
+    paymentStatus,
+    isPaid: paymentStatus === 'paid',
+    currency: String(raw.currency || 'INR').toUpperCase(),
+    orderStatus,
     upiReference: String(raw.upiReference || ''),
     trackingNumber: String(raw.trackingNumber || ''),
     courierName: String(raw.courierName || ''),
@@ -1172,10 +1290,16 @@ export function $sanitizeOrder(raw: any): Order | null {
   };
 
   if (raw.userId) sanitized.userId = String(raw.userId);
-  if (raw.paymentId) sanitized.paymentId = String(raw.paymentId);
-  if (raw.cfOrderId !== undefined) sanitized.cfOrderId = raw.cfOrderId;
+  if (raw.paymentId || raw.cf_payment_id) sanitized.paymentId = String(raw.paymentId || raw.cf_payment_id);
+  if (raw.cfOrderId !== undefined || raw.cf_order_id !== undefined) sanitized.cfOrderId = raw.cfOrderId ?? raw.cf_order_id;
+  if (raw.gatewayOrderId) sanitized.gatewayOrderId = String(raw.gatewayOrderId);
   if (raw.cardNetwork) sanitized.cardNetwork = String(raw.cardNetwork);
   if (raw.cardType) sanitized.cardType = String(raw.cardType);
+  if (raw.paidAt) sanitized.paidAt = String(raw.paidAt);
+  if (raw.paymentVerifiedAt) sanitized.paymentVerifiedAt = String(raw.paymentVerifiedAt);
+  if (raw.verifiedAmount !== undefined) sanitized.verifiedAmount = parseMoney(raw.verifiedAmount, totalAmount);
+  if (raw.verifiedVia) sanitized.verifiedVia = String(raw.verifiedVia);
+  if (raw.failureReason) sanitized.failureReason = String(raw.failureReason);
   if (raw.giftItem) sanitized.giftItem = String(raw.giftItem);
   if (raw.notes) sanitized.notes = String(raw.notes);
   if (typeof raw.whatsappCustomerConfirmed === 'boolean') {
@@ -1185,35 +1309,69 @@ export function $sanitizeOrder(raw: any): Order | null {
   return sanitized;
 }
 
+export async function syncOrderToLocalAndFirestore(order: Order): Promise<Order> {
+  const cleanOrder = $sanitizeOrder(order) || order;
+  const cached = getCachedOrders();
+  const filtered = cached.filter(
+    (o) => o && o.id !== cleanOrder.id && o.orderNumber !== cleanOrder.orderNumber
+  );
+  saveCachedOrders([cleanOrder, ...filtered]);
+
+  try {
+    await setDoc(doc(db, ORDERS_COL, cleanOrder.id), stripUndefinedDeep(cleanOrder), { merge: true });
+  } catch (err) {
+    console.warn('Could not sync order directly to Firestore (saved in server & local cache):', err);
+  }
+  return cleanOrder;
+}
+
 // Orders
-export async function createOrder(orderData: Omit<Order, 'id'>): Promise<Order> {
-  const orderId = `order_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-  const fullOrder: Order = {
+export async function createOrder(orderData: Omit<Order, 'id'>, preferredId?: string): Promise<Order> {
+  const safeSuffix = orderData.orderNumber
+    ? orderData.orderNumber.replace(/[^a-zA-Z0-9_-]/g, '_')
+    : `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const orderId = preferredId || `order_${safeSuffix}`;
+  const rawFullOrder: Order = {
     ...orderData,
+    customerPhone: formatIndianPhone(orderData.customerPhone),
+    shippingAddress: {
+      ...orderData.shippingAddress,
+      phone: formatIndianPhone(orderData.shippingAddress?.phone || orderData.customerPhone)
+    },
     id: orderId
   };
 
-  // Cache locally immediately so orders are instantly visible to user and admin
-  const cached = getCachedOrders();
-  saveCachedOrders([fullOrder, ...cached.filter((o) => o && o.id !== orderId)]);
+  let persistedOrder: Order = $sanitizeOrder(rawFullOrder) || rawFullOrder;
 
-  // Persist to server REST API /api/orders
+  // Persist to server REST API /api/orders and wait so server/JSON DB is updated cleanly
   try {
     if (typeof fetch !== 'undefined') {
-      fetch('/api/orders', {
+      const resp = await fetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(fullOrder)
-      }).catch(() => {});
+        body: JSON.stringify(stripUndefinedDeep(persistedOrder))
+      });
+      if (resp.ok) {
+        const data = await resp.json().catch(() => null);
+        if (data?.order) {
+          persistedOrder = $sanitizeOrder(data.order) || data.order;
+        }
+      }
     }
   } catch {}
 
+  const cached = getCachedOrders();
+  saveCachedOrders([
+    persistedOrder,
+    ...cached.filter((o) => o && o.id !== persistedOrder.id && o.orderNumber !== persistedOrder.orderNumber)
+  ]);
+
   try {
-    // Save order to Firestore
-    await setDoc(doc(db, ORDERS_COL, orderId), fullOrder);
+    // Save order to Firestore (strip undefined keys so Firestore never rejects)
+    await setDoc(doc(db, ORDERS_COL, persistedOrder.id), stripUndefinedDeep(persistedOrder), { merge: true });
 
     // Atomically decrement stock for products and variations
-    for (const item of fullOrder.items) {
+    for (const item of persistedOrder.items) {
       try {
         const prodRef = doc(db, PRODUCTS_COL, item.productId);
         const prodSnap = await getDoc(prodRef);
@@ -1238,20 +1396,23 @@ export async function createOrder(orderData: Omit<Order, 'id'>): Promise<Order> 
       }
     }
 
-    return fullOrder;
+    return persistedOrder;
   } catch (error) {
-    console.warn('Could not write order directly to Firestore, cached locally:', error);
-    return fullOrder;
+    console.warn('Could not write order directly to Firestore, saved to API/local cache:', error);
+    return persistedOrder;
   }
 }
 
 export async function fetchOrderById(orderId: string): Promise<Order | null> {
+  const cleanId = orderId.trim();
+  if (!cleanId) return null;
+
   try {
     if (typeof fetch !== 'undefined') {
-      const resp = await fetch(`/api/orders/${encodeURIComponent(orderId)}`);
+      const resp = await fetch(`/api/orders/${encodeURIComponent(cleanId)}`);
       if (resp && resp.ok) {
         const data = await resp.json();
-        if (data && data.id) {
+        if (data && (data.id || data.orderNumber)) {
           return $sanitizeOrder(data) || data;
         }
       }
@@ -1259,13 +1420,12 @@ export async function fetchOrderById(orderId: string): Promise<Order | null> {
   } catch {}
 
   try {
-    const snap = await getDoc(doc(db, ORDERS_COL, orderId));
+    const snap = await getDoc(doc(db, ORDERS_COL, cleanId));
     if (snap.exists()) {
       const ord = { id: snap.id, ...(snap.data() as Omit<Order, 'id'>) };
       return $sanitizeOrder(ord) || ord;
     }
-    // Search by orderNumber
-    const q = query(collection(db, ORDERS_COL), where('orderNumber', '==', orderId), limit(1));
+    const q = query(collection(db, ORDERS_COL), where('orderNumber', '==', cleanId), limit(1));
     const querySnap = await getDocs(q);
     if (!querySnap.empty) {
       const firstDoc = querySnap.docs[0];
@@ -1276,26 +1436,89 @@ export async function fetchOrderById(orderId: string): Promise<Order | null> {
     console.warn('Error fetching order from Firestore, checking local cache:', error);
   }
 
-  // Check local cache
   const cached = getCachedOrders();
-  const localMatch = cached.find((o) => o && (o.id === orderId || o.orderNumber === orderId));
+  const localMatch = cached.find((o) => o && (o.id === cleanId || o.orderNumber === cleanId));
   return localMatch ? ($sanitizeOrder(localMatch) || localMatch) : null;
 }
 
-export async function fetchOrdersByUserId(userId: string): Promise<Order[]> {
+export async function fetchOrdersByUserId(
+  userId: string,
+  userEmail?: string,
+  userPhone?: string
+): Promise<Order[]> {
+  const cleanUid = String(userId || '').trim();
+  const cleanEmail = String(userEmail || '').trim().toLowerCase();
+  const cleanPhoneDigits = String(userPhone || '').replace(/\D/g, '').slice(-10);
+
+  const collected: any[] = [];
+
+  // 1. Authoritative server API /api/orders
   try {
-    const q = query(collection(db, ORDERS_COL), where('userId', '==', userId));
-    const snap = await getDocs(q);
-    const orders: Order[] = [];
-    snap.forEach((d) => {
-      orders.push({ id: d.id, ...(d.data() as Omit<Order, 'id'>) });
-    });
-    return orders.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    if (typeof fetch !== 'undefined') {
+      const params = new URLSearchParams();
+      if (cleanUid) params.set('userId', cleanUid);
+      if (cleanEmail) params.set('email', cleanEmail);
+      if (cleanPhoneDigits) params.set('phone', cleanPhoneDigits);
+      const resp = await fetch(`/api/orders?${params.toString()}`);
+      if (resp && resp.ok) {
+        const data = await resp.json();
+        if (Array.isArray(data)) collected.push(...data);
+      }
+    }
+  } catch {}
+
+  // 2. Firestore queries (by userId and optional customerEmail)
+  try {
+    if (cleanUid) {
+      const q = query(collection(db, ORDERS_COL), where('userId', '==', cleanUid));
+      const snap = await getDocs(q);
+      snap.forEach((d) => collected.push({ id: d.id, ...(d.data() as Omit<Order, 'id'>) }));
+    }
+    if (cleanEmail && !cleanEmail.includes('@phone.vidhyaajewellery.com')) {
+      const qEmail = query(collection(db, ORDERS_COL), where('customerEmail', '==', cleanEmail));
+      const snapEmail = await getDocs(qEmail);
+      snapEmail.forEach((d) => collected.push({ id: d.id, ...(d.data() as Omit<Order, 'id'>) }));
+    }
   } catch (error) {
-    console.warn('Error fetching user orders:', error);
-    const cached = getCachedOrders();
-    return cached.filter((o) => o.userId === userId);
+    console.warn('Error fetching user orders from Firestore:', error);
   }
+
+  // 3. Local cache fallback matching uid/email/phone
+  const cached = getCachedOrders();
+  cached.forEach((o) => {
+    if (!o) return;
+    const ordPhoneDigits = String(o.customerPhone || o.shippingAddress?.phone || '').replace(/\D/g, '').slice(-10);
+    const matchesUid = cleanUid && o.userId === cleanUid;
+    const matchesEmail = cleanEmail && o.customerEmail && o.customerEmail.toLowerCase() === cleanEmail;
+    const matchesPhone = cleanPhoneDigits && ordPhoneDigits === cleanPhoneDigits;
+    if (matchesUid || matchesEmail || matchesPhone) {
+      collected.push(o);
+    }
+  });
+
+  // Deduplicate by orderNumber / id, preferring verified paid / newest record
+  const byKey = new Map<string, Order>();
+  for (const raw of collected) {
+    const clean = $sanitizeOrder(raw);
+    if (!clean) continue;
+    const dedupeKey = clean.orderNumber || clean.id;
+    const existing = byKey.get(dedupeKey);
+    if (!existing) {
+      byKey.set(dedupeKey, clean);
+    } else {
+      const existingPaid = isOrderPaid(existing);
+      const nextPaid = isOrderPaid(clean);
+      const existingTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
+      const nextTime = new Date(clean.updatedAt || clean.createdAt || 0).getTime();
+      if ((nextPaid && !existingPaid) || (nextPaid === existingPaid && nextTime >= existingTime)) {
+        byKey.set(dedupeKey, clean);
+      }
+    }
+  }
+
+  return Array.from(byKey.values()).sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
 }
 
 export async function fetchAllOrders(): Promise<Order[]> {
@@ -1321,12 +1544,13 @@ export async function fetchAllOrders(): Promise<Order[]> {
 
     const map = new Map<string, any>();
     (Array.isArray(serverOrders) ? serverOrders : []).forEach((o) => {
-      if (o && o.id) map.set(o.id, o);
+      if (o && (o.id || o.orderNumber)) map.set(o.id || o.orderNumber, o);
     });
     firestoreOrders.forEach((o) => {
-      if (o && o.id) {
-        if (map.has(o.id)) {
-          const ex = map.get(o.id);
+      const key = o?.id || o?.orderNumber;
+      if (o && key) {
+        if (map.has(key)) {
+          const ex = map.get(key);
           const mergedItems =
             Array.isArray(ex.items) && ex.items.length > 0
               ? ex.items
@@ -1335,16 +1559,17 @@ export async function fetchAllOrders(): Promise<Order[]> {
               : [];
           const mergedShipping =
             ex.shippingAddress && typeof ex.shippingAddress === 'object'
-              ? ex.shippingAddress
+              ? { ...o.shippingAddress, ...ex.shippingAddress }
               : o.shippingAddress;
-          map.set(o.id, { ...o, ...ex, items: mergedItems, shippingAddress: mergedShipping });
+          map.set(key, { ...o, ...ex, items: mergedItems, shippingAddress: mergedShipping });
         } else {
-          map.set(o.id, o);
+          map.set(key, o);
         }
       }
     });
     (Array.isArray(cached) ? cached : []).forEach((o) => {
-      if (o && o.id && !map.has(o.id)) map.set(o.id, o);
+      const key = o?.id || o?.orderNumber;
+      if (o && key && !map.has(key)) map.set(key, o);
     });
 
     const merged = Array.from(map.values()).sort(
@@ -1357,10 +1582,11 @@ export async function fetchAllOrders(): Promise<Order[]> {
     console.warn('Error fetching all orders from Firestore, serving unified cached/server orders:', error);
     const map = new Map<string, any>();
     (Array.isArray(serverOrders) ? serverOrders : []).forEach((o) => {
-      if (o && o.id) map.set(o.id, o);
+      if (o && (o.id || o.orderNumber)) map.set(o.id || o.orderNumber, o);
     });
     (Array.isArray(cached) ? cached : []).forEach((o) => {
-      if (o && o.id && !map.has(o.id)) map.set(o.id, o);
+      const key = o?.id || o?.orderNumber;
+      if (o && key && !map.has(key)) map.set(key, o);
     });
     const merged = Array.from(map.values()).sort(
       (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
@@ -1377,25 +1603,31 @@ export async function updateOrderStatus(
   trackingNumber?: string,
   courierName?: string
 ): Promise<void> {
-  // Update local cache first
+  const now = new Date().toISOString();
   const cached = getCachedOrders();
-  const index = cached.findIndex((o) => o && o.id === orderId);
+  const index = cached.findIndex((o) => o && (o.id === orderId || o.orderNumber === orderId));
   if (index !== -1) {
     cached[index].orderStatus = status;
     if (trackingNumber !== undefined) cached[index].trackingNumber = trackingNumber;
     if (courierName !== undefined) cached[index].courierName = courierName;
-    cached[index].updatedAt = new Date().toISOString();
+    cached[index].updatedAt = now;
     saveCachedOrders(cached);
   }
 
-  // Sync with backend REST API
   try {
     if (typeof fetch !== 'undefined') {
-      fetch(`/api/orders/${encodeURIComponent(orderId)}`, {
+      const adminToken =
+        (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('vidhyaa_admin_token')) ||
+        (typeof localStorage !== 'undefined' && localStorage.getItem('vidhyaa_admin_token')) ||
+        '';
+      await fetch(`/api/orders/${encodeURIComponent(orderId)}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orderStatus: status, trackingNumber, courierName })
-      }).catch(() => {});
+        headers: {
+          'Content-Type': 'application/json',
+          ...(adminToken ? { Authorization: `Bearer ${adminToken}` } : {})
+        },
+        body: JSON.stringify(stripUndefinedDeep({ orderStatus: status, trackingNumber, courierName }))
+      });
     }
   } catch {}
 
@@ -1403,14 +1635,43 @@ export async function updateOrderStatus(
     const docRef = doc(db, ORDERS_COL, orderId);
     const updates: Partial<Order> = {
       orderStatus: status,
-      updatedAt: new Date().toISOString()
+      updatedAt: now
     };
     if (trackingNumber !== undefined) updates.trackingNumber = trackingNumber;
     if (courierName !== undefined) updates.courierName = courierName;
-    await updateDoc(docRef, updates);
+    await updateDoc(docRef, stripUndefinedDeep(updates));
   } catch (error) {
     console.warn('Could not sync updated order status to Firestore:', error);
   }
+}
+
+export async function confirmOrderPaymentAdmin(orderId: string): Promise<Order | null> {
+  const adminToken =
+    (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('vidhyaa_admin_token')) ||
+    (typeof localStorage !== 'undefined' && localStorage.getItem('vidhyaa_admin_token')) ||
+    'vidhyaa-admin-authorized';
+
+  let updatedOrder: Order | null = null;
+  try {
+    const resp = await fetch(`/api/orders/${encodeURIComponent(orderId)}/confirm-payment`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`
+      }
+    });
+    if (resp.ok) {
+      const data = await resp.json().catch(() => null);
+      if (data?.order) {
+        updatedOrder = $sanitizeOrder(data.order) || data.order;
+      }
+    }
+  } catch {}
+
+  if (updatedOrder) {
+    await syncOrderToLocalAndFirestore(updatedOrder);
+  }
+  return updatedOrder;
 }
 
 // Reviews

@@ -102,14 +102,14 @@ export const AdminCashfreeSettingsPanel: React.FC = () => {
           <div>
             <div className="flex items-center gap-2">
               <h3 className="font-serif text-lg font-bold text-[#3B1E22]">
-                Cashfree Payments Gateway (Cards & Netbanking)
+                Cashfree Payments Gateway (UPI, Cards & Netbanking)
               </h3>
               <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-800 px-2.5 py-0.5 rounded-full border border-emerald-200">
                 Official Hosted Checkout
               </span>
             </div>
             <p className="text-xs text-gray-500 mt-0.5">
-              Securely accepts Credit Cards (Visa, Mastercard, RuPay, Amex) and Debit Cards via Cashfree's PCI-DSS Level 1 Hosted Checkout.
+              Securely accepts UPI (Google Pay, PhonePe, Paytm), Credit/Debit Cards (Visa, Mastercard, RuPay, Amex), and Netbanking via Cashfree's PCI-DSS Level 1 Hosted Checkout.
             </p>
           </div>
         </div>

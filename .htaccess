@@ -43,14 +43,41 @@
   </FilesMatch>
 </IfModule>
 
-# SPA routing with media file exclusion (never return HTML for missing or direct media requests)
+# Protect sensitive directories and secret/PII files from direct public HTTP access
+<FilesMatch "^(cashfree-config\.json|\.env(\..*)?|orders|patrons\.json|orders\.json|whatsapp_logs\.json)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+# SPA routing with media file exclusion and secure PHP API routing
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
 
-  # Route dynamic products API requests to PHP handler BEFORE physical file check (api/products static file exists)
+  # Deny direct HTTP access to .admin-secrets, .backups, and private data JSON files
+  RewriteRule ^(\.admin-secrets|\.backups)(/.*)?$ - [F,L]
+  RewriteRule ^data/(orders|patrons|whatsapp_logs)\.json$ - [F,L]
+  RewriteRule ^cashfree-config\.json$ - [F,L]
+
+  # Route dynamic products & orders API requests to PHP handlers BEFORE physical file checks
   RewriteRule ^api/products/?$ /api/products.php [QSA,L]
   RewriteRule ^api/products/([^/]+)/?$ /api/products.php?id=$1 [QSA,L]
+  RewriteRule ^api/orders/?$ /api/orders.php [QSA,L]
+  RewriteRule ^api/orders/([^/]+)/confirm-payment/?$ /api/orders.php?id=$1&action=confirm-payment [QSA,L]
+  RewriteRule ^api/orders/([^/]+)/?$ /api/orders.php?id=$1 [QSA,L]
+
+  # Cashfree PG & Webhook routes
+  RewriteRule ^api/payments/cashfree/status/?$ /api/payments/cashfree.php?action=status [QSA,L]
+  RewriteRule ^api/payments/cashfree/create-order/?$ /api/payments/cashfree.php?action=create-order [QSA,L]
+  RewriteRule ^api/payments/cashfree/verify-order/?$ /api/payments/cashfree.php?action=verify-order [QSA,L]
+  RewriteRule ^api/payments/cashfree/webhook/?$ /api/payments/cashfree.php?action=webhook [QSA,L]
+  RewriteRule ^api/payments/webhook/?$ /api/payments/cashfree.php?action=webhook [QSA,L]
+  RewriteRule ^api/admin/cashfree-config/?$ /api/payments/cashfree.php?action=admin-config [QSA,L]
 
   # Serve existing physical files and directories directly
   RewriteCond %{REQUEST_FILENAME} -f [OR]
@@ -79,4 +106,3 @@
   # Route all other routes to index.html SPA
   RewriteRule . /index.html [L]
 </IfModule>
-

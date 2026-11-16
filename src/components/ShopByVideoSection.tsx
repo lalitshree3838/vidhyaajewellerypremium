@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
   Play,
+  Pause,
   Volume2,
   VolumeX,
   ChevronLeft,
@@ -15,7 +16,6 @@ import {
 import confetti from 'canvas-confetti';
 import { Product, ProductVariation } from '../types';
 import { useCart } from '../context/CartContext';
-
 import {
   isGenuineVideoUrl,
   isGenuineImageUrl,
@@ -23,7 +23,13 @@ import {
   BANNED_PRODUCT_IDS
 } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
-
+import {
+  normalizeVideoUrl,
+  getProductVideoCandidates,
+  fetchAvailableVideoInventory,
+  resolveCandidatesWithInventory,
+  VideoInventoryState
+} from '../lib/videoFallback';
 import { SeamlessLoopVideo, SeamlessLoopVideoHandle } from './SeamlessLoopVideo';
 
 interface VideoReelItem {
@@ -34,6 +40,7 @@ interface VideoReelItem {
   mrp: number;
   discount: number;
   videoUrl: string;
+  fallbackUrls: string[];
   posterImage: string;
   duration: string;
   features: string;
@@ -46,37 +53,63 @@ interface ShopByVideoSectionProps {
   onSelectProduct: (product: Product, variation?: ProductVariation) => void;
 }
 
-function normalizeVideoUrl(url?: string): string {
-  if (!url || typeof url !== 'string') return '';
-  const cleaned = url
-    .trim()
-    .replace(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?(\/.*)$/i, '$1');
-  return /^videos\/uploads\//i.test(cleaned) ? `/${cleaned}` : cleaned;
+function formatDurationLabel(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0:15';
+  const total = Math.max(1, Math.round(seconds));
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
 interface ReelCardVideoProps {
   videoUrl: string;
+  fallbackUrls?: string[];
   fallbackImage?: string;
   title: string;
   isMuted?: boolean;
-  isActive?: boolean;
+  carouselRootRef?: React.RefObject<HTMLDivElement | null>;
+  onDurationReady?: (formatted: string) => void;
 }
 
 const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
   videoUrl,
+  fallbackUrls,
   fallbackImage,
   title,
-  isMuted = true
+  isMuted = true,
+  carouselRootRef,
+  onDurationReady
 }) => {
+  const sourceCandidates = useMemo(() => {
+    const list: string[] = [];
+    const primary = normalizeVideoUrl(videoUrl);
+    if (primary) list.push(primary);
+    if (Array.isArray(fallbackUrls)) {
+      for (const candidate of fallbackUrls) {
+        const norm = normalizeVideoUrl(candidate);
+        if (norm && !list.includes(norm)) list.push(norm);
+      }
+    }
+    return list;
+  }, [videoUrl, fallbackUrls]);
+
+  const candidatesKey = sourceCandidates.join('|');
+  const [sourceIdx, setSourceIdx] = useState<number>(0);
+  const cleanSrc = sourceCandidates[sourceIdx] || '';
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
-  const cleanSrc = normalizeVideoUrl(videoUrl);
   const prevSrcRef = useRef<string>(cleanSrc);
   const hasErrRef = useRef<boolean>(false);
+  const userPausedRef = useRef<boolean>(false);
+  const playInFlightRef = useRef<boolean>(false);
+  const viewportVisibleRef = useRef<boolean>(true);
+  const carouselVisibleRef = useRef<boolean>(true);
+
   const [hasErr, setHasErr] = useState(false);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
+  const [userPaused, setUserPaused] = useState(false);
   const [playing, setPlaying] = useState(false);
-  const [, setReady] = useState(false);
   const [inView, setInView] = useState(true);
 
   const validFallback =
@@ -87,145 +120,156 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
       ? fallbackImage
       : '';
 
-  const tryPlay = useCallback(() => {
-    const el = videoRef.current;
-    if (!el || !cleanSrc || hasErrRef.current || el.error) return;
-    try {
-      el.muted = isMuted;
-      el.defaultMuted = isMuted;
-      if (isMuted) el.setAttribute('muted', '');
-      else el.removeAttribute('muted');
-      el.playsInline = true;
-      el.setAttribute('playsinline', '');
-      el.setAttribute('webkit-playsinline', 'true');
+  const syncMuteAttrs = useCallback((el: HTMLVideoElement, mutedState: boolean) => {
+    el.muted = mutedState;
+    el.defaultMuted = mutedState;
+    if (mutedState) {
+      el.setAttribute('muted', '');
+    } else {
+      el.removeAttribute('muted');
+    }
+    el.loop = true;
+    el.playsInline = true;
+    el.setAttribute('playsinline', '');
+    el.setAttribute('webkit-playsinline', 'true');
+  }, []);
 
+  const tryPlay = useCallback(async () => {
+    const el = videoRef.current;
+    if (!el || !cleanSrc || hasErrRef.current || userPausedRef.current || el.error) return;
+    if (!el.paused || playInFlightRef.current) return;
+
+    playInFlightRef.current = true;
+    try {
+      syncMuteAttrs(el, isMuted);
       const p = el.play();
       if (p !== undefined) {
-        p.then(() => {
-          if (!el.paused) {
-            setPlaying(true);
-            setHasErr(false);
-            setAutoplayBlocked(false);
-          }
-        }).catch((err: any) => {
-          if (err?.name === 'NotAllowedError' || !el.muted) {
-            el.muted = true;
-            el.defaultMuted = true;
-            el.setAttribute('muted', '');
-            const p2 = el.play();
-            if (p2 !== undefined) {
-              p2.then(() => {
-                if (!el.paused) {
-                  setPlaying(true);
-                  setHasErr(false);
-                  setAutoplayBlocked(false);
-                }
-              }).catch(() => {
-                setPlaying(false);
-                setAutoplayBlocked(true);
-              });
+        await p;
+      }
+      if (!el.paused) {
+        setPlaying(true);
+        setHasErr(false);
+        setAutoplayBlocked(false);
+      }
+    } catch (err: any) {
+      if (err?.name === 'NotAllowedError') {
+        if (!el.muted) {
+          try {
+            syncMuteAttrs(el, true);
+            await el.play();
+            if (!el.paused) {
+              setPlaying(true);
+              setHasErr(false);
+              setAutoplayBlocked(false);
+              return;
             }
+          } catch {
+            // Muted autoplay blocked until interaction
           }
+        }
+        setPlaying(false);
+        setAutoplayBlocked(true);
+      } else if (err?.name !== 'AbortError') {
+        console.warn('[ShopByVideoSection] Video autoplay attempt rejected:', {
+          title,
+          videoUrl: cleanSrc,
+          name: err?.name,
+          message: err?.message || err
         });
       }
-    } catch {}
-  }, [isMuted, cleanSrc]);
+    } finally {
+      playInFlightRef.current = false;
+    }
+  }, [isMuted, cleanSrc, title, syncMuteAttrs]);
 
-  const handlePlayButtonClick = useCallback(
-    (ev: React.MouseEvent) => {
+  const handleTogglePlayPause = useCallback(
+    async (ev: React.MouseEvent) => {
       ev.preventDefault();
       ev.stopPropagation();
       const el = videoRef.current;
-      if (!el) return;
-      if (!cleanSrc) {
-        hasErrRef.current = true;
-        setHasErr(true);
+      if (!el || !cleanSrc || hasErrRef.current) return;
+
+      if (!el.paused) {
+        userPausedRef.current = true;
+        setUserPaused(true);
+        try {
+          el.pause();
+        } catch {}
+        setPlaying(false);
         return;
       }
-      hasErrRef.current = false;
-      setHasErr(false);
+
+      userPausedRef.current = false;
+      setUserPaused(false);
       setAutoplayBlocked(false);
-      if (!el.getAttribute('src')) {
-        el.setAttribute('src', cleanSrc);
-      }
+
       if (el.error || el.networkState === 3) {
         try {
           el.load();
         } catch {}
       }
-      el.muted = isMuted;
-      el.defaultMuted = isMuted;
-      if (isMuted) el.setAttribute('muted', '');
-      else el.removeAttribute('muted');
-      el.playsInline = true;
-      el.setAttribute('playsinline', '');
-      el.setAttribute('webkit-playsinline', 'true');
 
+      syncMuteAttrs(el, isMuted);
       try {
         const playPromise = el.play();
         if (playPromise !== undefined) {
-          playPromise
-            .then(() => {
-              if (!el.paused) {
-                setPlaying(true);
-                setHasErr(false);
-                setAutoplayBlocked(false);
-              }
-            })
-            .catch((err: any) => {
-              if (!el.muted) {
-                el.muted = true;
-                el.defaultMuted = true;
-                el.setAttribute('muted', '');
-                const p2 = el.play();
-                if (p2 !== undefined) {
-                  p2.then(() => {
-                    if (!el.paused) {
-                      setPlaying(true);
-                      setHasErr(false);
-                      setAutoplayBlocked(false);
-                    }
-                  }).catch(() => {
-                    setPlaying(false);
-                    setHasErr(true);
-                  });
-                }
-              } else {
-                setPlaying(false);
-                if (err?.name === 'NotAllowedError') setAutoplayBlocked(true);
-                else setHasErr(true);
-              }
-            });
-        } else if (!el.paused) {
+          await playPromise;
+        }
+        if (!el.paused) {
           setPlaying(true);
           setHasErr(false);
+          setAutoplayBlocked(false);
         }
-      } catch {
-        setPlaying(false);
-        setHasErr(true);
+      } catch (err: any) {
+        if (err?.name === 'NotAllowedError' && !el.muted) {
+          try {
+            syncMuteAttrs(el, true);
+            await el.play();
+            if (!el.paused) {
+              setPlaying(true);
+              setHasErr(false);
+              setAutoplayBlocked(false);
+              return;
+            }
+          } catch {
+            setPlaying(false);
+            setAutoplayBlocked(true);
+          }
+        } else if (err?.name !== 'AbortError') {
+          setPlaying(false);
+          setAutoplayBlocked(true);
+        }
       }
     },
-    [cleanSrc, isMuted]
+    [cleanSrc, isMuted, syncMuteAttrs]
   );
 
+  // Sync mute state cleanly without resetting or reloading playing media
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
-    el.muted = isMuted;
-    el.defaultMuted = isMuted;
-    if (isMuted) el.setAttribute('muted', '');
-    else el.removeAttribute('muted');
-    el.playsInline = true;
-    el.setAttribute('playsinline', '');
-    el.setAttribute('webkit-playsinline', 'true');
-    if (inView && el.paused) tryPlay();
-  }, [isMuted, inView, tryPlay]);
+    syncMuteAttrs(el, isMuted);
+    if (inView && el.paused && !userPausedRef.current && !hasErrRef.current) {
+      tryPlay();
+    }
+  }, [isMuted, inView, syncMuteAttrs, tryPlay]);
 
+  // Reset candidate index if product source list changes
+  useEffect(() => {
+    setSourceIdx(0);
+    userPausedRef.current = false;
+    setUserPaused(false);
+    hasErrRef.current = false;
+    setHasErr(false);
+    setAutoplayBlocked(false);
+    setPlaying(false);
+  }, [candidatesKey]);
+
+  // Load new active source only when source URL genuinely changes
   useEffect(() => {
     hasErrRef.current = false;
     setHasErr(false);
     setAutoplayBlocked(false);
-    setReady(false);
     setPlaying(false);
     const el = videoRef.current;
     if (el && cleanSrc) {
@@ -235,60 +279,105 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
           el.load();
         } catch {}
       }
-      if (inView) tryPlay();
+      if (inView && !userPausedRef.current) {
+        tryPlay();
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cleanSrc]);
 
+  // Observe visibility in BOTH browser viewport AND horizontal carousel track
   useEffect(() => {
-    const box = boxRef.current || videoRef.current;
+    const box = boxRef.current;
     if (!box || typeof IntersectionObserver === 'undefined') {
       setInView(true);
       return;
     }
-    const obs = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          const vis = entry.isIntersecting || entry.intersectionRatio > 0;
-          setInView(vis);
-          const el = videoRef.current;
-          if (!el) return;
-          if (vis) {
-            if (el.paused) tryPlay();
-          } else if (!el.paused) {
-            try {
-              el.pause();
-              setPlaying(false);
-            } catch {}
-          }
-        });
-      },
-      { threshold: [0, 0.05, 0.2], rootMargin: '200px 350px 200px 350px' }
-    );
-    obs.observe(box);
-    return () => obs.disconnect();
-  }, [tryPlay]);
 
-  useEffect(() => {
-    const onTouch = () => {
+    const updateVisibility = () => {
+      const visible = viewportVisibleRef.current && carouselVisibleRef.current;
+      setInView(visible);
       const el = videoRef.current;
-      if (el && el.paused && inView) tryPlay();
-    };
-    const onVis = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        const el = videoRef.current;
-        if (el && el.paused && inView) tryPlay();
+      if (!el) return;
+      if (visible) {
+        if (el.paused && !userPausedRef.current && !hasErrRef.current) {
+          tryPlay();
+        }
+      } else if (!el.paused) {
+        try {
+          el.pause();
+        } catch {}
       }
     };
-    window.addEventListener('touchstart', onTouch, { passive: true, once: true });
-    window.addEventListener('pointerdown', onTouch, { passive: true, once: true });
-    document.addEventListener('visibilitychange', onVis);
-    return () => {
-      window.removeEventListener('touchstart', onTouch);
-      window.removeEventListener('pointerdown', onTouch);
-      document.removeEventListener('visibilitychange', onVis);
+
+    const computeInitialVisibility = () => {
+      const rect = box.getBoundingClientRect();
+      viewportVisibleRef.current =
+        rect.bottom > 0 &&
+        rect.top < window.innerHeight &&
+        rect.right > 0 &&
+        rect.left < window.innerWidth;
+
+      const rootEl = carouselRootRef?.current;
+      if (rootEl) {
+        const trackRect = rootEl.getBoundingClientRect();
+        carouselVisibleRef.current =
+          rect.right > trackRect.left + 8 && rect.left < trackRect.right - 8;
+      } else {
+        carouselVisibleRef.current = rect.right > 0 && rect.left < window.innerWidth;
+      }
+      updateVisibility();
     };
-  }, [inView, tryPlay]);
+
+    computeInitialVisibility();
+
+    const viewportObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          viewportVisibleRef.current = entry.isIntersecting && entry.intersectionRatio > 0;
+        }
+        updateVisibility();
+      },
+      { root: null, threshold: [0, 0.1], rootMargin: '0px' }
+    );
+    viewportObserver.observe(box);
+
+    let carouselObserver: IntersectionObserver | null = null;
+    const trackEl = carouselRootRef?.current;
+    if (trackEl) {
+      carouselObserver = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            carouselVisibleRef.current = entry.isIntersecting && entry.intersectionRatio >= 0.1;
+          }
+          updateVisibility();
+        },
+        { root: trackEl, threshold: [0, 0.1], rootMargin: '0px' }
+      );
+      carouselObserver.observe(box);
+    }
+
+    return () => {
+      viewportObserver.disconnect();
+      carouselObserver?.disconnect();
+    };
+  }, [carouselRootRef, tryPlay]);
+
+  useEffect(() => {
+    if (!inView || !autoplayBlocked) return;
+    const onGesture = () => {
+      const el = videoRef.current;
+      if (el && el.paused && !userPausedRef.current && !hasErrRef.current) {
+        tryPlay();
+      }
+    };
+    window.addEventListener('touchstart', onGesture, { passive: true, once: true });
+    window.addEventListener('pointerdown', onGesture, { passive: true, once: true });
+    return () => {
+      window.removeEventListener('touchstart', onGesture);
+      window.removeEventListener('pointerdown', onGesture);
+    };
+  }, [inView, autoplayBlocked, tryPlay]);
 
   return (
     <div
@@ -312,34 +401,58 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
         loop
         playsInline
         webkit-playsinline="true"
-        preload="auto"
+        preload="metadata"
         title={title}
-        onLoadedMetadata={() => {
-          setReady(true);
-          if (inView) tryPlay();
-        }}
-        onLoadedData={() => {
-          setReady(true);
-          setHasErr(false);
-          if (inView) tryPlay();
+        onLoadedMetadata={(ev) => {
+          const el = ev.currentTarget;
+          if (el.duration && onDurationReady) {
+            onDurationReady(formatDurationLabel(el.duration));
+          }
+          if (inView && !userPausedRef.current) tryPlay();
         }}
         onCanPlay={() => {
-          setReady(true);
+          hasErrRef.current = false;
           setHasErr(false);
-          if (inView) tryPlay();
+          if (inView && !userPausedRef.current) tryPlay();
         }}
         onPlaying={() => {
           const el = videoRef.current;
           if (!el || !el.paused) {
             setPlaying(true);
-            setReady(true);
             setHasErr(false);
             setAutoplayBlocked(false);
           }
         }}
-        onPause={() => setPlaying(false)}
-        onError={() => {
+        onEnded={() => {
           const el = videoRef.current;
+          if (!el || userPausedRef.current || hasErrRef.current) return;
+          try {
+            el.currentTime = 0;
+            el.play().catch(() => {});
+          } catch {}
+        }}
+        onPause={() => {
+          setPlaying(false);
+          const el = videoRef.current;
+          if (el && el.ended && !userPausedRef.current && inView && !hasErrRef.current) {
+            try {
+              el.currentTime = 0;
+              el.play().catch(() => {});
+            } catch {}
+          }
+        }}
+        onError={() => {
+          if (sourceIdx + 1 < sourceCandidates.length) {
+            setSourceIdx((prev) => prev + 1);
+            return;
+          }
+          const el = videoRef.current;
+          console.warn('[ReelCardVideo] Video failed to load across candidates:', {
+            title,
+            videoUrl: cleanSrc,
+            errorCode: el?.error?.code,
+            errorMessage: el?.error?.message
+          });
           if (!el || el.readyState === 0 || el.error) {
             hasErrRef.current = true;
             setHasErr(true);
@@ -354,12 +467,14 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
           display: 'block',
           position: 'relative',
           zIndex: 2,
-          opacity: hasErr && validFallback && !playing ? 0 : 1
+          opacity: hasErr && !playing ? 0 : 1
         }}
         aria-hidden="true"
         tabIndex={-1}
       />
-      {validFallback && !playing && (
+
+      {/* Poster shown ONLY while video is loading before first frame OR on genuine error */}
+      {validFallback && (!playing || hasErr) && (
         <img
           src={validFallback}
           alt={title || 'VIDHYAA Jewellery'}
@@ -368,18 +483,20 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
           loading="eager"
         />
       )}
-      {!playing && (
+
+      {/* Center Play overlay shown ONLY when paused by user or autoplay-blocked on a valid stream */}
+      {!hasErr && !playing && (userPaused || autoplayBlocked) && (
         <button
           type="button"
-          onClick={handlePlayButtonClick}
+          onClick={handleTogglePlayPause}
           className="flex flex-col items-center justify-center rounded-full shadow-2xl transition-transform hover:scale-105 active:scale-95 cursor-pointer"
           style={{
             position: 'absolute',
             left: '50%',
             top: '50%',
             transform: 'translate(-50%, -50%)',
-            width: '64px',
-            height: '64px',
+            width: '60px',
+            height: '60px',
             borderRadius: '9999px',
             zIndex: 25,
             pointerEvents: 'auto',
@@ -387,16 +504,51 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
             backgroundColor: 'rgba(223,185,130,0.95)',
             border: '2px solid rgba(255,255,255,0.65)'
           }}
-          title={
-            hasErr
-              ? 'Retry video playback'
-              : autoplayBlocked
-              ? 'Tap to play video'
-              : `Play ${title || 'video'}`
-          }
-          aria-label={hasErr ? 'Retry video playback' : 'Play video'}
+          title={autoplayBlocked ? 'Tap to play video' : `Play ${title || 'video'}`}
+          aria-label="Play video"
         >
           <Play className="w-7 h-7 fill-[#241C1A] ml-0.5" />
+        </button>
+      )}
+
+      {/* Honest fallback badge if video genuinely fails to load */}
+      {hasErr && (
+        <div
+          className="px-3 py-1 rounded-full bg-black/75 text-[#DFB982] text-[10px] font-bold uppercase tracking-wider border border-white/20 pointer-events-none"
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '46%',
+            transform: 'translate(-50%, -50%)',
+            zIndex: 24
+          }}
+        >
+          Video Unavailable
+        </div>
+      )}
+
+      {/* Top-right inline Play/Pause control so users can directly pause/resume inline without blocking video */}
+      {!hasErr && (
+        <button
+          type="button"
+          onClick={handleTogglePlayPause}
+          className="w-8 h-8 rounded-full bg-black/60 hover:bg-black/90 backdrop-blur-md text-white flex items-center justify-center transition-all cursor-pointer border border-white/25 shadow-md active:scale-90"
+          style={{
+            position: 'absolute',
+            top: '14px',
+            right: '52px',
+            zIndex: 30,
+            pointerEvents: 'auto',
+            backgroundColor: 'rgba(0,0,0,0.6)'
+          }}
+          title={playing ? 'Pause video' : 'Play video'}
+          aria-label={playing ? 'Pause video' : 'Play video'}
+        >
+          {playing ? (
+            <Pause className="w-3.5 h-3.5 text-white" />
+          ) : (
+            <Play className="w-3.5 h-3.5 text-[#DFB982] fill-[#DFB982] ml-0.5" />
+          )}
         </button>
       )}
     </div>
@@ -409,76 +561,89 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
 }) => {
   const { addToCart, openCart } = useCart();
   const trackRef = useRef<HTMLDivElement | null>(null);
+  const [inventory, setInventory] = useState<VideoInventoryState>({
+    checked: false,
+    supported: false,
+    availableSet: new Set()
+  });
+  const [durationByReelId, setDurationByReelId] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let mounted = true;
+    fetchAvailableVideoInventory().then((inv) => {
+      if (mounted) setInventory(inv);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const videoReels: VideoReelItem[] = useMemo(() => {
-    const normalizedProducts = (Array.isArray(products) ? products : []).map((p) => {
-      const v = normalizeVideoUrl(p.videoUrl || (p as any).video || (p as any).videoURL || '');
-      return v ? { ...p, videoUrl: v } : p;
-    });
+    if (!inventory.checked) return [];
 
-    const active = normalizedProducts
-      .filter((p) =>
-        Boolean(
-          p.videoUrl &&
-            isGenuineVideoUrl(p.videoUrl) &&
-            !BANNED_PRODUCT_IDS.has(p.id) &&
-            p.showInShoppingVideos !== false
-        )
-      )
-      .map((p) => {
-        const thumb =
-          (p.images || []).find(isGenuineImageUrl) ||
-          (p.variations || []).map((v) => v?.image).find((img): img is string => Boolean(img && isGenuineImageUrl(img))) ||
-          '';
-        return {
-          id: `reel-${p.id}`,
-          title: p.name,
-          category: p.categoryName || 'Fine Jewellery',
-          price: p.price,
-          mrp: p.mrp,
-          discount: p.discountPercent,
-          videoUrl: normalizeVideoUrl(p.videoUrl),
-          posterImage: thumb,
-          duration: '0:15',
-          features:
-            p.shortDescription || p.description?.slice(0, 70) || `₹${p.price.toLocaleString('en-IN')}`,
-          productId: p.id,
-          rawProduct: p
-        };
-      });
+    const allSourceProducts: Product[] = [];
+    const seenProductIds = new Set<string>();
 
-    const seenIds = new Set(active.map((r) => r.productId));
-    const catalogReels: VideoReelItem[] = INITIAL_PRODUCTS.filter((p) =>
-      Boolean(
-        p.videoUrl &&
-          isGenuineVideoUrl(p.videoUrl) &&
-          !seenIds.has(p.id) &&
-          p.showInShoppingVideos !== false
-      )
-    ).map((p) => {
+    const pushProduct = (p: Product) => {
+      if (!p || !p.id || BANNED_PRODUCT_IDS.has(p.id) || p.showInShoppingVideos === false) return;
+      if (seenProductIds.has(p.id)) return;
+      seenProductIds.add(p.id);
+      allSourceProducts.push(p);
+    };
+
+    (Array.isArray(products) ? products : []).forEach(pushProduct);
+    INITIAL_PRODUCTS.forEach(pushProduct);
+
+    const reels: VideoReelItem[] = [];
+    const seenCanonicalReels = new Set<string>();
+
+    for (const p of allSourceProducts) {
+      const candidates = getProductVideoCandidates(p);
+      if (candidates.length === 0) continue;
+
+      const { resolvedUrl, fallbackUrls, isKnownMissingLocal } = resolveCandidatesWithInventory(
+        candidates,
+        inventory
+      );
+
+      // Skip entries whose local file is missing with no catalog fallback on this host
+      if (isKnownMissingLocal || !resolvedUrl || !isGenuineVideoUrl(resolvedUrl)) {
+        continue;
+      }
+
+      // Deduplicate identical duplicate Firestore/seed products referencing the same reel
+      const titleKey = (p.name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      const dedupeKey = `${titleKey}::${resolvedUrl}`;
+      if (seenCanonicalReels.has(dedupeKey)) continue;
+      seenCanonicalReels.add(dedupeKey);
+
       const thumb =
         (p.images || []).find(isGenuineImageUrl) ||
-        (p.variations || []).map((v) => v?.image).find((img): img is string => Boolean(img && isGenuineImageUrl(img))) ||
+        (p.variations || [])
+          .map((v) => v?.image)
+          .find((img): img is string => Boolean(img && isGenuineImageUrl(img))) ||
         '';
-      return {
+
+      reels.push({
         id: `reel-${p.id}`,
         title: p.name,
         category: p.categoryName || 'Fine Jewellery',
         price: p.price,
         mrp: p.mrp,
         discount: p.discountPercent,
-        videoUrl: normalizeVideoUrl(p.videoUrl),
+        videoUrl: resolvedUrl,
+        fallbackUrls,
         posterImage: thumb,
         duration: '0:15',
         features:
           p.shortDescription || p.description?.slice(0, 70) || `₹${p.price.toLocaleString('en-IN')}`,
         productId: p.id,
         rawProduct: p
-      };
-    });
+      });
+    }
 
-    return [...active, ...catalogReels];
-  }, [products]);
+    return reels;
+  }, [products, inventory]);
 
   const [activeSlide, setActiveSlide] = useState<number>(0);
   const [unmutedReelId, setUnmutedReelId] = useState<string | null>(null);
@@ -487,6 +652,15 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
   const [modalMuted, setModalMuted] = useState<boolean>(true);
   const [addedReelId, setAddedReelId] = useState<string | null>(null);
   const modalVideoRef = useRef<SeamlessLoopVideoHandle | null>(null);
+
+  useEffect(() => {
+    if (videoReels.length > 0 && activeSlide >= videoReels.length) {
+      setActiveSlide(0);
+    }
+    if (modalIdx !== null && (videoReels.length === 0 || modalIdx >= videoReels.length)) {
+      setModalIdx(null);
+    }
+  }, [videoReels.length, activeSlide, modalIdx]);
 
   const findMatchingProduct = (reel: VideoReelItem): Product => {
     if (reel.rawProduct) return reel.rawProduct;
@@ -580,6 +754,19 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
     return () => window.removeEventListener('keydown', onKey);
   }, [modalIdx, videoReels.length]);
 
+  if (!inventory.checked) {
+    return (
+      <section
+        id="shopping-video"
+        className="relative overflow-hidden py-16 sm:py-20 bg-[#FAF7F2] border-y border-[#E8DCCF]"
+      >
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 flex items-center justify-center">
+          <div className="w-8 h-8 rounded-full border-2 border-[#DFB982] border-t-[#802336] animate-spin" />
+        </div>
+      </section>
+    );
+  }
+
   if (videoReels.length === 0) {
     return (
       <section
@@ -636,6 +823,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
 
           <div className="hidden sm:flex items-center justify-center gap-2.5">
             <button
+              type="button"
               onClick={() => scrollDir('left')}
               className="w-11 h-11 rounded-full bg-white hover:bg-[#F4EBE1] text-[#3B1E22] border border-[#E8DCCF] hover:border-[#D4AF37] shadow-sm hover:shadow-md flex items-center justify-center transition-all cursor-pointer"
               title="Previous video"
@@ -645,6 +833,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
             </button>
 
             <button
+              type="button"
               onClick={() => scrollDir('right')}
               className="w-11 h-11 rounded-full bg-white hover:bg-[#F4EBE1] text-[#3B1E22] border border-[#E8DCCF] hover:border-[#D4AF37] shadow-sm hover:shadow-md flex items-center justify-center transition-all cursor-pointer"
               title="Next video"
@@ -664,6 +853,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
           {videoReels.map((reel, idx) => {
             const isCurrent = idx === activeSlide;
             const isSoundOn = unmutedReelId === reel.id;
+            const displayDuration = durationByReelId[reel.id] || reel.duration;
             return (
               <div
                 key={reel.id}
@@ -684,21 +874,28 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
               >
                 <ReelCardVideo
                   videoUrl={reel.videoUrl}
+                  fallbackUrls={reel.fallbackUrls}
                   fallbackImage={reel.posterImage}
                   title={reel.title}
                   isMuted={!isSoundOn}
-                  isActive={isCurrent}
+                  carouselRootRef={trackRef}
+                  onDurationReady={(dur) => {
+                    setDurationByReelId((prev) =>
+                      prev[reel.id] === dur ? prev : { ...prev, [reel.id]: dur }
+                    );
+                  }}
                 />
 
                 <div
                   className="absolute inset-0 bg-gradient-to-t from-black/85 via-transparent pointer-events-none z-10"
                   style={{
                     background:
-                      'linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.12) 48%, rgba(0,0,0,0.35) 100%)'
+                      'linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.12) 48%, rgba(0,0,0,0.35) 100%)',
+                    pointerEvents: 'none'
                   }}
                 />
 
-                <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between z-20">
+                <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between z-20 pointer-events-none">
                   <div className="flex items-center gap-1.5 pointer-events-none">
                     <span
                       className="bg-white/90 backdrop-blur-md text-[#802336] text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider shadow-xs border border-[#E8DCCF]"
@@ -712,7 +909,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
                       style={{ backgroundColor: 'rgba(0,0,0,0.55)' }}
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
-                      <span>{reel.duration}</span>
+                      <span>{displayDuration}</span>
                     </span>
                   </div>
 
@@ -722,8 +919,8 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
                       evt.stopPropagation();
                       setUnmutedReelId(isSoundOn ? null : reel.id);
                     }}
-                    className="w-8 h-8 rounded-full bg-black/60 hover:bg-black/90 backdrop-blur-md text-white flex items-center justify-center transition-all cursor-pointer border border-white/25 shadow-md active:scale-90"
-                    style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
+                    className="w-8 h-8 rounded-full bg-black/60 hover:bg-black/90 backdrop-blur-md text-white flex items-center justify-center transition-all cursor-pointer border border-white/25 shadow-md active:scale-90 pointer-events-auto"
+                    style={{ backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 30, pointerEvents: 'auto' }}
                     title={isSoundOn ? 'Click to Mute' : 'Click to Unmute Sound'}
                     aria-label={isSoundOn ? 'Mute video sound' : 'Unmute video sound'}
                   >
@@ -828,6 +1025,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
             onClick={(evt) => evt.stopPropagation()}
           >
             <button
+              type="button"
               onClick={() => setModalIdx(null)}
               className="absolute top-3 right-3 z-30 w-9 h-9 rounded-full bg-black/60 hover:bg-black text-white flex items-center justify-center transition-colors cursor-pointer"
               title="Close video viewer (Esc)"
@@ -862,7 +1060,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
                   ref={modalVideoRef}
                   key={activeModalReel.id}
                   src={activeModalReel.videoUrl}
-                  poster={undefined}
+                  fallbackUrls={activeModalReel.fallbackUrls}
                   fallbackImage={activeModalReel.posterImage}
                   title={activeModalReel.title}
                   autoPlay={true}
@@ -909,6 +1107,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
                 )}
 
                 <button
+                  type="button"
                   onClick={(evt) => {
                     evt.stopPropagation();
                     if (modalVideoRef.current) {
@@ -938,6 +1137,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
               </div>
 
               <button
+                type="button"
                 onClick={(evt) => {
                   evt.stopPropagation();
                   setModalPlaying(false);
@@ -946,11 +1146,13 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
                 className="absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 hover:bg-black/80 text-white flex items-center justify-center transition-colors cursor-pointer z-20 border border-white/20"
                 style={{ zIndex: 30, pointerEvents: 'auto' }}
                 title="Previous jewellery reel"
+                aria-label="Previous jewellery reel"
               >
                 <ChevronLeft className="w-5 h-5" />
               </button>
 
               <button
+                type="button"
                 onClick={(evt) => {
                   evt.stopPropagation();
                   setModalPlaying(false);
@@ -959,6 +1161,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
                 className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 hover:bg-black/80 text-white flex items-center justify-center transition-colors cursor-pointer z-20 border border-white/20"
                 style={{ zIndex: 30, pointerEvents: 'auto' }}
                 title="Next jewellery reel"
+                aria-label="Next jewellery reel"
               >
                 <ChevronRight className="w-5 h-5" />
               </button>
@@ -1015,6 +1218,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
 
               <div className="space-y-2.5 pt-4 border-t border-[#E8DCCF]">
                 <button
+                  type="button"
                   onClick={() => handleShopNow(activeModalReel)}
                   className="w-full btn-teak-green py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-widest transition-all duration-200 cursor-pointer shadow-md hover:shadow-lg flex items-center justify-center gap-2"
                 >
@@ -1023,6 +1227,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
                 </button>
 
                 <button
+                  type="button"
                   onClick={() => handleAddToCart(activeModalReel)}
                   className="w-full btn-teak-green py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-widest transition-colors cursor-pointer flex items-center justify-center gap-2"
                 >

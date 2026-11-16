@@ -62,6 +62,10 @@ import {
   deleteProduct,
   fetchAllOrders,
   updateOrderStatus,
+  confirmOrderPaymentAdmin,
+  isOrderPaid,
+  formatFullAddress,
+  formatIndianPhone,
   saveCategory,
   deleteCategory,
   updateStoreSettings,
@@ -229,7 +233,10 @@ export const AdminView: React.FC<AdminViewProps> = ({
   const [selectedOrderDetails, setSelectedOrderDetails] = useState<Order | null>(null);
   const [courierInput, setCourierInput] = useState('');
   const [trackingNumberInput, setTrackingNumberInput] = useState('');
+  const [orderStatusInput, setOrderStatusInput] = useState<OrderStatus>('Pending');
   const [updatingFulfillment, setUpdatingFulfillment] = useState(false);
+  const [fulfillmentSavedMsg, setFulfillmentSavedMsg] = useState<string | null>(null);
+  const [confirmingPaymentId, setConfirmingPaymentId] = useState<string | null>(null);
 
   // Reviews State
   const [reviews, setReviews] = useState<Review[]>([]);
@@ -353,13 +360,13 @@ export const AdminView: React.FC<AdminViewProps> = ({
   };
 
   // Metrics
-  const paidOrders = orders.filter((o) => o.paymentStatus === 'paid');
-  const totalSales = paidOrders.reduce((sum, o) => sum + o.totalAmount, 0);
+  const paidOrders = orders.filter((o) => isOrderPaid(o));
+  const totalSales = paidOrders.reduce((sum, o) => sum + (Number(o.totalAmount) || 0), 0);
 
   const todayDateString = new Date().toISOString().split('T')[0];
   const todaySales = paidOrders
-    .filter((o) => o.createdAt.startsWith(todayDateString))
-    .reduce((sum, o) => sum + o.totalAmount, 0);
+    .filter((o) => String(o.createdAt || '').startsWith(todayDateString))
+    .reduce((sum, o) => sum + (Number(o.totalAmount) || 0), 0);
 
   const pendingOrdersCount = orders.filter((o) => o.orderStatus === 'Pending' || o.orderStatus === 'Confirmed').length;
   const processingCount = orders.filter((o) => o.orderStatus === 'Processing' || o.orderStatus === 'Shipped').length;
@@ -886,32 +893,50 @@ export const AdminView: React.FC<AdminViewProps> = ({
     try {
       await updateOrderStatus(orderId, status, trackingNumber, courierName);
       await loadOrders();
-      if (selectedOrderDetails && selectedOrderDetails.id === orderId) {
+      if (selectedOrderDetails && (selectedOrderDetails.id === orderId || selectedOrderDetails.orderNumber === orderId)) {
         setSelectedOrderDetails({
           ...selectedOrderDetails,
           orderStatus: status,
-          trackingNumber: trackingNumber || selectedOrderDetails.trackingNumber,
-          courierName: courierName || selectedOrderDetails.courierName
+          trackingNumber: trackingNumber ?? selectedOrderDetails.trackingNumber,
+          courierName: courierName ?? selectedOrderDetails.courierName
         });
       }
     } catch (e) {
-      alert('Failed to update status: ' + String(e));
+      setFulfillmentSavedMsg('Failed to update order status: ' + String(e));
     }
   };
 
   const handleSaveFulfillment = async () => {
     if (!selectedOrderDetails) return;
     setUpdatingFulfillment(true);
+    setFulfillmentSavedMsg(null);
     try {
       await handleUpdateOrderStatus(
-        selectedOrderDetails.id,
-        selectedOrderDetails.orderStatus,
+        selectedOrderDetails.id || selectedOrderDetails.orderNumber,
+        orderStatusInput,
         trackingNumberInput.trim() || selectedOrderDetails.trackingNumber,
         courierInput.trim() || selectedOrderDetails.courierName
       );
-      alert('Tracking details saved successfully!');
+      setFulfillmentSavedMsg('Order status and tracking details updated successfully.');
     } finally {
       setUpdatingFulfillment(false);
+    }
+  };
+
+  const handleConfirmPaymentAdminAction = async (order: Order) => {
+    const id = order.id || order.orderNumber;
+    setConfirmingPaymentId(id);
+    setFulfillmentSavedMsg(null);
+    try {
+      const updated = await confirmOrderPaymentAdmin(id);
+      await loadOrders();
+      if (updated) {
+        setSelectedOrderDetails(updated);
+        setOrderStatusInput(updated.orderStatus || 'Confirmed');
+        setFulfillmentSavedMsg('Payment marked verified and order confirmed.');
+      }
+    } finally {
+      setConfirmingPaymentId(null);
     }
   };
 
@@ -1036,11 +1061,13 @@ export const AdminView: React.FC<AdminViewProps> = ({
     if (!orderSearchQuery.trim()) return true;
     const q = orderSearchQuery.toLowerCase();
     return (
-      o.orderNumber.toLowerCase().includes(q) ||
-      o.customerName.toLowerCase().includes(q) ||
-      o.customerEmail.toLowerCase().includes(q) ||
-      o.customerPhone.includes(q) ||
-      (o.upiReference && o.upiReference.includes(q))
+      String(o.orderNumber || '').toLowerCase().includes(q) ||
+      String(o.customerName || '').toLowerCase().includes(q) ||
+      String(o.customerEmail || '').toLowerCase().includes(q) ||
+      String(o.customerPhone || '').toLowerCase().includes(q) ||
+      String(o.upiReference || '').toLowerCase().includes(q) ||
+      String(o.paymentId || '').toLowerCase().includes(q) ||
+      String(o.cfOrderId || '').toLowerCase().includes(q)
     );
   });
 
@@ -1286,7 +1313,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   ₹{totalSales.toLocaleString('en-IN')}
                 </div>
                 <p className="text-[11px] text-emerald-700 font-medium">
-                  {paidOrders.length} verified paid UPI transactions
+                  {paidOrders.length} verified paid orders (Today: ₹{todaySales.toLocaleString('en-IN')})
                 </p>
               </div>
 
@@ -1470,45 +1497,61 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   </div>
                 ) : (
                   <div className="divide-y divide-gray-100 max-h-72 overflow-y-auto pr-1">
-                    {orders.slice(0, 5).map((ord) => (
-                      <div key={ord.id} className="py-3 flex items-center justify-between gap-3 text-xs">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono font-bold text-[#3B1E22]">
-                              {ord.orderNumber}
-                            </span>
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                              ord.orderStatus === 'Delivered' || ord.paymentStatus === 'paid' || ord.orderStatus === 'Confirmed'
-                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                : ord.orderStatus === 'Shipped'
-                                ? 'bg-blue-100 text-blue-800'
-                                : 'bg-amber-100 text-amber-800'
-                            }`}>
-                              {ord.paymentStatus === 'paid' || ord.orderStatus === 'Confirmed' ? '✓ CONFIRMED' : ord.orderStatus}
+                    {orders.slice(0, 5).map((ord) => {
+                      const ordPaid = isOrderPaid(ord);
+                      return (
+                        <div key={ord.id} className="py-3 flex items-center justify-between gap-3 text-xs">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono font-bold text-[#3B1E22]">
+                                {ord.orderNumber}
+                              </span>
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                                ord.orderStatus === 'Delivered' || ord.orderStatus === 'Confirmed'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                  : ord.orderStatus === 'Shipped' || ord.orderStatus === 'Processing'
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : ord.orderStatus === 'Cancelled'
+                                  ? 'bg-red-100 text-red-800'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}>
+                                {ord.orderStatus}
+                              </span>
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                ordPaid
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  : ord.paymentStatus === 'failed'
+                                  ? 'bg-red-50 text-red-700 border border-red-200'
+                                  : 'bg-amber-50 text-amber-700 border border-amber-200'
+                              }`}>
+                                {ordPaid ? 'PAID' : ord.paymentStatus === 'failed' ? 'FAILED' : 'PENDING PAY'}
+                              </span>
+                            </div>
+                            <span className="text-gray-500 text-[11px] block mt-0.5">
+                              {ord.customerName} • {(ord.items || []).length} item(s)
                             </span>
                           </div>
-                          <span className="text-gray-500 text-[11px] block mt-0.5">
-                            {ord.customerName} • {ord.items.length} item(s)
-                          </span>
-                        </div>
 
-                        <div className="text-right">
-                          <span className="font-bold text-[#802336] block">
-                            ₹{ord.totalAmount.toLocaleString('en-IN')}
-                          </span>
-                          <button
-                            onClick={() => {
-                              setSelectedOrderDetails(ord);
-                              setCourierInput(ord.courierName || 'BlueDart Express');
-                              setTrackingNumberInput(ord.trackingNumber || '');
-                            }}
-                            className="text-[10px] text-gray-500 underline hover:text-black cursor-pointer"
-                          >
-                            Details
-                          </button>
+                          <div className="text-right">
+                            <span className="font-bold text-[#802336] block">
+                              ₹{Number(ord.totalAmount || 0).toLocaleString('en-IN')}
+                            </span>
+                            <button
+                              onClick={() => {
+                                setSelectedOrderDetails(ord);
+                                setOrderStatusInput(ord.orderStatus || 'Pending');
+                                setCourierInput(ord.courierName || 'BlueDart Express');
+                                setTrackingNumberInput(ord.trackingNumber || '');
+                                setFulfillmentSavedMsg(null);
+                              }}
+                              className="text-[10px] text-gray-500 underline hover:text-black cursor-pointer"
+                            >
+                              Details
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1788,7 +1831,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   Orders & Shipping Fulfillment
                 </h2>
                 <p className="text-xs text-gray-500">
-                  Manage real-time UPI orders, assign BlueDart/Delhivery tracking AWB numbers, and update delivery statuses.
+                  Manage verified online & direct UPI orders, update fulfillment status, and assign tracking AWB numbers.
                 </p>
               </div>
 
@@ -1809,7 +1852,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 <Search className="w-4 h-4 text-gray-400 absolute left-3 top-2.5" />
                 <input
                   type="text"
-                  placeholder="Search order number, customer name, phone, UTR..."
+                  placeholder="Search order ID, name, phone, email, transaction ID..."
                   value={orderSearchQuery}
                   onChange={(e) => setOrderSearchQuery(e.target.value)}
                   className="w-full pl-9 pr-4 py-2 border border-[#E8DCCF] rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-[#802336]"
@@ -1842,11 +1885,11 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     <tr>
                       <th className="py-3.5 px-4 font-bold">Order #</th>
                       <th className="py-3.5 px-4 font-bold">Date & Time</th>
-                      <th className="py-3.5 px-4 font-bold">Customer Details</th>
-                      <th className="py-3.5 px-4 font-bold">Items & Variations</th>
-                      <th className="py-3.5 px-4 font-bold">UPI Reference (UTR)</th>
-                      <th className="py-3.5 px-4 font-bold">Amount Paid</th>
-                      <th className="py-3.5 px-4 font-bold">Fulfillment Status</th>
+                      <th className="py-3.5 px-4 font-bold">Customer & Address</th>
+                      <th className="py-3.5 px-4 font-bold">Items Ordered</th>
+                      <th className="py-3.5 px-4 font-bold">Payment & Tx ID</th>
+                      <th className="py-3.5 px-4 font-bold">Amount</th>
+                      <th className="py-3.5 px-4 font-bold">Order Status</th>
                       <th className="py-3.5 px-4 font-bold text-right">Actions</th>
                     </tr>
                   </thead>
@@ -1858,103 +1901,146 @@ export const AdminView: React.FC<AdminViewProps> = ({
                         </td>
                       </tr>
                     ) : (
-                      filteredOrders.map((ord) => (
-                        <tr key={ord.id} className="hover:bg-[#FAF7F2]/50 transition-colors">
-                          <td className="py-3.5 px-4 font-mono font-bold text-[#3B1E22]">
-                            {ord.orderNumber}
-                          </td>
+                      filteredOrders.map((ord) => {
+                        const ordPaid = isOrderPaid(ord);
+                        const txRef =
+                          ord.paymentId ||
+                          ord.upiReference ||
+                          (ord.cfOrderId ? String(ord.cfOrderId) : '') ||
+                          'Pending';
+                        return (
+                          <tr key={ord.id} className="hover:bg-[#FAF7F2]/50 transition-colors">
+                            <td className="py-3.5 px-4 font-mono font-bold text-[#3B1E22]">
+                              {ord.orderNumber}
+                            </td>
 
-                          <td className="py-3.5 px-4 text-gray-500 text-[11px]">
-                            {new Date(ord.createdAt).toLocaleDateString('en-IN', {
-                              day: 'numeric',
-                              month: 'short',
-                              year: 'numeric'
-                            })}
-                            <span className="block text-gray-400">
-                              {new Date(ord.createdAt).toLocaleTimeString('en-IN', {
-                                hour: '2-digit',
-                                minute: '2-digit'
+                            <td className="py-3.5 px-4 text-gray-500 text-[11px] whitespace-nowrap">
+                              {new Date(ord.createdAt).toLocaleDateString('en-IN', {
+                                timeZone: 'Asia/Kolkata',
+                                day: 'numeric',
+                                month: 'short',
+                                year: 'numeric'
                               })}
-                            </span>
-                          </td>
+                              <span className="block text-gray-400">
+                                {new Date(ord.createdAt).toLocaleTimeString('en-IN', {
+                                  timeZone: 'Asia/Kolkata',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                })}
+                              </span>
+                            </td>
 
-                          <td className="py-3.5 px-4">
-                            <span className="font-bold text-[#241C1A] block">
-                              {ord.customerName}
-                            </span>
-                            <span className="text-[11px] text-gray-500 block truncate max-w-[150px]">
-                              {ord.customerEmail}
-                            </span>
-                            <span className="text-[11px] text-gray-600 font-mono">
-                              {ord.customerPhone}
-                            </span>
-                          </td>
+                            <td className="py-3.5 px-4">
+                              <span className="font-bold text-[#241C1A] block">
+                                {ord.customerName}
+                              </span>
+                              <span className="text-[11px] text-gray-500 block truncate max-w-[170px]">
+                                {ord.customerEmail || 'No email'}
+                              </span>
+                              <span className="text-[11px] text-gray-700 font-mono block">
+                                {formatIndianPhone(ord.customerPhone) || 'N/A'}
+                              </span>
+                              {(ord.shippingAddress?.city || ord.shippingAddress?.pincode) && (
+                                <span className="text-[10px] text-gray-500 block truncate max-w-[180px]">
+                                  {[ord.shippingAddress?.city, ord.shippingAddress?.state].filter(Boolean).join(', ')}
+                                  {ord.shippingAddress?.pincode ? ` - ${ord.shippingAddress.pincode}` : ''}
+                                </span>
+                              )}
+                            </td>
 
-                          <td className="py-3.5 px-4">
-                            <div className="space-y-1">
-                              {ord.items.map((it, idx) => (
-                                <div key={idx} className="flex items-center gap-2">
-                                  <span className="font-semibold text-gray-800 truncate max-w-[140px]">
-                                    {it.productName}
-                                  </span>
-                                  <span className="text-[10px] bg-[#FAF7F2] px-1.5 py-0.2 rounded border border-[#E8DCCF] text-[#802336]">
-                                    {it.variationName}
-                                  </span>
-                                  <span className="text-[10px] text-gray-400">x{it.quantity}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </td>
+                            <td className="py-3.5 px-4">
+                              <div className="space-y-1.5">
+                                {(ord.items || []).map((it, idx) => (
+                                  <div key={idx} className="flex items-center gap-2">
+                                    {Boolean(it.image && isGenuineImageUrl(it.image)) && (
+                                      <img
+                                        src={it.image}
+                                        alt=""
+                                        className="w-7 h-7 rounded object-contain border border-[#E8DCCF] bg-white shrink-0"
+                                      />
+                                    )}
+                                    <span className="font-semibold text-gray-800 truncate max-w-[130px]">
+                                      {it.productName}
+                                    </span>
+                                    {it.variationName && (
+                                      <span className="text-[10px] bg-[#FAF7F2] px-1.5 py-0.2 rounded border border-[#E8DCCF] text-[#802336]">
+                                        {it.variationName}
+                                      </span>
+                                    )}
+                                    <span className="text-[10px] text-gray-500 font-semibold">×{it.quantity}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </td>
 
-                          <td className="py-3.5 px-4 font-mono text-gray-700">
-                            <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded text-[11px] font-bold">
-                              {ord.upiReference || 'VERIFIED'}
-                            </span>
-                          </td>
-
-                          <td className="py-3.5 px-4 font-bold text-sm text-[#802336]">
-                            ₹{ord.totalAmount.toLocaleString('en-IN')}
-                          </td>
-
-                          <td className="py-3.5 px-4">
-                            <span
-                              className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold border ${
-                                ord.paymentStatus === 'paid' || ord.orderStatus === 'Confirmed'
-                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
-                                  : 'bg-amber-50 border-amber-300 text-amber-800'
-                              }`}
-                            >
-                              {ord.paymentStatus === 'paid' || ord.orderStatus === 'Confirmed'
-                                ? '✓ CONFIRMED'
-                                : 'PAYMENT PENDING'}
-                            </span>
-                          </td>
-
-                          <td className="py-3.5 px-4 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button
-                                onClick={() => {
-                                  setSelectedOrderDetails(ord);
-                                  setCourierInput(ord.courierName || 'BlueDart Express');
-                                  setTrackingNumberInput(ord.trackingNumber || '');
-                                }}
-                                className="px-3 py-1.5 rounded-lg bg-[#3B1E22] hover:bg-[#802336] text-white text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                            <td className="py-3.5 px-4 space-y-1">
+                              <span className="block text-[11px] font-semibold text-gray-800 truncate max-w-[150px]">
+                                {ord.paymentMethod || 'Online Payment'}
+                              </span>
+                              <span className="block font-mono text-[10px] text-gray-600 truncate max-w-[150px]">
+                                {txRef}
+                              </span>
+                              <span
+                                className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                  ordPaid
+                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                    : ord.paymentStatus === 'failed'
+                                    ? 'bg-red-50 text-red-700 border-red-200'
+                                    : 'bg-amber-50 text-amber-800 border-amber-200'
+                                }`}
                               >
-                                <Eye className="w-3.5 h-3.5" />
-                                <span>Details</span>
-                              </button>
+                                {ordPaid ? '✓ PAID' : ord.paymentStatus === 'failed' ? 'FAILED' : 'PENDING'}
+                              </span>
+                            </td>
 
-                              <button
-                                onClick={() => setPrintOrder(ord)}
-                                className="p-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 cursor-pointer"
-                                title="Print Packing Slip"
+                            <td className="py-3.5 px-4 font-bold text-sm text-[#802336] whitespace-nowrap">
+                              ₹{Number(ord.totalAmount || 0).toLocaleString('en-IN')}
+                            </td>
+
+                            <td className="py-3.5 px-4">
+                              <span
+                                className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold border ${
+                                  ord.orderStatus === 'Delivered' || ord.orderStatus === 'Confirmed'
+                                    ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                                    : ord.orderStatus === 'Processing' || ord.orderStatus === 'Shipped'
+                                    ? 'bg-blue-50 border-blue-300 text-blue-800'
+                                    : ord.orderStatus === 'Cancelled'
+                                    ? 'bg-red-50 border-red-300 text-red-700'
+                                    : 'bg-amber-50 border-amber-300 text-amber-800'
+                                }`}
                               >
-                                <Printer className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
+                                {ord.orderStatus || 'Pending'}
+                              </span>
+                            </td>
+
+                            <td className="py-3.5 px-4 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => {
+                                    setSelectedOrderDetails(ord);
+                                    setOrderStatusInput(ord.orderStatus || 'Pending');
+                                    setCourierInput(ord.courierName || 'BlueDart Express');
+                                    setTrackingNumberInput(ord.trackingNumber || '');
+                                    setFulfillmentSavedMsg(null);
+                                  }}
+                                  className="px-3 py-1.5 rounded-lg bg-[#3B1E22] hover:bg-[#802336] text-white text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                  <span>Details</span>
+                                </button>
+
+                                <button
+                                  onClick={() => setPrintOrder(ord)}
+                                  className="p-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 cursor-pointer"
+                                  title="Print Packing Slip"
+                                >
+                                  <Printer className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -2431,25 +2517,23 @@ export const AdminView: React.FC<AdminViewProps> = ({
             <div className="p-6 overflow-y-auto space-y-6 text-xs flex-1">
               {/* Customer & Address Details */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-[#FAF7F2] rounded-xl border border-[#E8DCCF]">
-                <div>
+                <div className="space-y-0.5">
                   <h4 className="font-bold text-[#3B1E22] uppercase tracking-wider text-[11px] mb-1">
                     Patron Information
                   </h4>
                   <p className="font-semibold text-gray-800">{selectedOrderDetails.customerName}</p>
-                  <p className="text-gray-600">{selectedOrderDetails.customerEmail}</p>
-                  <p className="text-gray-600 font-mono">{selectedOrderDetails.customerPhone}</p>
+                  <p className="text-gray-600 break-all">{selectedOrderDetails.customerEmail || 'Not provided'}</p>
+                  <p className="text-gray-700 font-mono">
+                    {formatIndianPhone(selectedOrderDetails.customerPhone) || 'Not provided'}
+                  </p>
                 </div>
 
-                <div>
+                <div className="space-y-0.5">
                   <h4 className="font-bold text-[#3B1E22] uppercase tracking-wider text-[11px] mb-1">
-                    Shipping Address
+                    Complete Delivery Address
                   </h4>
-                  <p className="text-gray-800">
-                    {selectedOrderDetails.shippingAddress.street}
-                    {selectedOrderDetails.shippingAddress.landmark && `, ${selectedOrderDetails.shippingAddress.landmark}`}
-                  </p>
-                  <p className="text-gray-800">
-                    {selectedOrderDetails.shippingAddress.city}, {selectedOrderDetails.shippingAddress.state} - {selectedOrderDetails.shippingAddress.pincode}
+                  <p className="text-gray-800 leading-relaxed">
+                    {formatFullAddress(selectedOrderDetails.shippingAddress) || 'Address not provided'}
                   </p>
                 </div>
               </div>
@@ -2457,10 +2541,10 @@ export const AdminView: React.FC<AdminViewProps> = ({
               {/* Items List */}
               <div>
                 <h4 className="font-bold text-[#3B1E22] uppercase tracking-wider text-[11px] mb-2">
-                  Items Ordered
+                  Items Ordered ({(selectedOrderDetails.items || []).reduce((a, b) => a + (b.quantity || 1), 0)})
                 </h4>
                 <div className="divide-y divide-gray-100 border border-[#E8DCCF] rounded-xl overflow-hidden">
-                  {selectedOrderDetails.items.map((item, idx) => (
+                  {(selectedOrderDetails.items || []).map((item, idx) => (
                     <div key={idx} className="p-3 flex items-center justify-between gap-3">
                       <div className="flex items-center gap-3">
                         {Boolean(item.image && isGenuineImageUrl(item.image)) ? (
@@ -2476,50 +2560,124 @@ export const AdminView: React.FC<AdminViewProps> = ({
                         )}
                         <div>
                           <h5 className="font-bold text-gray-900">{item.productName}</h5>
-                          <span className="text-[10px] text-[#802336] bg-[#FAF7F2] px-1.5 py-0.2 rounded border border-[#E8DCCF]">
-                            {item.variationName}
-                          </span>
+                          {item.variationName && (
+                            <span className="text-[10px] text-[#802336] bg-[#FAF7F2] px-1.5 py-0.2 rounded border border-[#E8DCCF]">
+                              {item.variationName}
+                            </span>
+                          )}
                           <span className="text-gray-400 block text-[11px] mt-0.5">
-                            Qty: {item.quantity} × ₹{item.price.toLocaleString('en-IN')}
+                            Qty: {item.quantity} × ₹{Number(item.price || 0).toLocaleString('en-IN')}
                           </span>
                         </div>
                       </div>
                       <span className="font-bold text-sm text-[#802336]">
-                        ₹{(item.price * item.quantity).toLocaleString('en-IN')}
+                        ₹{(Number(item.price || 0) * Number(item.quantity || 1)).toLocaleString('en-IN')}
                       </span>
                     </div>
                   ))}
                 </div>
               </div>
 
-              {/* Payment Info */}
-              <div className={`flex items-center justify-between p-4 border rounded-xl ${
-                selectedOrderDetails.paymentStatus === 'paid' ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'
+              {/* Payment & Totals Breakdown */}
+              <div className={`p-4 border rounded-xl space-y-2 ${
+                isOrderPaid(selectedOrderDetails)
+                  ? 'bg-emerald-50 border-emerald-200'
+                  : selectedOrderDetails.paymentStatus === 'failed'
+                  ? 'bg-red-50 border-red-200'
+                  : 'bg-amber-50 border-amber-200'
               }`}>
-                <div>
-                  <span className={`text-[10px] font-bold uppercase block ${
-                    selectedOrderDetails.paymentStatus === 'paid' ? 'text-emerald-800' : 'text-amber-800'
-                  }`}>
-                    Payment Method: {selectedOrderDetails.paymentMethod || 'UPI'} ({selectedOrderDetails.paymentStatus === 'paid' ? 'Paid' : 'Pending Verification'})
-                  </span>
-                  <span className="font-mono text-xs text-gray-800">
-                    UTR: <strong>{selectedOrderDetails.upiReference || 'Pending'}</strong>
-                  </span>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="space-y-0.5">
+                    <span className={`text-[10px] font-bold uppercase block ${
+                      isOrderPaid(selectedOrderDetails)
+                        ? 'text-emerald-800'
+                        : selectedOrderDetails.paymentStatus === 'failed'
+                        ? 'text-red-700'
+                        : 'text-amber-800'
+                    }`}>
+                      {selectedOrderDetails.paymentMethod || 'Online Payment'} •{' '}
+                      {isOrderPaid(selectedOrderDetails)
+                        ? 'PAYMENT VERIFIED (PAID)'
+                        : selectedOrderDetails.paymentStatus === 'failed'
+                        ? 'PAYMENT FAILED'
+                        : 'PAYMENT PENDING VERIFICATION'}
+                    </span>
+                    <span className="font-mono text-xs text-gray-800 block">
+                      Transaction / UTR ID:{' '}
+                      <strong>
+                        {selectedOrderDetails.paymentId ||
+                          selectedOrderDetails.upiReference ||
+                          (selectedOrderDetails.cfOrderId ? String(selectedOrderDetails.cfOrderId) : 'Pending')}
+                      </strong>
+                    </span>
+                    {selectedOrderDetails.gatewayOrderId && (
+                      <span className="font-mono text-[11px] text-gray-600 block">
+                        Gateway Order ID: {selectedOrderDetails.gatewayOrderId}
+                      </span>
+                    )}
+                    {selectedOrderDetails.failureReason && (
+                      <span className="text-[11px] text-red-700 font-semibold block">
+                        Reason: {selectedOrderDetails.failureReason}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="sm:text-right space-y-0.5">
+                    <span className="text-[10px] text-gray-500 block">
+                      Subtotal: ₹{Number(selectedOrderDetails.subtotal || selectedOrderDetails.totalAmount || 0).toLocaleString('en-IN')}
+                      {Number(selectedOrderDetails.discount || 0) > 0
+                        ? ` | Discount: -₹${Number(selectedOrderDetails.discount).toLocaleString('en-IN')}`
+                        : ''}
+                      {` | Shipping: ₹${Number(selectedOrderDetails.deliveryCharge || 0).toLocaleString('en-IN')}`}
+                    </span>
+                    <span className="font-serif font-bold text-lg text-[#802336] block">
+                      Total: ₹{Number(selectedOrderDetails.totalAmount || 0).toLocaleString('en-IN')}
+                    </span>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <span className="text-[10px] uppercase text-gray-500 block">Total Amount</span>
-                  <span className="font-serif font-bold text-lg text-[#802336]">
-                    ₹{selectedOrderDetails.totalAmount.toLocaleString('en-IN')}
-                  </span>
-                </div>
+
+                {!isOrderPaid(selectedOrderDetails) && (
+                  <div className="pt-2 border-t border-amber-200/70 flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-amber-900">
+                      For direct UPI transfers, verify receipt in your bank app before confirming:
+                    </span>
+                    <button
+                      type="button"
+                      disabled={confirmingPaymentId === (selectedOrderDetails.id || selectedOrderDetails.orderNumber)}
+                      onClick={() => handleConfirmPaymentAdminAction(selectedOrderDetails)}
+                      className="bg-emerald-700 hover:bg-emerald-800 text-white px-3 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer shrink-0 disabled:opacity-50"
+                    >
+                      {confirmingPaymentId === (selectedOrderDetails.id || selectedOrderDetails.orderNumber)
+                        ? 'Confirming...'
+                        : '✓ Mark Payment Verified'}
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Courier & Tracking Fulfillment Form */}
               <div className="p-4 border border-[#E8DCCF] rounded-xl bg-white space-y-3">
                 <h4 className="font-bold text-[#3B1E22] uppercase tracking-wider text-[11px]">
-                  Fulfillment & Tracking Information
+                  Fulfillment Status & Tracking Information
                 </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                      Order Status
+                    </label>
+                    <select
+                      value={orderStatusInput}
+                      onChange={(e) => setOrderStatusInput(e.target.value as OrderStatus)}
+                      className="w-full px-3 py-2 border border-[#E8DCCF] rounded-lg text-xs font-semibold bg-white"
+                    >
+                      {(['Pending', 'Confirmed', 'Processing', 'Shipped', 'Delivered', 'Cancelled'] as OrderStatus[]).map((st) => (
+                        <option key={st} value={st}>
+                          {st}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
                   <div>
                     <label className="block text-[11px] font-semibold text-gray-700 mb-1">
                       Courier Partner
@@ -2527,7 +2685,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     <select
                       value={courierInput}
                       onChange={(e) => setCourierInput(e.target.value)}
-                      className="w-full px-3 py-2 border border-[#E8DCCF] rounded-lg text-xs"
+                      className="w-full px-3 py-2 border border-[#E8DCCF] rounded-lg text-xs bg-white"
                     >
                       <option value="BlueDart Express">BlueDart Express</option>
                       <option value="Delhivery Logistics">Delhivery Logistics</option>
@@ -2550,28 +2708,19 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between pt-2">
-                  <div className="flex items-center gap-2">
-                    <label className="text-[11px] font-semibold text-gray-700">Status:</label>
-                    <span
-                      className={`px-2.5 py-1 border rounded-lg text-xs font-bold ${
-                        selectedOrderDetails.paymentStatus === 'paid' || selectedOrderDetails.orderStatus === 'Confirmed'
-                          ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
-                          : 'bg-amber-50 border-amber-300 text-amber-800'
-                      }`}
-                    >
-                      {selectedOrderDetails.paymentStatus === 'paid' || selectedOrderDetails.orderStatus === 'Confirmed'
-                        ? '✓ CONFIRMED'
-                        : 'PAYMENT PENDING'}
-                    </span>
+                {fulfillmentSavedMsg && (
+                  <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-[11px] font-semibold text-emerald-800">
+                    {fulfillmentSavedMsg}
                   </div>
+                )}
 
+                <div className="flex items-center justify-end pt-1">
                   <button
                     onClick={handleSaveFulfillment}
                     disabled={updatingFulfillment}
-                    className="bg-[#3B1E22] hover:bg-[#802336] text-[#FAF7F2] px-4 py-2 rounded-lg font-bold text-xs cursor-pointer transition-colors"
+                    className="bg-[#3B1E22] hover:bg-[#802336] text-[#FAF7F2] px-5 py-2 rounded-lg font-bold text-xs cursor-pointer transition-colors"
                   >
-                    {updatingFulfillment ? 'Saving...' : 'Save Tracking Information'}
+                    {updatingFulfillment ? 'Saving...' : 'Save Status & Tracking'}
                   </button>
                 </div>
               </div>
@@ -3573,15 +3722,19 @@ export const AdminView: React.FC<AdminViewProps> = ({
               <div>
                 <span className="text-[10px] font-bold text-gray-500 uppercase block">Ship To:</span>
                 <p className="font-bold">{printOrder.customerName}</p>
-                <p>{printOrder.shippingAddress.street}</p>
-                <p>{printOrder.shippingAddress.city}, {printOrder.shippingAddress.state} - {printOrder.shippingAddress.pincode}</p>
-                <p className="font-mono mt-1">{printOrder.customerPhone}</p>
+                <p>{formatFullAddress(printOrder.shippingAddress)}</p>
+                <p className="font-mono mt-1">{formatIndianPhone(printOrder.customerPhone)}</p>
               </div>
               <div>
-                <span className="text-[10px] font-bold text-gray-500 uppercase block">Logistics:</span>
+                <span className="text-[10px] font-bold text-gray-500 uppercase block">Logistics & Payment:</span>
                 <p className="font-semibold text-emerald-800">{printOrder.courierName || 'BlueDart Express'}</p>
                 <p className="font-mono">AWB: {printOrder.trackingNumber || 'Pending Generation'}</p>
-                <p className="mt-1">Payment: <strong>UPI Paid (UTR: {printOrder.upiReference || 'Verified'})</strong></p>
+                <p className="mt-1">
+                  Method: <strong>{printOrder.paymentMethod || 'Online Payment'}</strong>
+                </p>
+                <p>
+                  Tx/UTR: <strong className="font-mono">{printOrder.paymentId || printOrder.upiReference || 'Pending'}</strong> ({isOrderPaid(printOrder) ? 'PAID' : 'PENDING'})
+                </p>
               </div>
             </div>
 
@@ -3595,20 +3748,20 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {printOrder.items.map((it, idx) => (
+                {(printOrder.items || []).map((it, idx) => (
                   <tr key={idx}>
                     <td className="p-2 font-medium">{it.productName}</td>
                     <td className="p-2 text-gray-600">{it.variationName}</td>
                     <td className="p-2 text-center font-bold">{it.quantity}</td>
-                    <td className="p-2 text-right">₹{(it.price * it.quantity).toLocaleString('en-IN')}</td>
+                    <td className="p-2 text-right">₹{(Number(it.price || 0) * Number(it.quantity || 1)).toLocaleString('en-IN')}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
 
             <div className="border-t pt-3 flex justify-between font-bold text-sm">
-              <span>Total Paid Amount:</span>
-              <span className="text-[#802336]">₹{printOrder.totalAmount.toLocaleString('en-IN')}</span>
+              <span>{isOrderPaid(printOrder) ? 'Total Paid Amount:' : 'Order Total Amount:'}</span>
+              <span className="text-[#802336]">₹{Number(printOrder.totalAmount || 0).toLocaleString('en-IN')}</span>
             </div>
 
             <div className="flex items-center justify-between pt-4 border-t">

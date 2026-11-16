@@ -105,14 +105,25 @@ class AdminErrorBoundary extends React.Component<
 }
 
 function MainApp() {
-  const { user, isAdmin } = useAuth();
+  const { user, patronSession, isAdmin } = useAuth();
   const { openCart } = useCart();
 
   // Navigation State
   const [currentView, setCurrentView] = useState<string>(() => {
     if (typeof window !== 'undefined') {
-      if (window.location.pathname.includes('/admin') || window.location.hash.includes('admin')) {
+      const path = window.location.pathname;
+      const params = new URLSearchParams(window.location.search);
+      if (path.includes('/admin') || window.location.hash.includes('admin')) {
         return 'admin';
+      }
+      if (params.has('cf_order_id') || params.get('view') === 'checkout' || path.startsWith('/checkout')) {
+        return 'checkout';
+      }
+      if (params.get('view') === 'orders' || path.startsWith('/orders')) {
+        return 'orders';
+      }
+      if (params.get('view') === 'track-order' || path.startsWith('/track-order')) {
+        return 'track-order';
       }
     }
     return 'home';
@@ -131,18 +142,19 @@ function MainApp() {
 
   // Automatically trigger the promotional login popup after 3.5 seconds if visitor is not logged in
   useEffect(() => {
-    if (user) return;
+    if (user || patronSession) return;
+    if (currentView === 'checkout' || currentView === 'admin') return;
     const isDismissed = sessionStorage.getItem('vidhyaa_promo_popup_dismissed') === 'true';
     if (isDismissed) return;
 
     const timer = setTimeout(() => {
-      if (!user && sessionStorage.getItem('vidhyaa_promo_popup_dismissed') !== 'true') {
+      if (!user && !patronSession && sessionStorage.getItem('vidhyaa_promo_popup_dismissed') !== 'true') {
         setPromoLoginOpen(true);
       }
     }, 3800);
 
     return () => clearTimeout(timer);
-  }, [user]);
+  }, [user, patronSession, currentView]);
 
   const handleClosePromoLogin = () => {
     setPromoLoginOpen(false);
@@ -260,6 +272,23 @@ function MainApp() {
         return;
       }
 
+      if (urlParams.has('cf_order_id') || urlParams.get('view') === 'checkout' || pathname.startsWith('/checkout')) {
+        setCurrentView('checkout');
+        return;
+      }
+
+      if (urlParams.get('view') === 'orders' || pathname.startsWith('/orders')) {
+        setCurrentView('orders');
+        return;
+      }
+
+      if (urlParams.get('view') === 'track-order' || pathname.startsWith('/track-order')) {
+        const orderParam = urlParams.get('order') || '';
+        if (orderParam) setTrackingOrderNumber(orderParam);
+        setCurrentView('track-order');
+        return;
+      }
+
       const catParam = urlParams.get('category') || urlParams.get('collection') || urlParams.get('filter');
       if (pathname.startsWith('/shop') || catParam) {
         setCurrentView('shop');
@@ -294,8 +323,14 @@ function MainApp() {
     setCurrentParam(param);
     if (view === 'admin') {
       window.history.pushState({}, '', '/admin/login');
-    } else if (view === 'home' && window.location.pathname !== '/') {
+    } else if (view === 'home' && (window.location.pathname !== '/' || window.location.search)) {
       window.history.pushState({}, '', '/');
+    } else if (view === 'orders' || view === 'account') {
+      window.history.pushState({}, '', `/?view=${view}`);
+    } else if (view === 'checkout') {
+      if (!window.location.search.includes('cf_order_id=')) {
+        window.history.pushState({}, '', '/?view=checkout');
+      }
     } else if (view === 'collections' || view === 'collection') {
       setCurrentView('shop');
       setCurrentParam(param || 'all');
@@ -470,6 +505,7 @@ function MainApp() {
                 storeSettings={storeSettings}
                 onOrderSuccess={handleOrderSuccess}
                 onNavigateHome={() => handleNavigate('home')}
+                onViewMyOrders={() => handleNavigate('orders')}
                 onTrackOrder={(orderNum) => handleNavigate('track-order', orderNum)}
               />
             )}

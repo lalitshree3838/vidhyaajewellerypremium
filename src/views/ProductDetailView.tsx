@@ -29,6 +29,7 @@ import { MetadataManager } from '../components/MetadataManager';
 import { isGenuineProduct, isGenuineImageUrl, isGenuineVideoUrl } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 import { SeamlessLoopVideo } from '../components/SeamlessLoopVideo';
+import { useResolvedProductVideo } from '../lib/videoFallback';
 import { JEWELLERY_PLACEHOLDER_IMAGE } from '../lib/storageService';
 
 interface ProductDetailViewProps {
@@ -116,16 +117,23 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const galleryImages = validGallery.length > 0 ? validGallery : [JEWELLERY_PLACEHOLDER_IMAGE];
 
   const currentDisplayImage = galleryImages[activeImageIndex] || galleryImages[0];
-  const hasGenuineVideo = Boolean(product.videoUrl && isGenuineVideoUrl(product.videoUrl));
-  const videoData = hasGenuineVideo
-    ? {
-        videoUrl: product.videoUrl!,
-        title: product.name,
-        duration: '0:15',
-        poster: currentDisplayImage,
-        description: product.description
-      }
-    : null;
+  const resolvedVideo = useResolvedProductVideo(product);
+  const hasGenuineVideo = Boolean(
+    product.videoUrl &&
+      isGenuineVideoUrl(product.videoUrl) &&
+      (!resolvedVideo.ready || resolvedVideo.hasPlayableVideo)
+  );
+  const videoData =
+    hasGenuineVideo && resolvedVideo.hasPlayableVideo
+      ? {
+          videoUrl: resolvedVideo.videoUrl || product.videoUrl!,
+          fallbackUrls: resolvedVideo.fallbackUrls,
+          title: product.name,
+          duration: '0:15',
+          poster: currentDisplayImage,
+          description: product.description
+        }
+      : null;
 
   const currentPrice = product.price;
   const currentMrp = product.mrp > 0 ? product.mrp : product.price;
@@ -242,6 +250,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               <div className="relative w-full h-full flex items-center justify-center bg-white overflow-hidden">
                 <SeamlessLoopVideo
                   src={videoData.videoUrl}
+                  fallbackUrls={videoData.fallbackUrls}
                   poster={currentDisplayImage}
                   title={videoData.title}
                   autoPlay={true}
@@ -363,6 +372,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               >
                 <SeamlessLoopVideo
                   src={videoData.videoUrl}
+                  fallbackUrls={videoData.fallbackUrls}
                   poster={videoData.poster}
                   title={videoData.title}
                   autoPlay={true}

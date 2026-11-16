@@ -7,6 +7,7 @@ import { isGenuineProduct, isGenuineImageUrl, isGenuineVideoUrl } from '../lib/s
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 import { SeamlessLoopVideo } from './SeamlessLoopVideo';
 import { JEWELLERY_PLACEHOLDER_IMAGE } from '../lib/storageService';
+import { useResolvedProductVideo } from '../lib/videoFallback';
 
 interface QuickViewModalProps {
   product: Product | null;
@@ -33,6 +34,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
   const [imageError, setImageError] = useState(false);
   const [showVideo, setShowVideo] = useState(false);
   const [videoMuted, setVideoMuted] = useState(true);
+  const resolvedVideo = useResolvedProductVideo(product);
 
   useEffect(() => {
     if (initialVariation) {
@@ -48,7 +50,11 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
 
   if (!product || !isGenuineProduct(product)) return null;
 
-  const hasVideo = Boolean(product.videoUrl && isGenuineVideoUrl(product.videoUrl));
+  const hasVideo = Boolean(
+    product.videoUrl &&
+      isGenuineVideoUrl(product.videoUrl) &&
+      (!resolvedVideo.ready || resolvedVideo.hasPlayableVideo)
+  );
 
   // When variation is selected, the primary image switches to that variation's image!
   const variationImage = selectedVariation?.image;
@@ -101,10 +107,11 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
         {/* Gallery Column */}
         <div className="md:w-1/2 p-6 bg-[#FAF7F2] flex flex-col justify-between">
           <div className="relative aspect-square rounded-xl overflow-hidden bg-white border border-[#E8DCCF] flex items-center justify-center p-3">
-            {showVideo && hasVideo ? (
+            {showVideo && hasVideo && resolvedVideo.hasPlayableVideo ? (
               <div className="w-full h-full bg-white flex items-center justify-center relative overflow-hidden rounded-lg">
                 <SeamlessLoopVideo
-                  src={product.videoUrl!}
+                  src={resolvedVideo.videoUrl || product.videoUrl!}
+                  fallbackUrls={resolvedVideo.fallbackUrls}
                   poster={activeImage}
                   title={product.name}
                   autoPlay={true}

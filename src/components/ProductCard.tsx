@@ -7,6 +7,7 @@ import { isGenuineImageUrl, isGenuineProduct, isGenuineVideoUrl } from '../lib/s
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 import { JEWELLERY_PLACEHOLDER_IMAGE } from '../lib/storageService';
 import { SeamlessLoopVideo } from './SeamlessLoopVideo';
+import { useResolvedProductVideo } from '../lib/videoFallback';
 
 interface ProductCardProps {
   product: Product;
@@ -88,6 +89,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const [videoError, setVideoError] = useState(false);
   const [isSoundMuted, setIsSoundMuted] = useState(true);
   const [showVideo, setShowVideo] = useState(true);
+  const resolvedVideo = useResolvedProductVideo(product);
 
   useEffect(() => {
     setImageError(false);
@@ -111,9 +113,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const discountPercent = calculateDiscountPercent(currentMrp, currentPrice);
   const hasDiscount = currentMrp > currentPrice && discountPercent > 0;
 
-  // Video presence check with actual saved URL from database
-  const hasVideo = Boolean(product.videoUrl && isGenuineVideoUrl(product.videoUrl));
-  const isDisplayingVideo = hasVideo && showVideo && !videoError;
+  // Video presence check with verified saved/catalog fallback URL
+  const hasVideo = Boolean(
+    product.videoUrl &&
+      isGenuineVideoUrl(product.videoUrl) &&
+      (!resolvedVideo.ready || resolvedVideo.hasPlayableVideo)
+  );
+  const isDisplayingVideo = hasVideo && resolvedVideo.ready && resolvedVideo.hasPlayableVideo && showVideo && !videoError;
 
   const effectiveImage = !imageError && displayImage ? displayImage : JEWELLERY_PLACEHOLDER_IMAGE;
 
@@ -205,7 +211,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         {isDisplayingVideo ? (
           <div className="relative w-full h-full flex items-center justify-center overflow-hidden bg-white">
             <SeamlessLoopVideo
-              src={product.videoUrl!}
+              src={resolvedVideo.videoUrl || product.videoUrl!}
+              fallbackUrls={resolvedVideo.fallbackUrls}
               poster={hasRealImg && !imageError ? displayImage : undefined}
               title={product.name}
               autoPlay={true}

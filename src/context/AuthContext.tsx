@@ -21,9 +21,19 @@ interface AdminSessionData {
   name: string;
 }
 
+export interface PatronSessionUser {
+  uid: string;
+  displayName: string;
+  phone?: string;
+  mobile?: string;
+  email?: string;
+  role: string;
+}
+
 interface AuthContextType {
   user: User | null;
   userProfile: UserProfile | null;
+  patronSession: PatronSessionUser | null;
   isAdmin: boolean;
   adminSessionActive: boolean;
   adminUser: AdminSessionData | null;
@@ -48,6 +58,14 @@ const ADMIN_SESSION_STORAGE_KEY = 'vidhyaa_admin_token';
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [patronSession, setPatronSession] = useState<PatronSessionUser | null>(() => {
+    try {
+      const raw = localStorage.getItem('vidhyaa_patron_session');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
   const [isAdminState, setIsAdminState] = useState<boolean>(false);
   const [adminSessionActive, setAdminSessionActive] = useState<boolean>(() => {
     try {
@@ -58,6 +76,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
   const [adminUser, setAdminUser] = useState<AdminSessionData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+
+  useEffect(() => {
+    const syncPatronSession = () => {
+      try {
+        const raw = localStorage.getItem('vidhyaa_patron_session');
+        setPatronSession(raw ? JSON.parse(raw) : null);
+      } catch {
+        setPatronSession(null);
+      }
+    };
+    window.addEventListener('vidhyaa_patron_auth_changed', syncPatronSession);
+    window.addEventListener('storage', syncPatronSession);
+    return () => {
+      window.removeEventListener('vidhyaa_patron_auth_changed', syncPatronSession);
+      window.removeEventListener('storage', syncPatronSession);
+    };
+  }, []);
 
   // Validate existing stored admin session token on mount
   useEffect(() => {
@@ -236,9 +271,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const signOut = async () => {
-    await firebaseSignOut(auth);
+    try {
+      await firebaseSignOut(auth);
+    } catch {}
+    try {
+      localStorage.removeItem('vidhyaa_patron_session');
+      window.dispatchEvent(new Event('vidhyaa_patron_auth_changed'));
+    } catch {}
     setUser(null);
     setUserProfile(null);
+    setPatronSession(null);
   };
 
   const saveAddress = async (address: Address) => {
@@ -279,6 +321,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       value={{
         user,
         userProfile,
+        patronSession,
         isAdmin: isAdminState || adminSessionActive,
         adminSessionActive,
         adminUser,

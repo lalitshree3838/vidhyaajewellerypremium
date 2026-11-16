@@ -172,6 +172,8 @@ export interface Address {
   id: string;
   name: string;
   phone: string;
+  houseNo?: string;
+  area?: string;
   street: string;
   landmark?: string;
   city: string;
@@ -214,11 +216,19 @@ export interface Order {
   totalAmount: number;
   paymentMethod: 'UPI' | 'Google Pay (UPI)' | 'Pay by UPI Mobile Number' | 'Pay by UPI QR Code' | string;
   paymentStatus: PaymentStatus;
+  isPaid?: boolean;
   paymentId?: string;
   cfOrderId?: string | number;
+  gatewayOrderId?: string;
   cardNetwork?: string;
   cardType?: string;
   upiReference?: string;
+  paidAt?: string;
+  paymentVerifiedAt?: string;
+  verifiedAmount?: number;
+  currency?: string;
+  verifiedVia?: string;
+  failureReason?: string;
   orderStatus: OrderStatus;
   trackingNumber?: string;
   courierName?: string;

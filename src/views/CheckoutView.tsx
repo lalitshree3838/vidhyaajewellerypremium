@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import confetti from 'canvas-confetti';
 import {
   ShieldCheck,
@@ -21,24 +21,355 @@ import {
   CreditCard,
   Lock,
   Loader2,
-  Gift
+  Gift,
+  Clock
 } from 'lucide-react';
 import { Address, Order, OrderItem, StoreSettings } from '../types';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
-import { createOrder } from '../lib/dbService';
+import {
+  createOrder,
+  fetchOrderById,
+  syncOrderToLocalAndFirestore,
+  isOrderPaid,
+  formatIndianPhone,
+  formatFullAddress
+} from '../lib/dbService';
 import { GooglePayQRCard } from '../components/GooglePayQRCard';
 import { isGenuineImageUrl } from '../lib/sampleData';
 import { formatPrice, OrderSavingsSummaryCard } from '../lib/priceUtils';
 
+const INDIAN_STATES_AND_UTS = [
+  'Andhra Pradesh',
+  'Arunachal Pradesh',
+  'Assam',
+  'Bihar',
+  'Chhattisgarh',
+  'Goa',
+  'Gujarat',
+  'Haryana',
+  'Himachal Pradesh',
+  'Jharkhand',
+  'Karnataka',
+  'Kerala',
+  'Madhya Pradesh',
+  'Maharashtra',
+  'Manipur',
+  'Meghalaya',
+  'Mizoram',
+  'Nagaland',
+  'Odisha',
+  'Punjab',
+  'Rajasthan',
+  'Sikkim',
+  'Tamil Nadu',
+  'Telangana',
+  'Tripura',
+  'Uttar Pradesh',
+  'Uttarakhand',
+  'West Bengal',
+  'Andaman and Nicobar Islands',
+  'Chandigarh',
+  'Dadra and Nagar Haveli and Daman and Diu',
+  'Delhi',
+  'Jammu and Kashmir',
+  'Ladakh',
+  'Lakshadweep',
+  'Puducherry'
+];
+
+const DRAFT_ORDER_KEY = 'vidhyaa_draft_order_number';
+const COMPLETED_ORDER_KEY = 'vidhyaa_completed_order_id';
+
+function getOrCreateDraftOrderNumber(): string {
+  try {
+    const existing = sessionStorage.getItem(DRAFT_ORDER_KEY);
+    if (existing && /^VDH-\d{6,}$/.test(existing)) return existing;
+    const next = `VDH-${Math.floor(100000 + Math.random() * 900000)}`;
+    sessionStorage.setItem(DRAFT_ORDER_KEY, next);
+    return next;
+  } catch {
+    return `VDH-${Math.floor(100000 + Math.random() * 900000)}`;
+  }
+}
+
+function formatOrderDateIST(isoDate?: string): string {
+  try {
+    return new Date(isoDate || Date.now()).toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+  } catch {
+    return 'Just now';
+  }
+}
+
+interface VerifiedPaymentSuccessViewProps {
+  order: Order;
+  onViewMyOrders: () => void;
+  onTrackOrder: (orderNumber: string) => void;
+  onContinueShopping: () => void;
+}
+
+const VerifiedPaymentSuccessView: React.FC<VerifiedPaymentSuccessViewProps> = ({
+  order,
+  onViewMyOrders,
+  onTrackOrder,
+  onContinueShopping
+}) => {
+  const orderId = order.orderNumber || order.id;
+  const orderDateTime = formatOrderDateIST(order.paidAt || order.createdAt);
+  const customerName = order.customerName || order.shippingAddress?.name || 'Valued Patron';
+  const customerMobile = formatIndianPhone(order.customerPhone || order.shippingAddress?.phone) || 'N/A';
+  const customerEmail = order.customerEmail || 'Not Provided';
+  const fullAddress = formatFullAddress(order.shippingAddress) || 'Delivery address recorded';
+  const items = Array.isArray(order.items) ? order.items : [];
+  const subtotal = typeof order.subtotal === 'number' ? order.subtotal : Number(order.totalAmount || 0);
+  const discount = typeof order.discount === 'number' ? order.discount : 0;
+  const deliveryCharge = typeof order.deliveryCharge === 'number' ? order.deliveryCharge : 0;
+  const totalAmount = typeof order.totalAmount === 'number' ? order.totalAmount : subtotal;
+  const transactionId =
+    order.paymentId ||
+    order.upiReference ||
+    (order.cfOrderId ? String(order.cfOrderId) : '') ||
+    order.gatewayOrderId ||
+    orderId;
+  const paymentMethod = order.paymentMethod || 'Online Payment (Cashfree)';
+
+  const whatsappReceiptMsg =
+    `Vidhyaa Jewellery Studio - Order Receipt\n` +
+    `Order ID: ${orderId}\n` +
+    `Amount Paid: ₹${totalAmount.toLocaleString('en-IN')}\n` +
+    `Transaction ID: ${transactionId}\n` +
+    `Customer: ${customerName} (${customerMobile})`;
+  const whatsappUrl = `https://wa.me/917302187770?text=${encodeURIComponent(whatsappReceiptMsg)}`;
+
+  return (
+    <div
+      data-testid="payment-success-screen"
+      className="bg-white rounded-3xl border-2 border-emerald-300 p-6 sm:p-10 shadow-2xl text-center space-y-6 animate-fadeIn max-w-3xl mx-auto"
+    >
+      {/* Premium Animated Celebration Header */}
+      <div className="space-y-4">
+        <div className="relative mx-auto w-20 h-20 rounded-full bg-emerald-100 border-4 border-emerald-500 flex items-center justify-center shadow-lg">
+          <CheckCircle className="w-11 h-11 text-emerald-700" strokeWidth={2.5} />
+          <span className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-[#D4AF37] text-[#3B1E22] flex items-center justify-center shadow-sm">
+            <Sparkles className="w-4 h-4" />
+          </span>
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex flex-col items-center justify-center gap-2">
+            <div className="inline-flex items-center gap-2 bg-emerald-50 border-2 border-emerald-500 text-emerald-800 px-6 py-2.5 rounded-2xl shadow-sm">
+              <span className="text-2xl sm:text-3xl font-extrabold tracking-wide">
+                ✓ PAYMENT DONE
+              </span>
+            </div>
+            <div className="inline-flex items-center gap-2 bg-emerald-700 text-white px-6 py-2 rounded-2xl shadow-md">
+              <span className="text-xl sm:text-2xl font-extrabold tracking-wider">
+                ✓ ORDER CONFIRMED
+              </span>
+            </div>
+          </div>
+
+          <p className="text-xs sm:text-sm text-gray-600 max-w-xl mx-auto pt-2 leading-relaxed">
+            Thank you, <strong className="text-[#3B1E22]">{customerName}</strong>! Your payment of{' '}
+            <strong className="text-emerald-800">₹{totalAmount.toLocaleString('en-IN')}</strong> has been verified. Your handcrafted heirloom pieces are confirmed and scheduled for royal packaging at our Roorkee atelier.
+          </p>
+        </div>
+      </div>
+
+      {/* Key Payment & Order Metrics Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-left max-w-2xl mx-auto">
+        <div className="p-3.5 rounded-2xl bg-[#FAF7F2] border border-[#E8DCCF]">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 block">
+            Order ID
+          </span>
+          <span className="font-mono text-xs sm:text-sm font-extrabold text-[#3B1E22] break-all">
+            {orderId}
+          </span>
+        </div>
+        <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 block">
+            Amount Paid
+          </span>
+          <span className="font-serif text-base sm:text-lg font-extrabold text-emerald-900">
+            ₹{totalAmount.toLocaleString('en-IN')}
+          </span>
+        </div>
+        <div className="p-3.5 rounded-2xl bg-[#FAF7F2] border border-[#E8DCCF]">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 block">
+            Payment Method
+          </span>
+          <span className="text-xs font-bold text-[#3B1E22] line-clamp-2">
+            {paymentMethod}
+          </span>
+        </div>
+        <div className="p-3.5 rounded-2xl bg-[#FAF7F2] border border-[#E8DCCF]">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 block">
+            Order Date & Time
+          </span>
+          <span className="text-[11px] font-semibold text-gray-800 block">
+            {orderDateTime}
+          </span>
+        </div>
+      </div>
+
+      {/* Complete Order Receipt Card */}
+      <div className="max-w-2xl mx-auto bg-[#FAF7F2] p-5 sm:p-6 rounded-2xl border border-[#E8DCCF] text-left space-y-4 text-xs shadow-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pb-3 border-b border-[#E8DCCF]">
+          <div className="space-y-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block">
+              Patron Details
+            </span>
+            <p className="font-bold text-[#3B1E22] text-sm">{customerName}</p>
+            <p className="text-gray-700 font-mono">{customerMobile}</p>
+            <p className="text-gray-600 break-all">{customerEmail}</p>
+          </div>
+          <div className="space-y-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block">
+              Delivery Address
+            </span>
+            <p className="text-gray-800 font-medium leading-relaxed">{fullAddress}</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pb-3 border-b border-[#E8DCCF]">
+          <div>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block">
+              Payment Transaction ID
+            </span>
+            <span className="font-mono font-bold text-gray-900 break-all">{transactionId}</span>
+          </div>
+          <div className="sm:text-right">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block">
+              Verification Status
+            </span>
+            <span className="inline-flex items-center gap-1 font-extrabold text-emerald-700 uppercase">
+              <ShieldCheck className="w-3.5 h-3.5" /> Verified Paid • {order.orderStatus || 'Confirmed'}
+            </span>
+          </div>
+        </div>
+
+        {items.length > 0 && (
+          <div className="space-y-2">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block">
+              Confirmed Jewellery Pieces ({items.reduce((acc, it) => acc + (it.quantity || 1), 0)})
+            </span>
+            <div className="divide-y divide-[#E8DCCF]/70 bg-white rounded-xl border border-[#E8DCCF] px-3">
+              {items.map((item, idx) => (
+                <div key={idx} className="flex items-center justify-between gap-3 py-2.5">
+                  <div className="flex items-center gap-3 min-w-0">
+                    {Boolean(item.image && isGenuineImageUrl(item.image)) ? (
+                      <img
+                        src={item.image}
+                        alt={item.productName}
+                        className="w-11 h-11 rounded-lg object-contain border border-[#E8DCCF] bg-white shrink-0"
+                      />
+                    ) : (
+                      <div className="w-11 h-11 rounded-lg bg-[#FAF7F2] border border-[#E8DCCF] flex items-center justify-center text-[#802336] shrink-0">
+                        <ShoppingBag className="w-4 h-4" />
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p className="font-serif font-semibold text-[#3B1E22] truncate">
+                        {item.productName}
+                      </p>
+                      <p className="text-[11px] text-gray-500">
+                        {item.variationName ? `${item.variationName} • ` : ''}Qty: {item.quantity || 1}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="font-bold text-[#3B1E22] shrink-0">
+                    ₹{((item.price || 0) * (item.quantity || 1)).toLocaleString('en-IN')}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="pt-2 space-y-1">
+          <div className="flex justify-between text-gray-600">
+            <span>Subtotal</span>
+            <span className="font-semibold">₹{subtotal.toLocaleString('en-IN')}</span>
+          </div>
+          {discount > 0 && (
+            <div className="flex justify-between text-emerald-700 font-semibold">
+              <span>Discount Applied</span>
+              <span>-₹{discount.toLocaleString('en-IN')}</span>
+            </div>
+          )}
+          <div className="flex justify-between text-gray-600">
+            <span>Shipping Charges</span>
+            <span className="font-semibold">
+              {deliveryCharge > 0 ? `₹${deliveryCharge.toLocaleString('en-IN')}` : 'FREE (Royal Atelier Delivery)'}
+            </span>
+          </div>
+          <div className="flex justify-between text-sm font-bold text-[#3B1E22] pt-2 border-t border-[#E8DCCF]">
+            <span>Final Paid Amount</span>
+            <span className="text-emerald-800 text-base">₹{totalAmount.toLocaleString('en-IN')}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Primary CTA Buttons */}
+      <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+        <button
+          type="button"
+          onClick={onViewMyOrders}
+          className="w-full sm:w-auto bg-[#0F5B46] hover:bg-[#0A3D2F] text-white px-7 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow-lg flex items-center justify-center gap-2"
+        >
+          <Package className="w-4 h-4 text-[#DFB982]" />
+          <span>View My Order</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onContinueShopping}
+          className="w-full sm:w-auto bg-[#3B1E22] hover:bg-[#802336] text-[#FAF7F2] px-7 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow-md"
+        >
+          Continue Shopping
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onTrackOrder(orderId)}
+          className="w-full sm:w-auto bg-white border border-[#E8DCCF] hover:bg-[#FAF7F2] text-[#3B1E22] px-5 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+        >
+          <Truck className="w-4 h-4 text-[#802336]" />
+          <span>Track Shipment</span>
+        </button>
+
+        <a
+          href={whatsappUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="w-full sm:w-auto bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 px-4 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors flex items-center justify-center gap-1.5"
+        >
+          <MessageCircle className="w-4 h-4" />
+          <span>Atelier Concierge</span>
+        </a>
+      </div>
+    </div>
+  );
+};
+
 interface WhatsAppOrderConfirmationViewProps {
   order: Order;
+  onViewMyOrders: () => void;
   onTrackOrder: (orderNumber: string) => void;
   onContinueShopping: () => void;
 }
 
 const WhatsAppOrderConfirmationView: React.FC<WhatsAppOrderConfirmationViewProps> = ({
   order,
+  onViewMyOrders,
   onTrackOrder,
   onContinueShopping
 }) => {
@@ -50,43 +381,12 @@ const WhatsAppOrderConfirmationView: React.FC<WhatsAppOrderConfirmationViewProps
   const [copied, setCopied] = useState(false);
   const [showFullReceipt, setShowFullReceipt] = useState(false);
 
-  const isPaid = order?.paymentStatus === 'paid' || order?.orderStatus === 'Confirmed';
   const orderId = order?.orderNumber || order?.id || 'N/A';
-
-  let orderDateTime = 'Just now';
-  try {
-    orderDateTime = new Date(order?.createdAt || Date.now()).toLocaleString('en-IN', {
-      timeZone: 'Asia/Kolkata',
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true
-    });
-  } catch {
-    // fallback already set
-  }
-
-  const customerName =
-    order?.customerName ||
-    (order?.shippingAddress as any)?.fullName ||
-    'Valued Patron';
-  const customerMobile = order?.customerPhone || order?.shippingAddress?.phone || 'N/A';
+  const orderDateTime = formatOrderDateIST(order?.createdAt);
+  const customerName = order?.customerName || order?.shippingAddress?.name || 'Valued Patron';
+  const customerMobile = formatIndianPhone(order?.customerPhone || order?.shippingAddress?.phone) || 'N/A';
   const customerEmail = order?.customerEmail || 'Not Provided';
-
-  let address = 'Delivery address provided at checkout';
-  if (order?.shippingAddress) {
-    const parts = [
-      order.shippingAddress.street,
-      order.shippingAddress.landmark,
-      order.shippingAddress.city,
-      order.shippingAddress.state
-        ? `${order.shippingAddress.state} - ${order.shippingAddress.pincode || ''}`
-        : order.shippingAddress.pincode
-    ].filter(Boolean);
-    if (parts.length > 0) address = parts.join(', ');
-  }
+  const address = formatFullAddress(order?.shippingAddress) || 'Delivery address provided at checkout';
 
   const items = Array.isArray(order?.items) ? order.items : [];
   const totalFallback = Number(order?.totalAmount || (order as any)?.total || 0);
@@ -102,28 +402,22 @@ const WhatsAppOrderConfirmationView: React.FC<WhatsAppOrderConfirmationViewProps
           .join('\n')
       : `1. Handcrafted Jewellery (Qty: 1) - ₹${totalFallback.toLocaleString('en-IN')}`;
 
-  const subtotal =
-    typeof order?.subtotal === 'number'
-      ? order.subtotal
-      : Number(order?.subtotal) || totalFallback;
-  const discount = typeof order?.discount === 'number' ? order.discount : Number(order?.discount) || 0;
+  const subtotal = typeof order?.subtotal === 'number' ? order.subtotal : totalFallback;
+  const discount = typeof order?.discount === 'number' ? order.discount : 0;
   const deliveryCharge = typeof order?.deliveryCharge === 'number' ? order.deliveryCharge : 0;
-  const totalAmount =
-    typeof order?.totalAmount === 'number' ? order.totalAmount : totalFallback;
-  const paymentMethod = order?.paymentMethod || 'Online Payment';
-  const transactionId =
-    order?.paymentId || order?.upiReference || order?.cardNetwork || 'Verified via Payment Gateway';
-  const paymentStatusText = isPaid ? 'SUCCESSFUL' : 'PENDING VERIFICATION';
+  const totalAmount = typeof order?.totalAmount === 'number' ? order.totalAmount : totalFallback;
+  const paymentMethod = order?.paymentMethod || 'Direct UPI Transfer';
+  const transactionId = order?.upiReference || order?.paymentId || 'Pending UTR Verification';
 
   const preparedMessage =
-    `Vidhyaa Jewellery Studio\nORDER CONFIRMATION REQUEST\n\n` +
+    `Vidhyaa Jewellery Studio\nORDER VERIFICATION REQUEST\n\n` +
     `Order ID: ${orderId}\nOrder Date and Time: ${orderDateTime}\n\n` +
     `Customer Details:\n• Customer Name: ${customerName}\n• Customer Mobile Number: ${customerMobile}\n• Customer Email: ${customerEmail}\n\n` +
     `Complete Delivery Address:\n${address}\n\n` +
     `Products Ordered:\n${itemsFormatted}\n\n` +
-    `Financial Breakdown:\n• Subtotal: ₹${subtotal.toLocaleString('en-IN')}\n• Discount: ₹${discount.toLocaleString('en-IN')}\n• Shipping Charges: ₹${deliveryCharge.toLocaleString('en-IN')}\n• ${isPaid ? 'Final Paid Amount' : 'Final Payable Amount'}: ₹${totalAmount.toLocaleString('en-IN')}\n\n` +
-    `Payment Information:\n• Payment Method: ${paymentMethod}\n• Payment Transaction ID: ${transactionId}\n• Payment Status: ${paymentStatusText}\n\n` +
-    `Please confirm this order for delivery.`;
+    `Financial Breakdown:\n• Subtotal: ₹${subtotal.toLocaleString('en-IN')}\n• Discount: ₹${discount.toLocaleString('en-IN')}\n• Shipping Charges: ₹${deliveryCharge.toLocaleString('en-IN')}\n• Order Total: ₹${totalAmount.toLocaleString('en-IN')}\n\n` +
+    `Payment Information:\n• Payment Method: ${paymentMethod}\n• UTR / Reference: ${transactionId}\n• Payment Status: PENDING STUDIO VERIFICATION\n\n` +
+    `Please verify this UPI transfer for dispatch.`;
 
   const whatsappUrl = `https://wa.me/917302187770?text=${encodeURIComponent(preparedMessage)}`;
 
@@ -144,8 +438,6 @@ const WhatsAppOrderConfirmationView: React.FC<WhatsAppOrderConfirmationViewProps
         }
       ).catch(() => {});
       setIsConfirmed(true);
-    } catch {
-      setIsConfirmed(true);
     } finally {
       setIsSubmitting(false);
     }
@@ -156,311 +448,132 @@ const WhatsAppOrderConfirmationView: React.FC<WhatsAppOrderConfirmationViewProps
       navigator.clipboard.writeText(preparedMessage);
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
-    } catch {
-      // ignore clipboard errors
-    }
+    } catch {}
   };
 
   return (
     <div className="bg-white rounded-3xl border border-[#E8DCCF] p-6 sm:p-10 shadow-2xl text-center space-y-6 animate-fadeIn max-w-3xl mx-auto">
-      <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-4 pb-4 border-b border-[#E8DCCF] text-xs font-bold tracking-wide">
-        <div
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border shadow-xs ${
-            isPaid
-              ? 'text-emerald-800 bg-emerald-50 border-emerald-300'
-              : 'text-amber-900 bg-amber-50 border-amber-300'
-          }`}
-        >
-          <span
-            className={`w-4 h-4 rounded-full text-white flex items-center justify-center text-[10px] font-extrabold ${
-              isPaid ? 'bg-emerald-600' : 'bg-amber-500'
-            }`}
-          >
-            {isPaid ? '✓' : '1'}
+      <div className="w-16 h-16 rounded-full bg-amber-50 border-2 border-amber-400 flex items-center justify-center mx-auto text-amber-700">
+        <Clock className="w-8 h-8" />
+      </div>
+
+      <div className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-4 sm:p-5 text-left space-y-2 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full text-white bg-amber-600">
+            ⏳ PAYMENT VERIFICATION PENDING
           </span>
-          <span>{isPaid ? '1. Payment Successful' : '1. Order Submitted'}</span>
-        </div>
-        <span className="text-gray-400">→</span>
-        <div
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border shadow-xs transition-all ${
-            isConfirmed
-              ? 'text-emerald-800 bg-emerald-50 border-emerald-300'
-              : 'text-amber-900 bg-amber-50 border-amber-400 ring-2 ring-amber-300'
-          }`}
-        >
-          <span
-            className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-extrabold ${
-              isConfirmed ? 'bg-emerald-600 text-white' : 'bg-amber-500 text-white animate-pulse'
-            }`}
-          >
-            {isConfirmed ? '✓' : '2'}
+          <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full bg-white text-amber-900 border border-amber-300">
+            Order #{orderId} Saved
           </span>
-          <span>{isConfirmed ? '2. WhatsApp Confirmed ✓' : '2. Confirm on WhatsApp'}</span>
         </div>
-        <span className="text-gray-400">→</span>
-        <div
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border shadow-xs ${
-            isConfirmed
-              ? 'text-emerald-800 bg-emerald-50 border-emerald-300'
-              : 'text-gray-400 bg-gray-50 border-gray-200'
-          }`}
-        >
-          <span
-            className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-extrabold ${
-              isConfirmed ? 'bg-emerald-600 text-white' : 'bg-gray-300 text-white'
-            }`}
-          >
-            {isConfirmed ? '✓' : '3'}
-          </span>
-          <span>3. Atelier Packing</span>
-        </div>
+        <h2 className="font-serif text-lg sm:text-xl font-bold text-[#3B1E22]">
+          Direct UPI Order Submitted — Awaiting Studio Verification
+        </h2>
+        <p className="text-xs text-gray-700 leading-relaxed">
+          Your order <strong>{orderId}</strong> (₹{totalAmount.toLocaleString('en-IN')}) with UTR{' '}
+          <strong className="font-mono">{transactionId}</strong> has been recorded. Our studio team will confirm payment receipt and update your order status to Confirmed shortly. You can also notify the studio via WhatsApp below to expedite verification.
+        </p>
       </div>
 
       {!isConfirmed ? (
-        <div className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-4 sm:p-5 text-left space-y-2 shadow-sm">
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={`text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full text-white shadow-xs ${
-                isPaid ? 'bg-emerald-600' : 'bg-amber-600'
-              }`}
-            >
-              {isPaid ? '✓ Payment Successful' : '⏳ Payment Pending Verification'}
-            </span>
-            <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full bg-amber-500 text-white shadow-xs animate-pulse">
-              ⚠️ WhatsApp Message Not Yet Sent
-            </span>
-          </div>
-          <h2 className="font-serif text-lg sm:text-xl font-bold text-[#3B1E22]">
-            Mandatory Step: Confirm Your Order on WhatsApp
-          </h2>
-          <p className="text-xs text-gray-700 leading-relaxed">
-            {isPaid
-              ? `Your payment of ₹${totalAmount.toLocaleString('en-IN')} has been verified and Order ${orderId} is safely saved in our database. To schedule atelier packing and delivery, please tap the green button below to send the pre-filled order confirmation to our studio owner at 7302187770.`
-              : `Your order ${orderId} (₹${totalAmount.toLocaleString('en-IN')}) has been saved and is awaiting payment verification. Please tap the green button below to send your pre-filled order & payment reference details on WhatsApp to our studio owner at 7302187770.`}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-emerald-50 border-2 border-emerald-500 rounded-2xl p-4 sm:p-5 text-left space-y-2 shadow-sm">
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={`text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full text-white shadow-xs ${
-                isPaid ? 'bg-emerald-700' : 'bg-amber-600'
-              }`}
-            >
-              {isPaid ? '✓ Payment Successful' : '⏳ Payment Pending Verification'}
-            </span>
-            <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full bg-emerald-700 text-white shadow-xs">
-              ✓ WhatsApp Confirmation Completed
-            </span>
-          </div>
-          <h2 className="font-serif text-lg sm:text-xl font-bold text-emerald-950">
-            ✓ Order Confirmation Sent on WhatsApp!
-          </h2>
-          <p className="text-xs text-emerald-800 leading-relaxed">
-            Thank you for completing WhatsApp confirmation! Studio owner (+91 7302187770) has received your order details.{' '}
-            {isPaid
-              ? 'Your royal handcrafted pieces are now being prepared at our Roorkee atelier.'
-              : 'Once your UPI payment reference is verified, your royal handcrafted pieces will be prepared at our Roorkee atelier.'}
-          </p>
-        </div>
-      )}
-
-      {!isConfirmed && (
-        <div className="space-y-4 py-2">
+        <div className="space-y-3">
           <button
+            type="button"
             onClick={handleOpenWhatsApp}
-            className="w-full max-w-md mx-auto bg-[#25D366] hover:bg-[#20bd5a] active:scale-[0.98] text-white font-black text-sm sm:text-base px-6 py-4 rounded-2xl shadow-xl hover:shadow-2xl flex items-center justify-center gap-3 transition-all cursor-pointer border-2 border-emerald-400 group"
+            className="w-full max-w-md mx-auto bg-[#25D366] hover:bg-[#20bd5a] text-white font-black text-xs sm:text-sm px-6 py-3.5 rounded-2xl shadow-md flex items-center justify-center gap-2.5 transition-all cursor-pointer"
           >
-            <svg className="w-6 h-6 fill-current shrink-0" viewBox="0 0 24 24">
-              <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.588-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z" />
-            </svg>
-            <span className="tracking-wide">CONFIRM ORDER ON WHATSAPP</span>
+            <MessageCircle className="w-5 h-5" />
+            <span>SHARE UTR ON WHATSAPP (+91 7302187770)</span>
           </button>
-          <p className="text-[11px] text-gray-500 max-w-sm mx-auto">
-            Opens official WhatsApp chat with Vidhyaa Studio Owner (+91 7302187770) with your complete order message pre-filled.
-          </p>
-        </div>
-      )}
-
-      {!isConfirmed && hasClickedWhatsApp && (
-        <div className="bg-[#FAF7F2] border-2 border-[#DFB982] rounded-2xl p-5 sm:p-6 text-center space-y-3.5 animate-fadeIn max-w-lg mx-auto shadow-sm">
-          <div className="text-2xl">📱</div>
-          <h3 className="font-serif text-base sm:text-lg font-bold text-[#3B1E22]">
-            Did you press the SEND button in WhatsApp?
-          </h3>
-          <p className="text-xs text-gray-600 leading-relaxed">
-            Please ensure you switched to WhatsApp and pressed the SEND (➤) button to send the prepared order message to 7302187770. Once sent, click below to finalize confirmation:
-          </p>
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+          {hasClickedWhatsApp && (
             <button
+              type="button"
               onClick={handleConfirmSent}
               disabled={isSubmitting}
-              className="w-full sm:w-auto bg-[#3B1E22] hover:bg-[#802336] text-white font-bold text-xs sm:text-sm px-6 py-3 rounded-xl shadow-md cursor-pointer transition-all flex items-center justify-center gap-2"
+              className="mx-auto bg-[#3B1E22] hover:bg-[#802336] text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer transition-all"
             >
-              <span className="text-[#DFB982] font-black">✓</span>
-              <span>{isSubmitting ? 'Saving Confirmation...' : 'I Have Sent the Message on WhatsApp'}</span>
+              {isSubmitting ? 'Updating...' : '✓ I Have Sent My UTR on WhatsApp'}
             </button>
-            <button
-              onClick={handleOpenWhatsApp}
-              className="w-full sm:w-auto bg-white border border-[#3B1E22] text-[#3B1E22] hover:bg-gray-100 font-bold text-xs px-4 py-3 rounded-xl cursor-pointer transition-all"
-            >
-              Re-open WhatsApp
-            </button>
-          </div>
+          )}
+        </div>
+      ) : (
+        <div className="p-3.5 bg-emerald-50 border border-emerald-300 rounded-xl text-xs text-emerald-900 font-semibold max-w-lg mx-auto">
+          ✓ WhatsApp notification recorded. Once our studio verifies your UTR, your order status will switch to Confirmed.
         </div>
       )}
 
-      <div className="max-w-lg mx-auto bg-[#FAF7F2] p-5 sm:p-6 rounded-2xl border border-[#E8DCCF] text-left space-y-3 text-xs shadow-xs">
-        <div className="flex justify-between items-center pb-2 border-b border-[#E8DCCF]">
-          <div>
-            <span className="text-gray-400 block text-[10px] uppercase font-bold">Order Number</span>
-            <span className="font-mono font-bold text-sm text-[#3B1E22]">{orderId}</span>
-          </div>
-          <div className="text-right">
-            <span className="text-gray-400 block text-[10px] uppercase font-bold">Order Date & Time</span>
-            <span className="font-mono text-gray-700 text-xs font-semibold">{orderDateTime}</span>
-          </div>
+      <div className="max-w-lg mx-auto bg-[#FAF7F2] p-5 rounded-2xl border border-[#E8DCCF] text-left space-y-2.5 text-xs">
+        <div className="flex justify-between pb-2 border-b border-[#E8DCCF]">
+          <span className="font-mono font-bold text-[#3B1E22]">{orderId}</span>
+          <span className="text-gray-600">{orderDateTime}</span>
         </div>
-
-        <div className="space-y-1.5 py-1">
-          <div className="flex justify-between">
-            <span className="text-gray-500">Customer Name</span>
-            <span className="font-bold text-gray-800">{customerName}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-500">Mobile Number</span>
-            <span className="font-bold text-gray-800">{customerMobile}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-500">Email Address</span>
-            <span className="text-gray-700">{customerEmail}</span>
-          </div>
-          <div className="flex justify-between items-start gap-2">
-            <span className="text-gray-500 shrink-0">Delivery Address</span>
-            <span className="text-gray-800 text-right font-medium max-w-xs">{address}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-500">Payment Method</span>
-            <span className="font-semibold text-gray-800">{paymentMethod}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-500">Transaction ID / UTR</span>
-            <span className="font-mono font-bold text-gray-700">{transactionId}</span>
-          </div>
-          <div className="flex justify-between items-center">
-            <span className="text-gray-500">Payment Status</span>
-            <span
-              className={`font-extrabold uppercase text-[11px] border px-2 py-0.5 rounded-full ${
-                isPaid
-                  ? 'text-emerald-700 bg-emerald-50 border-emerald-300'
-                  : 'text-amber-800 bg-amber-50 border-amber-300'
-              }`}
-            >
-              {isPaid ? 'SUCCESSFUL (PAID)' : 'PENDING VERIFICATION'}
-            </span>
-          </div>
-          <div className="flex justify-between items-center">
-            <span className="text-gray-500">WhatsApp Status</span>
-            <span
-              className={`font-extrabold uppercase text-[11px] px-2 py-0.5 rounded-full ${
-                isConfirmed
-                  ? 'text-emerald-800 bg-emerald-100 border border-emerald-300'
-                  : 'text-amber-900 bg-amber-100 border border-amber-300'
-              }`}
-            >
-              {isConfirmed ? '✓ CONFIRMED ON WHATSAPP' : 'CONFIRMATION PENDING'}
-            </span>
-          </div>
+        <div className="flex justify-between">
+          <span className="text-gray-500">Customer</span>
+          <span className="font-bold text-gray-800">{customerName} ({customerMobile})</span>
         </div>
-
-        {items.length > 0 && (
-          <div className="pt-2 border-t border-[#E8DCCF] space-y-1.5">
-            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
-              Ordered Products
-            </span>
-            {items.map((item, idx) => (
-              <div
-                key={idx}
-                className="flex justify-between text-xs py-1 border-b border-gray-100 last:border-0"
-              >
-                <div className="text-gray-800 font-medium">
-                  {idx + 1}. {item.productName || (item as any).title}
-                  {item.quantity > 1 ? ` × ${item.quantity}` : ''}
-                </div>
-                <div className="font-semibold text-gray-900">
-                  ₹{((item.price || 0) * (item.quantity || 1)).toLocaleString('en-IN')}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="pt-2 border-t border-[#E8DCCF] space-y-1">
-          <div className="flex justify-between text-gray-600">
-            <span>Product Subtotal</span>
-            <span className="font-semibold">₹{subtotal.toLocaleString('en-IN')}</span>
-          </div>
-          {discount > 0 && (
-            <div className="flex justify-between text-emerald-700 font-semibold">
-              <span>Discount Applied</span>
-              <span>-₹{discount.toLocaleString('en-IN')}</span>
-            </div>
-          )}
-          <div className="flex justify-between text-gray-600">
-            <span>Shipping Charges</span>
-            <span className="font-semibold">
-              {deliveryCharge > 0 ? `₹${deliveryCharge.toLocaleString('en-IN')}` : 'FREE (Royal Atelier Delivery)'}
-            </span>
-          </div>
-          <div className="flex justify-between text-sm font-bold text-[#3B1E22] pt-2 border-t border-[#E8DCCF]">
-            <span>{isPaid ? 'Final Paid Amount' : 'Final Payable Amount'}</span>
-            <span className="text-[#802336]">₹{totalAmount.toLocaleString('en-IN')}</span>
-          </div>
+        <div className="flex justify-between gap-2">
+          <span className="text-gray-500 shrink-0">Address</span>
+          <span className="text-gray-800 text-right">{address}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-gray-500">UTR / Reference</span>
+          <span className="font-mono font-bold text-gray-800">{transactionId}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-gray-500">Amount</span>
+          <span className="font-bold text-[#802336]">₹{totalAmount.toLocaleString('en-IN')}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-gray-500">Payment Status</span>
+          <span className="font-extrabold text-amber-800 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full text-[11px]">
+            PENDING VERIFICATION
+          </span>
         </div>
       </div>
 
       <div className="max-w-lg mx-auto text-left">
         <button
+          type="button"
           onClick={() => setShowFullReceipt(!showFullReceipt)}
-          className="text-xs font-bold text-[#3B1E22] hover:text-[#802336] underline cursor-pointer flex items-center gap-1"
+          className="text-xs font-bold text-[#3B1E22] hover:text-[#802336] underline cursor-pointer"
         >
-          {showFullReceipt
-            ? '▲ Hide Prepared WhatsApp Message'
-            : '▼ View Prepared WhatsApp Message to 7302187770'}
+          {showFullReceipt ? '▲ Hide WhatsApp Summary' : '▼ View Prepared WhatsApp Summary'}
         </button>
         {showFullReceipt && (
-          <div className="mt-2 p-3 bg-gray-50 border border-gray-200 rounded-xl text-[11px] font-mono text-gray-700 whitespace-pre-wrap relative">
+          <div className="mt-2 p-3 bg-gray-50 border border-gray-200 rounded-xl text-[11px] font-mono text-gray-700 whitespace-pre-wrap">
             {preparedMessage}
             <button
+              type="button"
               onClick={handleCopyMessage}
-              className="mt-2 text-[10px] font-bold text-emerald-700 hover:text-emerald-800 bg-emerald-50 border border-emerald-300 px-2.5 py-1 rounded cursor-pointer block"
+              className="mt-2 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-300 px-2.5 py-1 rounded cursor-pointer block"
             >
-              {copied ? '✓ Copied to Clipboard!' : 'Copy Message Text'}
+              {copied ? '✓ Copied!' : 'Copy Summary'}
             </button>
           </div>
         )}
       </div>
 
-      <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-4">
+      <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
         <button
-          onClick={() => onTrackOrder(orderId)}
-          className="w-full sm:w-auto bg-[#3B1E22] hover:bg-[#802336] text-[#FAF7F2] px-8 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow-md flex items-center justify-center gap-2"
+          type="button"
+          onClick={onViewMyOrders}
+          className="w-full sm:w-auto bg-[#3B1E22] hover:bg-[#802336] text-[#FAF7F2] px-7 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow-md"
         >
-          <span className="text-[#DFB982]">📦</span>
-          <span>Track Order Live</span>
+          View My Order
         </button>
         <button
+          type="button"
+          onClick={() => onTrackOrder(orderId)}
+          className="w-full sm:w-auto bg-white border border-[#E8DCCF] hover:bg-gray-50 text-[#3B1E22] px-6 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
+        >
+          Track Order Status
+        </button>
+        <button
+          type="button"
           onClick={onContinueShopping}
-          className="w-full sm:w-auto bg-white border border-[#E8DCCF] hover:bg-gray-50 text-[#3B1E22] px-8 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
+          className="w-full sm:w-auto bg-white border border-[#E8DCCF] hover:bg-gray-50 text-gray-700 px-6 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
         >
           Continue Shopping
-        </button>
-        <button
-          onClick={handleOpenWhatsApp}
-          className="w-full sm:w-auto bg-[#25D366] hover:bg-[#20bd5a] text-white px-5 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
-        >
-          <span>💬</span>
-          <span>Chat with Studio Owner</span>
         </button>
       </div>
     </div>
@@ -472,13 +585,15 @@ interface CheckoutViewProps {
   onOrderSuccess: (order: Order) => void;
   onNavigateHome: () => void;
   onTrackOrder: (orderNumber: string) => void;
+  onViewMyOrders?: () => void;
 }
 
 export const CheckoutView: React.FC<CheckoutViewProps> = ({
   storeSettings,
   onOrderSuccess,
   onNavigateHome,
-  onTrackOrder
+  onTrackOrder,
+  onViewMyOrders
 }) => {
   const {
     items,
@@ -489,28 +604,35 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     totalSavings,
     deliveryCharge,
     finalTotal,
-    clearCart,
-    freeDeliveryThreshold,
-    appliedPromo
+    clearCart
   } = useCart();
 
-  const { user, userProfile, saveAddress } = useAuth();
+  const { user, userProfile, patronSession, saveAddress } = useAuth();
+  const effectiveUserId = user?.uid || patronSession?.uid || undefined;
 
-  // Multi-step states: 1: Address, 2: Review, 3: UPI Payment, 4: Confirmed
+  // Multi-step states: 1: Address, 2: Review, 3: Payment, 4: Confirmed / Submitted
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
 
   // Address & Contact info
-  const [name, setName] = useState(userProfile?.displayName || user?.displayName || '');
-  const [email, setEmail] = useState(userProfile?.email || user?.email || '');
-  const [phone, setPhone] = useState(userProfile?.phone || '');
-  const [street, setStreet] = useState('');
+  const [name, setName] = useState(
+    userProfile?.displayName || user?.displayName || patronSession?.displayName || ''
+  );
+  const [email, setEmail] = useState(
+    userProfile?.email || user?.email || patronSession?.email || ''
+  );
+  const [phone, setPhone] = useState(
+    userProfile?.phone || patronSession?.phone || patronSession?.mobile || ''
+  );
+  const [houseNo, setHouseNo] = useState('');
+  const [area, setArea] = useState('');
   const [landmark, setLandmark] = useState('');
   const [city, setCity] = useState('');
-  const [state, setState] = useState('Rajasthan');
+  const [state, setState] = useState('Uttarakhand');
   const [pincode, setPincode] = useState('');
   const [saveToAccount, setSaveToAccount] = useState(true);
+  const [step1Error, setStep1Error] = useState<string | null>(null);
 
-  // Payment method states: Credit/Debit Card (Cashfree), UPI Phone, UPI QR, 1-Tap App, Bank VPA
+  // Payment method states: Cashfree (UPI/Cards/Netbanking), UPI QR, UPI Phone, 1-Tap App, Bank VPA
   const [upiMethod, setUpiMethod] = useState<'card' | 'phone' | 'qr' | 'intent' | 'vpa'>('card');
   const [cashfreeStatus, setCashfreeStatus] = useState<{
     isConfigured: boolean;
@@ -518,6 +640,35 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     appIdMasked?: string;
     hasSecretKey?: boolean;
   } | null>(null);
+
+  // Stable order number per active checkout session
+  const [orderNumber, setOrderNumber] = useState<string>(() => getOrCreateDraftOrderNumber());
+
+  const [utrNumber, setUtrNumber] = useState('');
+  const [copiedVpa, setCopiedVpa] = useState(false);
+  const [copiedPhone, setCopiedPhone] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [isRestoringOrder, setIsRestoringOrder] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [completedOrder, setCompletedOrder] = useState<Order | null>(null);
+
+  // Sync user / patron profile info cleanly into blank inputs
+  useEffect(() => {
+    if (!name) {
+      const candidate =
+        userProfile?.displayName || user?.displayName || patronSession?.displayName || '';
+      if (candidate) setName(candidate);
+    }
+    if (!email) {
+      const candidate = userProfile?.email || user?.email || patronSession?.email || '';
+      if (candidate) setEmail(candidate);
+    }
+    if (!phone) {
+      const candidate =
+        userProfile?.phone || patronSession?.phone || patronSession?.mobile || '';
+      if (candidate) setPhone(candidate);
+    }
+  }, [user, userProfile, patronSession]);
 
   useEffect(() => {
     fetch('/api/payments/cashfree/status')
@@ -530,50 +681,283 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       .catch(() => {});
   }, []);
 
-  const [utrNumber, setUtrNumber] = useState('');
-  const [copiedVpa, setCopiedVpa] = useState(false);
-  const [copiedPhone, setCopiedPhone] = useState(false);
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [paymentError, setPaymentError] = useState<string | null>(null);
-  const [completedOrder, setCompletedOrder] = useState<Order | null>(null);
-
   // Merchant UPI Credentials
   const merchantVpa = storeSettings?.upiVpa || 'neerajchauhan2000-1@oksbi';
   const payeeName = storeSettings?.upiPayeeName || 'neeraj chauhan';
   const upiMobileNumber = storeSettings?.upiMobileNumber || '9758350524';
 
-  const orderNumber = `VDH-${Math.floor(100000 + Math.random() * 900000)}`;
+  const combinedStreet = [houseNo.trim(), area.trim()].filter(Boolean).join(', ');
   const upiDeepLink = `upi://pay?pa=${encodeURIComponent(merchantVpa)}&pn=${encodeURIComponent(
     payeeName
   )}&am=${finalTotal}&cu=INR&tn=${encodeURIComponent(`Vidhyaa Jewellery Order ${orderNumber}`)}`;
 
+  const finalizeVerifiedOrderSuccess = useCallback(
+    async (verifiedOrder: Order) => {
+      const synced = await syncOrderToLocalAndFirestore(verifiedOrder);
+      try {
+        confetti({
+          particleCount: 120,
+          spread: 80,
+          origin: { y: 0.6 },
+          colors: ['#D4AF37', '#802336', '#0F5B46', '#FAF7F2']
+        });
+      } catch {}
+      try {
+        sessionStorage.removeItem(DRAFT_ORDER_KEY);
+        sessionStorage.setItem(COMPLETED_ORDER_KEY, synced.orderNumber || synced.id);
+      } catch {}
+      setCompletedOrder(synced);
+      clearCart();
+      setStep(4);
+      onOrderSuccess(synced);
+    },
+    [clearCart, onOrderSuccess]
+  );
+
+  const verifyAndFinalizeCashfreePayment = useCallback(
+    async (cfOrderId: string) => {
+      setIsVerifying(true);
+      setPaymentError(null);
+      try {
+        const orderItems: OrderItem[] = items.map((i) => ({
+          productId: i.productId,
+          productName: i.productName,
+          variationId: i.variationId,
+          variationName: i.variationName,
+          quantity: i.quantity,
+          price: i.price,
+          mrp: i.mrp,
+          image: i.image,
+          sku: i.sku
+        }));
+
+        const hasShippingInForm = Boolean(name.trim() && combinedStreet && city.trim() && pincode.trim());
+        const shippingAddressPayload: Address | undefined = hasShippingInForm
+          ? {
+              id: `addr_${Date.now()}`,
+              name: name.trim(),
+              phone: formatIndianPhone(phone),
+              houseNo: houseNo.trim(),
+              area: area.trim(),
+              street: combinedStreet,
+              landmark: landmark.trim(),
+              city: city.trim(),
+              state: state.trim(),
+              pincode: pincode.trim()
+            }
+          : undefined;
+
+        const verifyRes = await fetch('/api/payments/cashfree/verify-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            orderId: cfOrderId,
+            ...(hasShippingInForm && orderItems.length > 0
+              ? {
+                  orderData: {
+                    orderNumber: cfOrderId.startsWith('VDH') ? cfOrderId : orderNumber,
+                    userId: effectiveUserId,
+                    customerName: name.trim(),
+                    customerEmail: email.trim(),
+                    customerPhone: formatIndianPhone(phone),
+                    shippingAddress: shippingAddressPayload,
+                    items: orderItems,
+                    originalTotal,
+                    productSavings,
+                    couponSavings: discount,
+                    totalSavings,
+                    subtotal,
+                    discount,
+                    deliveryCharge,
+                    totalAmount: finalTotal
+                  }
+                }
+              : {})
+          })
+        });
+
+        const verifyData = await verifyRes.json().catch(() => ({}));
+
+        if (verifyData.success && verifyData.isPaid === true && verifyData.order) {
+          await finalizeVerifiedOrderSuccess(verifyData.order);
+          return true;
+        }
+
+        const gatewayStatus = String(verifyData.orderStatus || 'INCOMPLETE').toUpperCase();
+        if (verifyData.isFailed || ['FAILED', 'CANCELLED', 'USER_DROPPED', 'TERMINATED', 'VOID', 'EXPIRED', 'AMOUNT_MISMATCH', 'CURRENCY_MISMATCH'].includes(gatewayStatus)) {
+          setPaymentError(
+            verifyData.failureReason ||
+              verifyData.error ||
+              `Payment ${gatewayStatus.toLowerCase()}. Your order was not confirmed and you can safely retry or choose another payment method.`
+          );
+        } else if (gatewayStatus === 'ACTIVE' || gatewayStatus === 'PENDING') {
+          setPaymentError(
+            'Payment was not completed yet (status: pending). Please complete the payment to confirm your order.'
+          );
+        } else {
+          setPaymentError(
+            verifyData.error ||
+              `Payment verification did not return PAID (status: ${gatewayStatus}). Please retry safely.`
+          );
+        }
+        return false;
+      } catch {
+        setPaymentError(
+          'Unable to verify payment status with server right now. If your account was debited, please check My Orders or contact +91 7302187770.'
+        );
+        return false;
+      } finally {
+        setIsVerifying(false);
+      }
+    },
+    [
+      area,
+      city,
+      combinedStreet,
+      deliveryCharge,
+      discount,
+      effectiveUserId,
+      email,
+      finalTotal,
+      finalizeVerifiedOrderSuccess,
+      houseNo,
+      items,
+      landmark,
+      name,
+      orderNumber,
+      originalTotal,
+      phone,
+      pincode,
+      productSavings,
+      state,
+      subtotal,
+      totalSavings
+    ]
+  );
+
+  // Return URL (?cf_order_id=...) and Page Refresh Recovery
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const cfReturnOrderId = params.get('cf_order_id')?.trim();
+
+    if (cfReturnOrderId) {
+      setIsRestoringOrder(true);
+      setStep(3);
+      verifyAndFinalizeCashfreePayment(cfReturnOrderId).finally(() => {
+        setIsRestoringOrder(false);
+        try {
+          const cleanUrl = `${window.location.pathname}`;
+          window.history.replaceState({}, '', cleanUrl);
+        } catch {}
+      });
+      return;
+    }
+
+    // If user already completed an order in this session and refreshed the page, restore the verified receipt
+    try {
+      const completedId = sessionStorage.getItem(COMPLETED_ORDER_KEY);
+      if (completedId && items.length === 0 && !completedOrder) {
+        setIsRestoringOrder(true);
+        fetchOrderById(completedId)
+          .then((ord) => {
+            if (ord) {
+              setCompletedOrder(ord);
+              setStep(4);
+            }
+          })
+          .finally(() => setIsRestoringOrder(false));
+      } else if (items.length > 0) {
+        // Active new cart checkout: clear previous completed-order token
+        sessionStorage.removeItem(COMPLETED_ORDER_KEY);
+      }
+    } catch {}
+  }, []);
+
+  const clearCompletedTokenAndNavigate = useCallback(
+    (destFn: () => void) => {
+      try {
+        sessionStorage.removeItem(COMPLETED_ORDER_KEY);
+        sessionStorage.removeItem(DRAFT_ORDER_KEY);
+      } catch {}
+      destFn();
+    },
+    []
+  );
+
   // If user has saved addresses, allow quick selection
   const handleSelectSavedAddress = (addr: Address) => {
-    setName(addr.name);
-    setPhone(addr.phone);
-    setStreet(addr.street);
+    setStep1Error(null);
+    setName(addr.name || '');
+    setPhone(addr.phone || '');
+    setHouseNo(addr.houseNo || addr.street || '');
+    setArea(addr.area || '');
     setLandmark(addr.landmark || '');
-    setCity(addr.city);
-    setState(addr.state);
-    setPincode(addr.pincode);
+    setCity(addr.city || '');
+    setState(addr.state || 'Uttarakhand');
+    setPincode(addr.pincode || '');
   };
 
   const handleStep1Submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !email.trim() || !phone.trim() || !street.trim() || !city.trim() || !pincode.trim()) {
-      alert('Please fill in all mandatory delivery fields.');
+    setStep1Error(null);
+
+    const cleanName = name.trim();
+    const cleanEmail = email.trim();
+    const phoneDigits = phone.replace(/\D/g, '').slice(-10);
+    const cleanHouseNo = houseNo.trim();
+    const cleanArea = area.trim();
+    const cleanCity = city.trim();
+    const cleanState = state.trim();
+    const cleanPin = pincode.replace(/\D/g, '');
+
+    if (!cleanName || cleanName.length < 2) {
+      setStep1Error('Please enter your full name for delivery.');
       return;
     }
+    if (phoneDigits.length !== 10) {
+      setStep1Error('Please enter a valid 10-digit Indian mobile number.');
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setStep1Error('Please enter a valid email address for your order invoice and updates.');
+      return;
+    }
+    if (!cleanHouseNo) {
+      setStep1Error('Please enter your House / Flat No. or Building Name.');
+      return;
+    }
+    if (!cleanArea) {
+      setStep1Error('Please enter your Street / Area / Colony / Sector.');
+      return;
+    }
+    if (!cleanCity) {
+      setStep1Error('Please enter your City.');
+      return;
+    }
+    if (!cleanState) {
+      setStep1Error('Please select your State or Union Territory.');
+      return;
+    }
+    if (!/^\d{6}$/.test(cleanPin)) {
+      setStep1Error('Please enter a valid 6-digit Indian PIN code.');
+      return;
+    }
+
+    const formattedPhone = formatIndianPhone(phoneDigits);
+    setPhone(formattedPhone);
+
     if (saveToAccount && user) {
       saveAddress({
         id: `addr_${Date.now()}`,
-        name,
-        phone,
-        street,
-        landmark,
-        city,
-        state,
-        pincode
+        name: cleanName,
+        phone: formattedPhone,
+        houseNo: cleanHouseNo,
+        area: cleanArea,
+        street: [cleanHouseNo, cleanArea].filter(Boolean).join(', '),
+        landmark: landmark.trim(),
+        city: cleanCity,
+        state: cleanState,
+        pincode: cleanPin
       });
     }
     setStep(2);
@@ -591,12 +975,11 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     setTimeout(() => setCopiedPhone(false), 2000);
   };
 
-  // Payment Verification and Order Creation
+  // Manual Direct UPI UTR Submission (Maintains 'pending' status until verified — never falsely confirms payment)
   const handleVerifyUpiPayment = async () => {
     setPaymentError(null);
     setIsVerifying(true);
 
-    // Validate UTR / Reference
     const cleanUtr = utrNumber.trim();
     if (cleanUtr.length < 8) {
       setPaymentError('Please enter a valid 12-digit UPI Reference Number / UTR from your UPI payment app.');
@@ -605,9 +988,6 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     }
 
     try {
-      // Simulate gateway verification handshake
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-
       const orderItems: OrderItem[] = items.map((i) => ({
         productId: i.productId,
         productName: i.productName,
@@ -620,32 +1000,35 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         sku: i.sku
       }));
 
+      const formattedPhone = formatIndianPhone(phone);
       const shippingAddress: Address = {
         id: `addr_${Date.now()}`,
-        name,
-        phone,
-        street,
-        landmark,
-        city,
-        state,
-        pincode
+        name: name.trim(),
+        phone: formattedPhone,
+        houseNo: houseNo.trim(),
+        area: area.trim(),
+        street: combinedStreet,
+        landmark: landmark.trim(),
+        city: city.trim(),
+        state: state.trim(),
+        pincode: pincode.trim()
       };
 
-      let methodLabel = 'Pay by UPI Mobile Number';
+      let methodLabel = 'Direct UPI Mobile Transfer';
       if (upiMethod === 'qr') {
-        methodLabel = 'Pay by UPI QR Code';
+        methodLabel = 'Direct UPI QR Code';
       } else if (upiMethod === 'intent') {
-        methodLabel = 'Google Pay (1-Tap UPI)';
+        methodLabel = 'Direct UPI App Transfer';
       } else if (upiMethod === 'vpa') {
-        methodLabel = 'UPI ID / VPA';
+        methodLabel = 'Direct UPI ID / VPA';
       }
 
       const newOrderData: Omit<Order, 'id'> = {
         orderNumber,
-        userId: user?.uid,
-        customerName: name,
-        customerEmail: email,
-        customerPhone: phone,
+        userId: effectiveUserId,
+        customerName: name.trim(),
+        customerEmail: email.trim(),
+        customerPhone: formattedPhone,
         shippingAddress,
         items: orderItems,
         originalTotal,
@@ -657,76 +1040,106 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         deliveryCharge,
         totalAmount: finalTotal,
         paymentMethod: methodLabel,
-        // Maintain 'pending' until verified by merchant/gateway; do not falsely mark paid
         paymentStatus: 'pending',
-        paymentId: `PAY_UPI_${Date.now()}`,
+        isPaid: false,
+        currency: 'INR',
         upiReference: cleanUtr,
         orderStatus: 'Pending',
-        trackingNumber: `BD${Math.floor(100000000 + Math.random() * 900000000)}IN`,
+        trackingNumber: '',
         courierName: 'BlueDart Express',
         giftItem: subtotal >= 2000 ? 'Gold Imitation Bangles' : subtotal >= 1500 ? 'Gold Imitation Jhoomki' : undefined,
-        notes: upiMethod === 'phone'
-          ? `Paid via UPI Mobile Number: ${upiMobileNumber}`
-          : upiMethod === 'qr'
-          ? `Paid via UPI QR Code (Merchant: ${payeeName})`
-          : undefined,
+        notes:
+          upiMethod === 'phone'
+            ? `Manual UPI Mobile Number transfer to ${upiMobileNumber} (UTR: ${cleanUtr})`
+            : upiMethod === 'qr'
+            ? `Manual UPI QR Code transfer (UTR: ${cleanUtr})`
+            : `Manual UPI transfer (UTR: ${cleanUtr})`,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
 
       const savedOrder = await createOrder(newOrderData);
-
-      // Trigger Celebration Confetti
       try {
-        confetti({
-          particleCount: 100,
-          spread: 70,
-          origin: { y: 0.6 },
-          colors: ['#D4AF37', '#802336', '#FAF7F2']
-        });
-      } catch (e) {
-        // ignore confetti errors
-      }
+        sessionStorage.removeItem(DRAFT_ORDER_KEY);
+        sessionStorage.setItem(COMPLETED_ORDER_KEY, savedOrder.orderNumber || savedOrder.id);
+      } catch {}
 
       setCompletedOrder(savedOrder);
       clearCart();
       setStep(4);
       onOrderSuccess(savedOrder);
-    } catch (err) {
-      setPaymentError('Payment submission failed. Please check the UTR and try again or contact support.');
+    } catch {
+      setPaymentError('Order submission failed. Please verify your network connection and try again.');
     } finally {
       setIsVerifying(false);
     }
   };
 
-  // Cashfree Credit / Debit Card Payment Handlers
+  // Cashfree Online Payment Handler (UPI, Credit/Debit Card, Netbanking)
   const handleCashfreeCardPayment = async () => {
     setIsVerifying(true);
     setPaymentError(null);
 
     try {
+      const orderItems: OrderItem[] = items.map((i) => ({
+        productId: i.productId,
+        productName: i.productName,
+        variationId: i.variationId,
+        variationName: i.variationName,
+        quantity: i.quantity,
+        price: i.price,
+        mrp: i.mrp,
+        image: i.image,
+        sku: i.sku
+      }));
+
+      const formattedPhone = formatIndianPhone(phone);
+      const shippingAddress: Address = {
+        id: `addr_${Date.now()}`,
+        name: name.trim(),
+        phone: formattedPhone,
+        houseNo: houseNo.trim(),
+        area: area.trim(),
+        street: combinedStreet,
+        landmark: landmark.trim(),
+        city: city.trim(),
+        state: state.trim(),
+        pincode: pincode.trim()
+      };
+
       const res = await fetch('/api/payments/cashfree/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          orderId: `VDH_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
+          orderId: orderNumber,
+          orderNumber,
           orderAmount: finalTotal,
           customerName: name.trim() || 'Valued Patron',
           customerEmail: email.trim() || 'patron@vidhyaajewellery.com',
-          customerPhone: phone.trim() || '9758350524',
-          orderNote: `VIDHYAA Order ${orderNumber} (${items.length} items)`
+          customerPhone: formattedPhone || '9758350524',
+          shippingAddress,
+          items: orderItems,
+          subtotal,
+          discount,
+          deliveryCharge,
+          userId: effectiveUserId,
+          giftItem: subtotal >= 2000 ? 'Gold Imitation Bangles' : subtotal >= 1500 ? 'Gold Imitation Jhoomki' : undefined,
+          paymentMethods: 'upi,cc,dc,nb',
+          paymentMethod: 'Cashfree (UPI / Cards / Netbanking)',
+          orderNote: `VIDHYAA Jewellery Studio Order ${orderNumber} (${items.length} items)`
         })
       });
 
       const data = await res.json().catch(() => ({}));
-
       const paymentSessionId = data.paymentSessionId || data.payment_session_id;
-      const cfOrderId = data.orderId || data.order_id;
+      const cfOrderId = data.orderId || data.order_id || orderNumber;
       const cfMode = data.mode;
 
       if (!res.ok || !data.success || !paymentSessionId) {
         if (data.configured === false) {
-          setPaymentError('Cashfree Payments Gateway requires configuration. Please enter your Cashfree App ID & Secret Key in Admin Settings > Cashfree Gateway or set CASHFREE_APP_ID in your environment. You can also pay instantly via UPI.');
+          setPaymentError(
+            'Cashfree Payments Gateway is not yet configured with Live Merchant API credentials. You can pay via Direct UPI or configure Cashfree in Admin Settings.'
+          );
         } else {
           setPaymentError(data.error || 'Failed to initialize Cashfree Hosted Checkout session. Please try again.');
         }
@@ -734,7 +1147,6 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         return;
       }
 
-      // Ensure Cashfree JS SDK is loaded
       if (typeof (window as any).Cashfree === 'undefined') {
         await new Promise<void>((resolve, reject) => {
           const script = document.createElement('script');
@@ -749,128 +1161,42 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         mode: cfMode === 'production' ? 'production' : 'sandbox'
       });
 
-      // Launch Cashfree Hosted Checkout overlay
-      cashfree.checkout({
-        paymentSessionId,
-        redirectTarget: '_modal'
-      }).then(async (result: any) => {
-        if (result?.error) {
-          setIsVerifying(false);
-          setPaymentError(`Payment window closed or cancelled: ${result.error.message || 'Payment not completed.'}`);
-          return;
-        }
-        await verifyAndFinalizeCashfreePayment(cfOrderId);
-      }).catch(async () => {
-        await verifyAndFinalizeCashfreePayment(cfOrderId);
-      });
-
+      cashfree
+        .checkout({
+          paymentSessionId,
+          redirectTarget: '_modal'
+        })
+        .then(async (result: any) => {
+          if (result?.error) {
+            await verifyAndFinalizeCashfreePayment(cfOrderId);
+            return;
+          }
+          await verifyAndFinalizeCashfreePayment(cfOrderId);
+        })
+        .catch(async () => {
+          await verifyAndFinalizeCashfreePayment(cfOrderId);
+        });
     } catch (err: any) {
       setIsVerifying(false);
       setPaymentError(err?.message || 'Error communicating with Cashfree Payments Gateway.');
     }
   };
 
-  const verifyAndFinalizeCashfreePayment = async (cfOrderId: string) => {
-    setIsVerifying(true);
-    setPaymentError(null);
-    try {
-      const verifyRes = await fetch('/api/payments/cashfree/verify-order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orderId: cfOrderId })
-      });
+  if (isRestoringOrder && step !== 4) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 py-20 text-center space-y-4">
+        <Loader2 className="w-10 h-10 animate-spin text-[#802336] mx-auto" />
+        <h2 className="font-serif text-xl font-bold text-[#3B1E22]">
+          Verifying Your Payment Status...
+        </h2>
+        <p className="text-xs text-gray-500">
+          Please wait while we confirm your transaction with our payment gateway.
+        </p>
+      </div>
+    );
+  }
 
-      const verifyData = await verifyRes.json().catch(() => ({}));
-
-      if (verifyData.success && verifyData.isPaid) {
-        const orderItems: OrderItem[] = items.map((i) => ({
-          productId: i.productId,
-          productName: i.productName,
-          variationId: i.variationId,
-          variationName: i.variationName,
-          quantity: i.quantity,
-          price: i.price,
-          mrp: i.mrp,
-          image: i.image,
-          sku: i.sku
-        }));
-
-        const shippingAddress: Address = {
-          id: `addr_${Date.now()}`,
-          name,
-          phone,
-          street,
-          landmark,
-          city,
-          state,
-          pincode
-        };
-
-        const methodLabel = verifyData.paymentDetails?.paymentMethod || 'Credit / Debit Card (Cashfree)';
-
-        const newOrderData: Omit<Order, 'id'> = {
-          orderNumber,
-          userId: user?.uid,
-          customerName: name,
-          customerEmail: email,
-          customerPhone: phone,
-          shippingAddress,
-          items: orderItems,
-          originalTotal,
-          productSavings,
-          couponSavings: discount,
-          totalSavings,
-          subtotal,
-          discount,
-          deliveryCharge,
-          totalAmount: finalTotal,
-          paymentMethod: methodLabel,
-          paymentStatus: 'paid', // Verified server-side via Cashfree official API!
-          paymentId: String(verifyData.paymentDetails?.cfPaymentId || cfOrderId),
-          cfOrderId: String(verifyData.cfOrderId || cfOrderId),
-          cardNetwork: verifyData.paymentDetails?.cardNetwork,
-          cardType: verifyData.paymentDetails?.cardType,
-          orderStatus: 'Confirmed',
-          trackingNumber: `BD${Math.floor(100000000 + Math.random() * 900000000)}IN`,
-          courierName: 'BlueDart Express',
-          notes: `Paid via Cashfree Card Gateway. Transaction: ${verifyData.paymentDetails?.cfPaymentId || cfOrderId}`,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-
-        const savedOrder = await createOrder(newOrderData);
-
-        try {
-          confetti({
-            particleCount: 120,
-            spread: 80,
-            origin: { y: 0.6 },
-            colors: ['#D4AF37', '#802336', '#0F5B46', '#FAF7F2']
-          });
-        } catch {}
-
-        setCompletedOrder(savedOrder);
-        clearCart();
-        setStep(4);
-        onOrderSuccess(savedOrder);
-      } else {
-        const status = verifyData.orderStatus || 'INCOMPLETE';
-        if (status === 'ACTIVE' || status === 'PENDING') {
-          setPaymentError('Card payment is pending or was not completed. You can retry with your card or choose UPI.');
-        } else if (status === 'EXPIRED' || status === 'TERMINATED') {
-          setPaymentError('The payment session expired. Please retry or choose UPI.');
-        } else {
-          setPaymentError(`Payment status: ${status}. Your card was not debited. You can retry safely.`);
-        }
-      }
-    } catch (err: any) {
-      setPaymentError('Server verification error. If your card was debited, please contact atelier support.');
-    } finally {
-      setIsVerifying(false);
-    }
-  };
-
-  if (items.length === 0 && step !== 4) {
+  if (items.length === 0 && step !== 4 && !completedOrder) {
     return (
       <div className="max-w-3xl mx-auto px-4 py-20 text-center space-y-4">
         <div className="w-16 h-16 rounded-full bg-[#FAF7F2] flex items-center justify-center mx-auto text-[#802336]">
@@ -882,12 +1208,22 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         <p className="text-xs text-gray-500">
           Please add jewellery pieces to your bag before proceeding to checkout.
         </p>
-        <button
-          onClick={onNavigateHome}
-          className="bg-[#3B1E22] text-[#FAF7F2] px-6 py-2.5 rounded-xl text-xs font-semibold uppercase tracking-wider hover:bg-[#802336] transition-colors cursor-pointer"
-        >
-          Return to Collections
-        </button>
+        <div className="flex items-center justify-center gap-3">
+          <button
+            onClick={onNavigateHome}
+            className="bg-[#3B1E22] text-[#FAF7F2] px-6 py-2.5 rounded-xl text-xs font-semibold uppercase tracking-wider hover:bg-[#802336] transition-colors cursor-pointer"
+          >
+            Return to Collections
+          </button>
+          {onViewMyOrders && (
+            <button
+              onClick={onViewMyOrders}
+              className="bg-white border border-[#E8DCCF] text-[#3B1E22] px-6 py-2.5 rounded-xl text-xs font-semibold uppercase tracking-wider hover:bg-[#FAF7F2] transition-colors cursor-pointer"
+            >
+              View My Orders
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -901,20 +1237,26 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
           {[
             { num: 1, label: 'Delivery' },
             { num: 2, label: 'Review' },
-            { num: 3, label: 'UPI Payment' },
+            { num: 3, label: 'Payment' },
             { num: 4, label: 'Confirmed' }
           ].map((s) => (
             <div key={s.num} className="relative z-10 flex flex-col items-center">
               <div
                 className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
                   step === s.num
-                    ? 'bg-[#802336] text-white ring-4 ring-[#802336]/20'
+                    ? step === 4 && isOrderPaid(completedOrder)
+                      ? 'bg-emerald-700 text-white ring-4 ring-emerald-200'
+                      : 'bg-[#802336] text-white ring-4 ring-[#802336]/20'
                     : step > s.num
                     ? 'bg-emerald-700 text-white'
                     : 'bg-white border-2 border-[#E8DCCF] text-gray-400'
                 }`}
               >
-                {step > s.num ? <Check className="w-4 h-4" /> : s.num}
+                {step > s.num || (step === 4 && isOrderPaid(completedOrder)) ? (
+                  <Check className="w-4 h-4" />
+                ) : (
+                  s.num
+                )}
               </div>
               <span
                 className={`text-[11px] font-semibold mt-1 uppercase tracking-wider ${
@@ -1043,28 +1385,51 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-gray-700 mb-1">
-                Street Address, House/Flat No., Building Name *
-              </label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. Flat 302, Royal Palms, M.I. Road"
-                value={street}
-                onChange={(e) => setStreet(e.target.value)}
-                className="w-full px-3.5 py-2.5 text-xs border border-[#E8DCCF] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#802336]"
-              />
+            {step1Error && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-600" />
+                <span>{step1Error}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-700 mb-1">
+                  House / Flat No. / Building Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Flat 302, Royal Palms"
+                  value={houseNo}
+                  onChange={(e) => setHouseNo(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-xs border border-[#E8DCCF] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#802336]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-700 mb-1">
+                  Street / Area / Colony *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Solani Puram West, M.I. Road"
+                  value={area}
+                  onChange={(e) => setArea(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-xs border border-[#E8DCCF] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#802336]"
+                />
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-gray-700 mb-1">
                   Landmark (Optional)
                 </label>
                 <input
                   type="text"
-                  placeholder="Near IIT Roorkee"
+                  placeholder="e.g. Near IIT Roorkee Main Gate"
                   value={landmark}
                   onChange={(e) => setLandmark(e.target.value)}
                   className="w-full px-3.5 py-2.5 text-xs border border-[#E8DCCF] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#802336]"
@@ -1078,30 +1443,50 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                 <input
                   type="text"
                   required
-                  placeholder="Roorkee or Delhi"
+                  placeholder="Roorkee / Jaipur / Delhi"
                   value={city}
                   onChange={(e) => setCity(e.target.value)}
                   className="w-full px-3.5 py-2.5 text-xs border border-[#E8DCCF] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#802336]"
                 />
               </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-700 mb-1">
+                  State / Union Territory *
+                </label>
+                <select
+                  required
+                  value={state}
+                  onChange={(e) => setState(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-xs border border-[#E8DCCF] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#802336] bg-white"
+                >
+                  {INDIAN_STATES_AND_UTS.map((st) => (
+                    <option key={st} value={st}>
+                      {st}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-gray-700 mb-1">
-                  Pincode *
+                  PIN Code (6 Digits) *
                 </label>
                 <input
                   type="text"
                   required
                   maxLength={6}
-                  placeholder="302001"
+                  placeholder="247667"
                   value={pincode}
-                  onChange={(e) => setPincode(e.target.value)}
-                  className="w-full px-3.5 py-2.5 text-xs border border-[#E8DCCF] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#802336]"
+                  onChange={(e) => setPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  className="w-full px-3.5 py-2.5 text-xs border border-[#E8DCCF] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#802336] font-mono"
                 />
               </div>
             </div>
 
-            <div className="pt-2 flex items-center justify-between">
+            <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
                 <input
                   type="checkbox"
@@ -1114,7 +1499,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
 
               <button
                 type="submit"
-                className="bg-[#0F4C4A] hover:bg-[#0A3635] text-white px-8 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow-md flex items-center gap-2"
+                className="bg-[#0F4C4A] hover:bg-[#0A3635] text-white px-8 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow-md flex items-center justify-center gap-2"
               >
                 <span>Continue to Review</span>
                 <ArrowRight className="w-4 h-4 text-[#DFB982]" />
@@ -1152,10 +1537,10 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                 Delivering To:
               </span>
               <p className="font-bold text-[#3B1E22]">
-                {name} • <span className="font-normal text-gray-600">{phone}</span>
+                {name} • <span className="font-normal text-gray-600 font-mono">{formatIndianPhone(phone)}</span>
               </p>
               <p className="text-gray-600">
-                {street}, {landmark ? `${landmark}, ` : ''}{city}, {state} - {pincode}
+                {combinedStreet}{landmark ? `, ${landmark}` : ''}, {city}, {state} - {pincode}
               </p>
             </div>
 
@@ -1273,7 +1658,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                   </span>
                   <div className="font-bold text-[#3B1E22] flex items-center gap-2">
                     <span>
-                      {upiMethod === 'card' && 'Credit / Debit Card (Cashfree 3D Secure)'}
+                      {upiMethod === 'card' && 'Cashfree Online Payment (UPI • Cards • Netbanking)'}
                       {upiMethod === 'phone' && 'Pay by UPI Mobile Number'}
                       {upiMethod === 'qr' && 'Pay by UPI QR Code'}
                       {upiMethod === 'intent' && 'Google Pay (1-Tap UPI)'}
@@ -1285,8 +1670,8 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                   </div>
                   <span className="text-[11px] text-gray-600">
                     {upiMethod === 'card'
-                      ? 'Official Hosted Checkout • Supports Visa, Mastercard, RuPay & all major banks'
-                      : 'Pay securely using Google Pay, PhonePe, Paytm or any UPI app'}
+                      ? 'Official Hosted Checkout • Instant verification for UPI, Visa, Mastercard, RuPay & Netbanking'
+                      : 'Direct UPI transfer verified by our studio team'}
                   </span>
                 </div>
               </div>
@@ -1320,7 +1705,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         </div>
       )}
 
-      {/* STEP 3: Payment Method Selection & UPI Flow */}
+      {/* STEP 3: Payment Method Selection */}
       {step === 3 && (
         <div className="bg-white rounded-2xl border border-[#E8DCCF] p-6 sm:p-8 shadow-sm space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-[#E8DCCF] gap-3">
@@ -1328,17 +1713,17 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
               <div className="flex items-center gap-2">
                 <span className="bg-[#802336] text-white text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase flex items-center gap-1 shadow-xs">
                   <ShieldCheck className="w-3 h-3 text-[#DFB982]" />
-                  <span>UPI Payment Gateway</span>
+                  <span>Secure Checkout</span>
                 </span>
                 <span className="text-xs text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                  All UPI Apps Accepted
+                  Order #{orderNumber}
                 </span>
               </div>
               <h2 className="font-serif text-2xl font-bold text-[#3B1E22] mt-1.5">
                 Select Payment Method
               </h2>
               <p className="text-xs text-gray-500">
-                Choose your preferred payment method below. Mobile number and instant gateway are both supported.
+                Choose Cashfree instant online checkout (UPI, Cards, Netbanking) or direct UPI below.
               </p>
             </div>
             <div className="sm:text-right bg-[#FAF7F2] p-3 rounded-xl border border-[#E8DCCF]">
@@ -1351,7 +1736,6 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
             </div>
           </div>
 
-          {/* PAYMENT METHOD SELECTION SECTION (Visible on Mobile & Desktop) */}
           <div className="space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 pb-1">
               <div>
@@ -1359,7 +1743,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                   Select Payment Option (Choose Preferred Method)
                 </label>
                 <p className="text-xs text-gray-500">
-                  Credit / Debit Cards, UPI QR Code, and Direct Mobile UPI are all supported.
+                  Cashfree Instant Gateway (UPI, Cards & Netbanking), UPI QR Code, and Direct Mobile UPI are supported.
                 </p>
               </div>
               <span className="text-[11px] font-semibold text-[#802336] bg-[#FAF7F2] px-3 py-1 rounded-full border border-[#E8DCCF]">
@@ -1367,9 +1751,8 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
               </span>
             </div>
 
-            {/* THREE PRIMARY PAYMENT METHOD CARDS - DISPLAYED TOGETHER (Stacked on Mobile, 3 Columns on Desktop) */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              {/* Option 1: Credit / Debit Card (Cashfree Payments Gateway) */}
+              {/* Option 1: Cashfree Payments Gateway (UPI, Cards & Netbanking) */}
               <button
                 type="button"
                 onClick={() => setUpiMethod('card')}
@@ -1388,10 +1771,10 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                     </div>
                     <div className="flex items-center gap-1.5">
                       <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-800 px-2.5 py-1 rounded-full border border-emerald-200">
-                        Cashfree
+                        Instant Verify
                       </span>
                       <span className="text-[10px] font-bold uppercase tracking-wider bg-purple-50 text-purple-800 px-2 py-1 rounded-full border border-purple-200">
-                        Visa • MC • RuPay
+                        UPI • Cards
                       </span>
                     </div>
                   </div>
@@ -1400,13 +1783,13 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                     Option 1
                   </span>
                   <h3 className="text-base font-bold text-[#3B1E22] mt-0.5">
-                    Credit / Debit Card
+                    Online Payment (UPI / Cards)
                   </h3>
                   <p className="text-xs font-semibold text-[#0F5B46] mt-1">
-                    Pay ₹{finalTotal.toLocaleString('en-IN')} via Card
+                    Pay ₹{finalTotal.toLocaleString('en-IN')} via Cashfree
                   </p>
                   <p className="text-[11px] text-gray-500 mt-1 leading-snug">
-                    Official 3D Secure checkout. Visa, Mastercard, RuPay & all major banks supported.
+                    Official 3D Secure & UPI checkout. Supports GPay, PhonePe, Visa, Mastercard, RuPay & Netbanking.
                   </p>
                 </div>
 
@@ -1587,7 +1970,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                         Selected Method
                       </span>
                       <h3 className="font-serif text-lg font-bold text-[#3B1E22]">
-                        Credit / Debit Card (Cashfree Payments)
+                        Cashfree Online Checkout (UPI • Cards • Netbanking)
                       </h3>
                     </div>
                     <div className="sm:text-right">
@@ -1600,20 +1983,22 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Supported Card Networks Banner */}
+                  {/* Supported Payment Networks Banner */}
                   <div className="p-4 bg-[#FAF7F2] rounded-xl border border-[#DFB982] space-y-2.5">
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">
-                        Accepted Card Networks
+                        Accepted Payment Modes
                       </span>
                       <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
                         <ShieldCheck className="w-3 h-3 text-emerald-700" />
-                        3D Secure 2.0
+                        3D Secure & Instant Verify
                       </span>
                     </div>
 
-                    {/* Card Network Logos / Badges */}
                     <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <span className="px-2.5 py-1 bg-white border border-emerald-300 rounded-md text-xs font-black tracking-wider text-emerald-800 shadow-xs">
+                        UPI (GPay / PhonePe / Paytm)
+                      </span>
                       <span className="px-2.5 py-1 bg-white border border-gray-300 rounded-md text-xs font-black tracking-wider text-blue-900 shadow-xs">
                         VISA
                       </span>
@@ -1623,14 +2008,8 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                       <span className="px-2.5 py-1 bg-white border border-gray-300 rounded-md text-xs font-black tracking-wider text-emerald-800 shadow-xs">
                         RuPay
                       </span>
-                      <span className="px-2.5 py-1 bg-white border border-gray-300 rounded-md text-xs font-bold tracking-wider text-cyan-800 shadow-xs">
-                        Maestro
-                      </span>
                       <span className="px-2.5 py-1 bg-white border border-gray-300 rounded-md text-xs font-bold tracking-wider text-blue-700 shadow-xs">
-                        Amex
-                      </span>
-                      <span className="px-2.5 py-1 bg-white border border-gray-300 rounded-md text-xs font-bold tracking-wider text-gray-700 shadow-xs">
-                        Diners Club
+                        Netbanking
                       </span>
                     </div>
                   </div>
@@ -1639,10 +2018,10 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                   <div className="p-3.5 bg-blue-50/80 border border-blue-200 rounded-xl text-xs text-blue-950 space-y-1.5">
                     <div className="font-bold flex items-center gap-1.5 text-blue-900">
                       <Lock className="w-3.5 h-3.5 text-blue-700 flex-shrink-0" />
-                      <span>Official PCI-DSS Level 1 Hosted Checkout</span>
+                      <span>Official Cashfree Hosted Checkout</span>
                     </div>
                     <p className="text-[11px] leading-relaxed text-blue-900/90">
-                      You will be securely redirected to the official Cashfree 3D Secure page to enter your card details. We never collect or store your card number, CVV, or OTP on our servers.
+                      Complete your payment via Cashfree's PCI-DSS Level 1 gateway using UPI, Credit/Debit Card, or Netbanking. Order confirmation appears immediately after gateway verification.
                     </p>
                     {cashfreeStatus && (
                       <div className="pt-1 flex flex-wrap items-center gap-2 text-[10px]">
@@ -1652,7 +2031,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                             ? 'bg-purple-100 text-purple-900 border border-purple-200'
                             : 'bg-amber-100 text-amber-900 border border-amber-200'
                         }`}>
-                          {cashfreeStatus.env === 'PRODUCTION' ? 'Production (Live Cards)' : 'Sandbox Test Mode'}
+                          {cashfreeStatus.env === 'PRODUCTION' ? 'Production (Live Payments)' : 'Sandbox Test Mode'}
                         </span>
                         {!cashfreeStatus.isConfigured && (
                           <span className="text-amber-800 font-semibold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
@@ -1671,7 +2050,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                     </div>
                   )}
 
-                  {/* Card Payment Button */}
+                  {/* Payment Action Button */}
                   <button
                     type="button"
                     disabled={isVerifying}
@@ -1681,12 +2060,12 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                     {isVerifying ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin text-[#DFB982]" />
-                        <span>Initializing Cashfree Checkout...</span>
+                        <span>Processing Cashfree Checkout...</span>
                       </>
                     ) : (
                       <>
                         <CreditCard className="w-4 h-4 text-[#DFB982]" />
-                        <span>Proceed to Card Payment (₹{finalTotal.toLocaleString('en-IN')})</span>
+                        <span>Pay ₹{finalTotal.toLocaleString('en-IN')} Now</span>
                         <Lock className="w-3.5 h-3.5 text-white/80 ml-1" />
                       </>
                     )}
@@ -1988,7 +2367,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                 ) : (
                   <>
                     <CreditCard className="w-4 h-4 text-[#DFB982]" />
-                    <span>Pay ₹{finalTotal.toLocaleString('en-IN')} via Card</span>
+                    <span>Pay ₹{finalTotal.toLocaleString('en-IN')} Now</span>
                     <Lock className="w-3.5 h-3.5 text-white/80" />
                   </>
                 )}
@@ -2001,16 +2380,16 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                 className="bg-[#0F4C4A] hover:bg-[#0A3635] text-white px-8 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow-lg disabled:opacity-50 flex items-center gap-2"
               >
                 {isVerifying ? (
-                  <span>Processing Order...</span>
+                  <span>Submitting Order...</span>
                 ) : upiMethod === 'phone' ? (
                   <>
                     <ShieldCheck className="w-4 h-4 text-[#DFB982]" />
-                    <span>Place Order (Pay to {upiMobileNumber})</span>
+                    <span>Submit Order (Pay to {upiMobileNumber})</span>
                   </>
                 ) : (
                   <>
                     <ShieldCheck className="w-4 h-4 text-[#DFB982]" />
-                    <span>Verify Payment & Place Order</span>
+                    <span>Submit UTR & Place Order</span>
                   </>
                 )}
               </button>
@@ -2019,13 +2398,35 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         </div>
       )}
 
-      {/* STEP 4: Order Confirmation & Receipt (WhatsApp Studio Confirmation Flow) */}
+      {/* STEP 4: Verified Payment Success Screen OR Honest Pending UTR Submission Screen */}
       {step === 4 && completedOrder && (
-        <WhatsAppOrderConfirmationView
-          order={completedOrder}
-          onTrackOrder={onTrackOrder}
-          onContinueShopping={onNavigateHome}
-        />
+        isOrderPaid(completedOrder) ? (
+          <VerifiedPaymentSuccessView
+            order={completedOrder}
+            onViewMyOrders={() =>
+              clearCompletedTokenAndNavigate(
+                onViewMyOrders
+                  ? onViewMyOrders
+                  : () => onTrackOrder(completedOrder.orderNumber || completedOrder.id)
+              )
+            }
+            onTrackOrder={(num) => clearCompletedTokenAndNavigate(() => onTrackOrder(num))}
+            onContinueShopping={() => clearCompletedTokenAndNavigate(onNavigateHome)}
+          />
+        ) : (
+          <WhatsAppOrderConfirmationView
+            order={completedOrder}
+            onViewMyOrders={() =>
+              clearCompletedTokenAndNavigate(
+                onViewMyOrders
+                  ? onViewMyOrders
+                  : () => onTrackOrder(completedOrder.orderNumber || completedOrder.id)
+              )
+            }
+            onTrackOrder={(num) => clearCompletedTokenAndNavigate(() => onTrackOrder(num))}
+            onContinueShopping={() => clearCompletedTokenAndNavigate(onNavigateHome)}
+          />
+        )
       )}
     </div>
   );

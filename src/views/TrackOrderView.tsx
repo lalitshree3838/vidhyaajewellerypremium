@@ -14,7 +14,7 @@ import {
   MessageCircle
 } from 'lucide-react';
 import { Order, OrderStatus } from '../types';
-import { fetchOrderById } from '../lib/dbService';
+import { fetchOrderById, isOrderPaid, formatFullAddress } from '../lib/dbService';
 import { MetadataManager } from '../components/MetadataManager';
 import { isGenuineImageUrl } from '../lib/sampleData';
 
@@ -135,14 +135,14 @@ export const TrackOrderView: React.FC<TrackOrderViewProps> = ({
                 </span>
                 <span
                   className={`text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full ${
-                    order.orderStatus === 'Delivered' || order.paymentStatus === 'paid' || order.orderStatus === 'Confirmed'
+                    order.orderStatus === 'Delivered' || isOrderPaid(order) || order.orderStatus === 'Confirmed'
                       ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                      : order.orderStatus === 'Cancelled'
+                      : order.orderStatus === 'Cancelled' || order.paymentStatus === 'failed'
                       ? 'bg-red-100 text-red-800'
                       : 'bg-amber-100 text-amber-800'
                   }`}
                 >
-                  {order.paymentStatus === 'paid' || order.orderStatus === 'Confirmed' ? '✓ CONFIRMED' : order.orderStatus}
+                  {isOrderPaid(order) ? `✓ PAID • ${order.orderStatus}` : order.paymentStatus === 'failed' ? 'PAYMENT FAILED' : order.orderStatus}
                 </span>
               </div>
               <div className="flex items-center gap-2 text-xs text-gray-400 mt-1">
@@ -262,22 +262,24 @@ export const TrackOrderView: React.FC<TrackOrderViewProps> = ({
               </span>
               <p className="text-[#3B1E22] font-semibold">{order.customerName}</p>
               <p className="text-gray-500">
-                {order.shippingAddress.street}, {order.shippingAddress.city}, {order.shippingAddress.state} - {order.shippingAddress.pincode}
+                {formatFullAddress(order.shippingAddress)}
               </p>
               <p className="text-gray-500">Phone: {order.customerPhone}</p>
             </div>
 
             <div className="space-y-1 sm:text-right">
               <span className="font-bold text-gray-700 uppercase tracking-wider block">
-                Payment Info (UPI)
+                Payment Info
               </span>
-              <p className="text-gray-600">Method: <strong>{order.paymentMethod || 'UPI'}</strong></p>
+              <p className="text-gray-600">Method: <strong>{order.paymentMethod || 'Online Payment'}</strong></p>
               <p className="text-gray-600">
-                Status: <strong className={order.paymentStatus === 'paid' ? 'text-emerald-700' : 'text-amber-700'}>
-                  {order.paymentStatus === 'paid' ? 'Paid (Verified)' : 'Pending Verification'}
+                Status: <strong className={isOrderPaid(order) ? 'text-emerald-700' : order.paymentStatus === 'failed' ? 'text-red-700' : 'text-amber-700'}>
+                  {isOrderPaid(order) ? '✓ PAYMENT DONE' : order.paymentStatus === 'failed' ? 'Payment Failed' : 'Pending Verification'}
                 </strong>
               </p>
-              <p className="text-gray-600">Reference: <strong>{order.upiReference}</strong></p>
+              <p className="text-gray-600">
+                Reference: <strong>{order.paymentId || order.upiReference || (order.cfOrderId ? String(order.cfOrderId) : 'Pending')}</strong>
+              </p>
               <p className="font-serif text-base font-bold text-[#802336] pt-1">
                 Total Amount: ₹{Number(order.totalAmount || (order as any).total || 0).toLocaleString('en-IN')}
               </p>

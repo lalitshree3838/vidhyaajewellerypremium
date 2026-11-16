@@ -3,4 +3,6 @@ dist/
 .env
 .env.local
 .admin-secrets/
+.backups/
+cashfree-config.json
 *.log

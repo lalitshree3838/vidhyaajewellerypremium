@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Order, Address } from '../types';
-import { fetchOrdersByUserId } from '../lib/dbService';
+import { fetchOrdersByUserId, isOrderPaid, formatFullAddress } from '../lib/dbService';
 
 interface AccountViewProps {
   onNavigateOrders: () => void;
@@ -35,7 +35,11 @@ export const AccountView: React.FC<AccountViewProps> = ({
   onTrackOrder,
   onOpenAuth
 }) => {
-  const { user, userProfile, isAdmin, signOut, saveAddress, deleteAddress, updateUserProfileData } = useAuth();
+  const { user, patronSession, userProfile, isAdmin, signOut, saveAddress, deleteAddress, updateUserProfileData } = useAuth();
+  const activeCustomer = user || patronSession;
+  const activeUid = user?.uid || patronSession?.uid || '';
+  const activeEmail = user?.email || patronSession?.email || '';
+  const activePhone = userProfile?.phone || user?.phoneNumber || patronSession?.phone || patronSession?.mobile || '';
 
   const [activeTab, setActiveTab] = useState<'orders' | 'addresses' | 'profile'>('orders');
   const [orders, setOrders] = useState<Order[]>([]);
@@ -91,15 +95,15 @@ export const AccountView: React.FC<AccountViewProps> = ({
   const [addrPincode, setAddrPincode] = useState('');
 
   useEffect(() => {
-    if (user) {
+    if (activeCustomer) {
       setLoadingOrders(true);
-      fetchOrdersByUserId(user.uid)
+      fetchOrdersByUserId(activeUid, activeEmail, activePhone)
         .then(setOrders)
         .finally(() => setLoadingOrders(false));
     }
-  }, [user]);
+  }, [activeUid, activeEmail, activePhone]);
 
-  if (!user) {
+  if (!activeCustomer) {
     return (
       <div className="max-w-md mx-auto px-4 py-20 text-center space-y-4">
         <div className="w-16 h-16 rounded-full bg-[#FAF7F2] flex items-center justify-center mx-auto text-[#802336]">
@@ -151,12 +155,12 @@ export const AccountView: React.FC<AccountViewProps> = ({
       <div className="bg-white rounded-3xl border border-[#E8DCCF] p-6 sm:p-8 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
         <div className="flex items-center gap-4">
           <div className="w-16 h-16 rounded-full bg-[#FAF7F2] border-2 border-[#D4AF37] flex items-center justify-center text-[#802336] font-serif text-2xl font-bold">
-            {user.displayName?.charAt(0).toUpperCase() || 'P'}
+            {activeCustomer.displayName?.charAt(0).toUpperCase() || 'P'}
           </div>
           <div>
             <div className="flex items-center gap-2">
               <h1 className="font-serif text-2xl font-bold text-[#241C1A]">
-                {user.displayName || 'VIDHYAA Patron'}
+                {activeCustomer.displayName || 'VIDHYAA Patron'}
               </h1>
               {isAdmin && (
                 <span className="bg-[#802336] text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">
@@ -165,7 +169,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
               )}
             </div>
             <p className="text-xs text-gray-500 font-mono mt-0.5">
-              {user.phoneNumber || userProfile?.phone || (user.email && !user.email.includes('@phone.vidhyaajewellery.com') ? user.email : 'Verified Mobile Patron')}
+              {activePhone || (activeEmail && !activeEmail.includes('@phone.vidhyaajewellery.com') ? activeEmail : 'Verified Mobile Patron')}
             </p>
           </div>
         </div>
@@ -246,87 +250,119 @@ export const AccountView: React.FC<AccountViewProps> = ({
               </p>
             </div>
           ) : (
-            orders.map((ord) => (
-              <div
-                key={ord.id}
-                className="bg-white rounded-2xl border border-[#E8DCCF] p-5 shadow-xs space-y-4"
-              >
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-3 border-b border-gray-100 gap-2">
-                  <div>
-                    <span className="font-mono text-xs font-bold text-[#3B1E22]">
-                      Order #{ord.orderNumber}
-                    </span>
-                    <span className="text-[11px] text-gray-400 ml-2">
-                      {new Date(ord.createdAt).toLocaleDateString('en-IN', {
-                        day: 'numeric',
-                        month: 'short',
-                        year: 'numeric'
-                      })}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={`text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full ${
-                        ord.orderStatus === 'Delivered' || ord.paymentStatus === 'paid' || ord.orderStatus === 'Confirmed'
-                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                          : ord.orderStatus === 'Cancelled'
-                          ? 'bg-red-100 text-red-800'
-                          : 'bg-amber-100 text-amber-800'
-                      }`}
-                    >
-                      {ord.paymentStatus === 'paid' || ord.orderStatus === 'Confirmed' ? '✓ CONFIRMED' : ord.orderStatus}
-                    </span>
-                    <button
-                      onClick={() => onTrackOrder(ord.orderNumber)}
-                      className="text-xs font-semibold text-[#802336] hover:underline flex items-center gap-1 cursor-pointer"
-                    >
-                      <Truck className="w-3.5 h-3.5" />
-                      Track Shipment
-                    </button>
-                  </div>
-                </div>
+            orders.map((ord) => {
+              const paid = isOrderPaid(ord);
+              const failed = ord.paymentStatus === 'failed';
+              const txRef = ord.paymentId || ord.upiReference || (ord.cfOrderId ? String(ord.cfOrderId) : '');
+              const fullAddress = formatFullAddress(ord.shippingAddress);
 
-                {/* Items */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {ord.items.map((it, i) => (
-                    <div key={i} className="flex items-center gap-3 text-xs">
-                      {it.image ? (
-                        <img
-                          src={it.image}
-                          alt=""
-                          className="w-12 h-12 rounded-lg object-cover border border-[#E8DCCF]"
-                          onError={(e) => {
-                            (e.target as HTMLElement).style.display = 'none';
-                          }}
-                        />
-                      ) : (
-                        <div className="w-12 h-12 rounded-lg bg-[#FAF7F2] border border-[#E8DCCF] flex items-center justify-center text-[#802336] flex-shrink-0">
-                          <ShoppingBag className="w-5 h-5 opacity-70" />
-                        </div>
-                      )}
-                      <div>
-                        <h4 className="font-bold text-[#241C1A] line-clamp-1">
-                          {it.productName}
-                        </h4>
-                        <span className="text-[10px] text-[#802336]">{it.variationName}</span>
-                        <div className="text-gray-500 text-[11px]">
-                          Qty: {it.quantity} • ₹{(it.price * it.quantity).toLocaleString('en-IN')}
+              return (
+                <div
+                  key={ord.id}
+                  className="bg-white rounded-2xl border border-[#E8DCCF] p-5 shadow-xs space-y-4"
+                >
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-3 border-b border-gray-100 gap-2">
+                    <div>
+                      <span className="font-mono text-xs font-bold text-[#3B1E22]">
+                        Order #{ord.orderNumber}
+                      </span>
+                      <span className="text-[11px] text-gray-400 ml-2">
+                        {new Date(ord.createdAt).toLocaleString('en-IN', {
+                          timeZone: 'Asia/Kolkata',
+                          day: 'numeric',
+                          month: 'short',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full border ${
+                          paid
+                            ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                            : failed
+                            ? 'bg-red-100 text-red-800 border-red-300'
+                            : 'bg-amber-100 text-amber-800 border-amber-300'
+                        }`}
+                      >
+                        {paid ? '✓ PAYMENT DONE' : failed ? 'PAYMENT FAILED' : 'PAYMENT PENDING'}
+                      </span>
+                      <span
+                        className={`text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full border ${
+                          ord.orderStatus === 'Delivered' || ord.orderStatus === 'Confirmed'
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            : ord.orderStatus === 'Processing' || ord.orderStatus === 'Shipped'
+                            ? 'bg-blue-50 text-blue-800 border-blue-200'
+                            : ord.orderStatus === 'Cancelled'
+                            ? 'bg-red-50 text-red-800 border-red-200'
+                            : 'bg-gray-50 text-gray-700 border-gray-200'
+                        }`}
+                      >
+                        {ord.orderStatus === 'Confirmed' ? '✓ ORDER CONFIRMED' : ord.orderStatus}
+                      </span>
+                      <button
+                        onClick={() => onTrackOrder(ord.orderNumber)}
+                        className="text-xs font-semibold text-[#802336] hover:underline flex items-center gap-1 cursor-pointer ml-1"
+                      >
+                        <Truck className="w-3.5 h-3.5" />
+                        Track Shipment
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Items */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {ord.items.map((it, i) => (
+                      <div key={i} className="flex items-center gap-3 text-xs">
+                        {it.image ? (
+                          <img
+                            src={it.image}
+                            alt={it.productName}
+                            className="w-12 h-12 rounded-lg object-cover border border-[#E8DCCF]"
+                            onError={(e) => {
+                              (e.target as HTMLElement).style.display = 'none';
+                            }}
+                          />
+                        ) : (
+                          <div className="w-12 h-12 rounded-lg bg-[#FAF7F2] border border-[#E8DCCF] flex items-center justify-center text-[#802336] flex-shrink-0">
+                            <ShoppingBag className="w-5 h-5 opacity-70" />
+                          </div>
+                        )}
+                        <div>
+                          <h4 className="font-bold text-[#241C1A] line-clamp-1">
+                            {it.productName}
+                          </h4>
+                          {it.variationName && (
+                            <span className="text-[10px] text-[#802336] block">{it.variationName}</span>
+                          )}
+                          <div className="text-gray-500 text-[11px]">
+                            Qty: {it.quantity} • ₹{(it.price * it.quantity).toLocaleString('en-IN')}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
 
-                <div className="flex justify-between items-center pt-2 border-t border-gray-100 text-xs">
-                  <span className="text-gray-500">
-                    Paid via UPI (Ref: {ord.upiReference})
-                  </span>
-                  <span className="font-bold text-sm text-[#3B1E22]">
-                    Total: ₹{ord.totalAmount.toLocaleString('en-IN')}
-                  </span>
+                  {fullAddress && (
+                    <div className="text-[11px] text-gray-600 bg-[#FAF7F2] px-3 py-2 rounded-lg border border-[#E8DCCF]/70">
+                      <strong className="text-[#3B1E22]">Delivery Address:</strong> {fullAddress}
+                    </div>
+                  )}
+
+                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 pt-2 border-t border-gray-100 text-xs">
+                    <span className="text-gray-600">
+                      Method: <strong className="text-[#3B1E22]">{ord.paymentMethod || 'Online Payment'}</strong>
+                      {txRef ? <span className="ml-2 font-mono text-[11px] text-gray-500">(Ref: {txRef})</span> : null}
+                    </span>
+                    <span className="font-bold text-sm text-[#3B1E22]">
+                      {paid ? 'Amount Paid' : 'Order Total'}: ₹{Number(ord.totalAmount || 0).toLocaleString('en-IN')}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}
@@ -489,7 +525,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
               <input
                 type="text"
                 disabled
-                value={user.email || 'Email patron'}
+                value={activeEmail || 'Email patron'}
                 className="w-full px-3.5 py-2.5 border border-gray-200 bg-gray-50 rounded-xl text-gray-600 font-medium cursor-not-allowed"
               />
               <p className="text-[10px] text-gray-400 mt-1">
@@ -505,7 +541,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
               <input
                 type="text"
                 disabled
-                value={user.displayName || userProfile?.displayName || 'Patron'}
+                value={activeCustomer.displayName || userProfile?.displayName || 'Patron'}
                 className="w-full px-3.5 py-2.5 border border-gray-200 bg-gray-50 rounded-xl text-gray-600 font-medium cursor-not-allowed"
               />
             </div>
