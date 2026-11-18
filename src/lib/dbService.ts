@@ -794,6 +794,57 @@ export async function fetchProductById(id: string): Promise<Product | null> {
   return fallback || null;
 }
 
+function getAdminAuthToken(): string {
+  try {
+    return (
+      (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('vidhyaa_admin_token') : null) ||
+      (typeof localStorage !== 'undefined' ? localStorage.getItem('vidhyaa_admin_token') : null) ||
+      (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('admin_session_token') : null) ||
+      (typeof localStorage !== 'undefined' ? localStorage.getItem('admin_session_token') : null) ||
+      ''
+    );
+  } catch {
+    return '';
+  }
+}
+
+async function getCustomerAuthToken(): Promise<string> {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const patronTok = localStorage.getItem('vidhyaa_patron_token');
+      if (patronTok) return patronTok;
+    }
+    const { auth } = await import('./firebase');
+    if (auth?.currentUser) {
+      return await auth.currentUser.getIdToken();
+    }
+  } catch {}
+  return '';
+}
+
+const RECEIPT_TOKENS_KEY = 'vidhyaa_order_receipt_tokens';
+
+export function saveOrderReceiptToken(orderKey: string, receiptToken?: string): void {
+  if (!orderKey || !receiptToken) return;
+  try {
+    const raw = sessionStorage.getItem(RECEIPT_TOKENS_KEY);
+    const map = raw ? JSON.parse(raw) : {};
+    map[String(orderKey).trim()] = String(receiptToken).trim();
+    sessionStorage.setItem(RECEIPT_TOKENS_KEY, JSON.stringify(map));
+  } catch {}
+}
+
+export function getOrderReceiptToken(orderKey: string): string {
+  if (!orderKey) return '';
+  try {
+    const raw = sessionStorage.getItem(RECEIPT_TOKENS_KEY);
+    const map = raw ? JSON.parse(raw) : {};
+    return String(map?.[String(orderKey).trim()] || '');
+  } catch {
+    return '';
+  }
+}
+
 export async function saveProduct(product: Product): Promise<Product> {
   const sanitized = sanitizeProductForFirestore(product);
   if (sanitized.videoUrl && sanitized.showInShoppingVideos === undefined) {
@@ -818,23 +869,22 @@ export async function saveProduct(product: Product): Promise<Product> {
   let serverSuccess = false;
   try {
     if (typeof fetch !== 'undefined') {
-      const adminToken =
-        (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('vidhyaa_admin_token') : null) ||
-        (typeof localStorage !== 'undefined' ? localStorage.getItem('vidhyaa_admin_token') : null) ||
-        'vidhyaa-admin-authorized';
-      const resp = await fetch('/api/products', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${adminToken}`,
-          'x-admin-token': adminToken
-        },
-        body: JSON.stringify({ product: sanitized })
-      }).catch(() => null);
+      const adminToken = getAdminAuthToken();
+      if (adminToken) {
+        const resp = await fetch('/api/products', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${adminToken}`,
+            'x-admin-token': adminToken
+          },
+          body: JSON.stringify({ product: sanitized })
+        }).catch(() => null);
 
-      if (resp && resp.ok) {
-        serverSuccess = true;
-        console.log(`[Server] Product "${sanitized.name}" (${sanitized.id}) saved to server store.`);
+        if (resp && resp.ok) {
+          serverSuccess = true;
+          console.log(`[Server] Product "${sanitized.name}" (${sanitized.id}) saved to server store.`);
+        }
       }
     }
   } catch (serverErr) {
@@ -887,17 +937,16 @@ export async function deleteProduct(productId: string): Promise<void> {
   // 2. Delete from server REST API
   try {
     if (typeof fetch !== 'undefined') {
-      const adminToken =
-        (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('vidhyaa_admin_token') : null) ||
-        (typeof localStorage !== 'undefined' ? localStorage.getItem('vidhyaa_admin_token') : null) ||
-        'vidhyaa-admin-authorized';
-      await fetch(`/api/products/${encodeURIComponent(productId)}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${adminToken}`,
-          'x-admin-token': adminToken
-        }
-      }).catch(() => null);
+      const adminToken = getAdminAuthToken();
+      if (adminToken) {
+        await fetch(`/api/products/${encodeURIComponent(productId)}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${adminToken}`,
+            'x-admin-token': adminToken
+          }
+        }).catch(() => null);
+      }
     }
   } catch (serverErr) {
     console.warn('[Server] Notice deleting product from server endpoint:', serverErr);
@@ -1346,15 +1395,27 @@ export async function createOrder(orderData: Omit<Order, 'id'>, preferredId?: st
   // Persist to server REST API /api/orders and wait so server/JSON DB is updated cleanly
   try {
     if (typeof fetch !== 'undefined') {
+      const customerToken = await getCustomerAuthToken();
+      const adminToken = getAdminAuthToken();
+      const authToken = customerToken || adminToken;
       const resp = await fetch('/api/orders', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          ...(customerToken ? { 'x-customer-token': customerToken } : {}),
+          ...(adminToken ? { 'x-admin-token': adminToken } : {})
+        },
         body: JSON.stringify(stripUndefinedDeep(persistedOrder))
       });
       if (resp.ok) {
         const data = await resp.json().catch(() => null);
         if (data?.order) {
           persistedOrder = $sanitizeOrder(data.order) || data.order;
+        }
+        if (data?.receiptToken) {
+          saveOrderReceiptToken(persistedOrder.id, data.receiptToken);
+          saveOrderReceiptToken(persistedOrder.orderNumber, data.receiptToken);
         }
       }
     }
@@ -1409,11 +1470,23 @@ export async function fetchOrderById(orderId: string): Promise<Order | null> {
 
   try {
     if (typeof fetch !== 'undefined') {
-      const resp = await fetch(`/api/orders/${encodeURIComponent(cleanId)}`);
+      const adminToken = getAdminAuthToken();
+      const customerToken = await getCustomerAuthToken();
+      const receiptToken = getOrderReceiptToken(cleanId);
+      const authToken = adminToken || customerToken;
+      const headers: Record<string, string> = {};
+      if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+      if (adminToken) headers['x-admin-token'] = adminToken;
+      if (customerToken) headers['x-customer-token'] = customerToken;
+      if (receiptToken) headers['x-order-token'] = receiptToken;
+
+      const resp = await fetch(`/api/orders/${encodeURIComponent(cleanId)}`, { headers });
       if (resp && resp.ok) {
         const data = await resp.json();
         if (data && (data.id || data.orderNumber)) {
-          return $sanitizeOrder(data) || data;
+          const sanitized = $sanitizeOrder(data) || data;
+          if (data.redactedPii) (sanitized as Order).redactedPii = true;
+          return sanitized;
         }
       }
     }
@@ -1459,10 +1532,22 @@ export async function fetchOrdersByUserId(
       if (cleanUid) params.set('userId', cleanUid);
       if (cleanEmail) params.set('email', cleanEmail);
       if (cleanPhoneDigits) params.set('phone', cleanPhoneDigits);
-      const resp = await fetch(`/api/orders?${params.toString()}`);
-      if (resp && resp.ok) {
-        const data = await resp.json();
-        if (Array.isArray(data)) collected.push(...data);
+
+      const customerToken = await getCustomerAuthToken();
+      const adminToken = getAdminAuthToken();
+      const authToken = customerToken || adminToken;
+      if (authToken) {
+        const resp = await fetch(`/api/orders?${params.toString()}`, {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+            ...(customerToken ? { 'x-customer-token': customerToken } : {}),
+            ...(adminToken ? { 'x-admin-token': adminToken } : {})
+          }
+        });
+        if (resp && resp.ok) {
+          const data = await resp.json();
+          if (Array.isArray(data)) collected.push(...data);
+        }
       }
     }
   } catch {}
@@ -1526,9 +1611,17 @@ export async function fetchAllOrders(): Promise<Order[]> {
   let serverOrders: any[] = [];
   try {
     if (typeof fetch !== 'undefined') {
-      const resp = await fetch('/api/orders');
-      if (resp && resp.ok) {
-        serverOrders = await resp.json();
+      const adminToken = getAdminAuthToken();
+      if (adminToken) {
+        const resp = await fetch('/api/orders', {
+          headers: {
+            Authorization: `Bearer ${adminToken}`,
+            'x-admin-token': adminToken
+          }
+        });
+        if (resp && resp.ok) {
+          serverOrders = await resp.json();
+        }
       }
     }
   } catch {}
@@ -1616,18 +1709,18 @@ export async function updateOrderStatus(
 
   try {
     if (typeof fetch !== 'undefined') {
-      const adminToken =
-        (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('vidhyaa_admin_token')) ||
-        (typeof localStorage !== 'undefined' && localStorage.getItem('vidhyaa_admin_token')) ||
-        '';
-      await fetch(`/api/orders/${encodeURIComponent(orderId)}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(adminToken ? { Authorization: `Bearer ${adminToken}` } : {})
-        },
-        body: JSON.stringify(stripUndefinedDeep({ orderStatus: status, trackingNumber, courierName }))
-      });
+      const adminToken = getAdminAuthToken();
+      if (adminToken) {
+        await fetch(`/api/orders/${encodeURIComponent(orderId)}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${adminToken}`,
+            'x-admin-token': adminToken
+          },
+          body: JSON.stringify(stripUndefinedDeep({ orderStatus: status, trackingNumber, courierName }))
+        });
+      }
     }
   } catch {}
 
@@ -1646,10 +1739,10 @@ export async function updateOrderStatus(
 }
 
 export async function confirmOrderPaymentAdmin(orderId: string): Promise<Order | null> {
-  const adminToken =
-    (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('vidhyaa_admin_token')) ||
-    (typeof localStorage !== 'undefined' && localStorage.getItem('vidhyaa_admin_token')) ||
-    'vidhyaa-admin-authorized';
+  const adminToken = getAdminAuthToken();
+  if (!adminToken) {
+    return null;
+  }
 
   let updatedOrder: Order | null = null;
   try {
@@ -1657,7 +1750,8 @@ export async function confirmOrderPaymentAdmin(orderId: string): Promise<Order |
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${adminToken}`
+        Authorization: `Bearer ${adminToken}`,
+        'x-admin-token': adminToken
       }
     });
     if (resp.ok) {

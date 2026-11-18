@@ -37,7 +37,7 @@ export const AdminSmsSettingsPanel: React.FC = () => {
     return (
       sessionStorage.getItem('vidhyaa_admin_token') ||
       localStorage.getItem('vidhyaa_admin_token') ||
-      'vidhyaa-admin-authorized'
+      ''
     );
   };
 
@@ -45,9 +45,15 @@ export const AdminSmsSettingsPanel: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
+      const token = getAdminToken();
+      if (!token) {
+        setLoading(false);
+        return;
+      }
       const res = await fetch('/api/admin/sms-config', {
         headers: {
-          'Authorization': `Bearer ${getAdminToken()}`,
+          'Authorization': `Bearer ${token}`,
+          'x-admin-token': token,
         },
       });
       if (res.ok) {
@@ -72,11 +78,16 @@ export const AdminSmsSettingsPanel: React.FC = () => {
     setSuccess(null);
 
     try {
+      const token = getAdminToken();
+      if (!token) {
+        throw new Error('Administrator session expired. Please sign in again.');
+      }
       const res = await fetch('/api/admin/sms-config', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getAdminToken()}`,
+          'Authorization': `Bearer ${token}`,
+          'x-admin-token': token,
         },
         body: JSON.stringify({
           fast2smsApiKey: fast2smsKey || undefined,
@@ -120,11 +131,16 @@ export const AdminSmsSettingsPanel: React.FC = () => {
     setTestResult(null);
 
     try {
+      const token = getAdminToken();
+      if (!token) {
+        throw new Error('Administrator session expired. Please sign in again.');
+      }
       const res = await fetch('/api/admin/test-sms', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getAdminToken()}`,
+          'Authorization': `Bearer ${token}`,
+          'x-admin-token': token,
         },
         body: JSON.stringify({ phoneNumber: clean, mobile: clean }),
       });

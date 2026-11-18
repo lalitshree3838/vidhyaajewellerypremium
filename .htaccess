@@ -13,12 +13,11 @@
   AddType font/woff .woff
   AddType font/woff2 .woff2
   AddType font/ttf .ttf
-  <Files "products">
-    ForceType application/json
-  </Files>
-  <Files "orders">
-    ForceType application/json
-  </Files>
+</IfModule>
+
+# Pass Authorization header through CGI/FastCGI/LSAPI environments on Hostinger Apache
+<IfModule mod_setenvif.c>
+  SetEnvIfNoCase ^Authorization$ "(.+)" HTTP_AUTHORIZATION=$1
 </IfModule>
 
 # Disable gzip compression for video files to enable HTTP 206 Partial Content (Byte Range requests) in Safari & Chrome
@@ -43,8 +42,8 @@
   </FilesMatch>
 </IfModule>
 
-# Protect sensitive directories and secret/PII files from direct public HTTP access
-<FilesMatch "^(cashfree-config\.json|\.env(\..*)?|orders|patrons\.json|orders\.json|whatsapp_logs\.json)$">
+# Protect sensitive directories, internal includes, and secret/PII files from direct public HTTP access
+<FilesMatch "^(cashfree-config\.json|sms-config\.json|admin-credentials\.json|_auth\.php|\.env(\..*)?|orders|patrons\.json|orders\.json|backup_orders.*\.json|whatsapp_logs\.json)$">
   <IfModule mod_authz_core.c>
     Require all denied
   </IfModule>
@@ -59,17 +58,29 @@
   RewriteEngine On
   RewriteBase /
 
-  # Deny direct HTTP access to .admin-secrets, .backups, and private data JSON files
-  RewriteRule ^(\.admin-secrets|\.backups)(/.*)?$ - [F,L]
-  RewriteRule ^data/(orders|patrons|whatsapp_logs)\.json$ - [F,L]
-  RewriteRule ^cashfree-config\.json$ - [F,L]
+  # Preserve Authorization header in mod_rewrite server environment
+  RewriteCond %{HTTP:Authorization} .
+  RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 
-  # Route dynamic products & orders API requests to PHP handlers BEFORE physical file checks
+  # Deny direct HTTP access to .admin-secrets, .backups, internal PHP helpers, and private data JSON files
+  RewriteRule ^(\.admin-secrets|\.backups)(/.*)?$ - [F,L]
+  RewriteRule ^api/admin/_ - [F,L]
+  RewriteRule ^data/(orders|patrons|whatsapp_logs|backup_orders.*)\.json$ - [F,L]
+  RewriteRule ^(cashfree-config|sms-config|admin-credentials)\.json$ - [F,L]
+
+  # Route dynamic products, orders, auth & videos API requests to PHP handlers BEFORE physical file checks
   RewriteRule ^api/products/?$ /api/products.php [QSA,L]
   RewriteRule ^api/products/([^/]+)/?$ /api/products.php?id=$1 [QSA,L]
   RewriteRule ^api/orders/?$ /api/orders.php [QSA,L]
   RewriteRule ^api/orders/([^/]+)/confirm-payment/?$ /api/orders.php?id=$1&action=confirm-payment [QSA,L]
+  RewriteRule ^api/orders/([^/]+)/customer-whatsapp-confirm/?$ /api/orders.php?id=$1&action=customer-whatsapp-confirm [QSA,L]
+  RewriteRule ^api/orders/([^/]+)/whatsapp-confirm/?$ /api/orders.php?id=$1&action=customer-whatsapp-confirm [QSA,L]
   RewriteRule ^api/orders/([^/]+)/?$ /api/orders.php?id=$1 [QSA,L]
+
+  # Mobile customer auth & video inventory routes
+  RewriteRule ^api/auth/mobile-register/?$ /api/auth/mobile.php?action=register [QSA,L]
+  RewriteRule ^api/auth/mobile-login/?$ /api/auth/mobile.php?action=login [QSA,L]
+  RewriteRule ^api/videos/available/?$ /api/videos/available.php [QSA,L]
 
   # Cashfree PG & Webhook routes
   RewriteRule ^api/payments/cashfree/status/?$ /api/payments/cashfree.php?action=status [QSA,L]

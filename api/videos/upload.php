@@ -1,46 +1,25 @@
 <?php
 // VIDHYAA Jewellery Studio - Persistent Product Video Upload Endpoint (Hostinger Production)
+require_once dirname(__DIR__) . '/admin/_auth.php';
+
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization, x-file-name, x-file-type, x-admin-token');
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
     http_response_code(204);
     exit;
 }
 
-header('Content-Type: application/json; charset=UTF-8');
-
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405);
-    echo json_encode([
-        'success' => false,
-        'error' => 'Method not allowed. Use POST.'
-    ]);
-    exit;
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+    vdhSendJson(405, ['success' => false, 'error' => 'Method not allowed. Use POST.']);
 }
 
-$authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
-$adminHeader = $_SERVER['HTTP_X_ADMIN_TOKEN'] ?? '';
-$token = trim($adminHeader ?: (str_starts_with($authHeader, 'Bearer ') ? substr($authHeader, 7) : ''));
-
-if (empty($token)) {
-    http_response_code(401);
-    echo json_encode([
-        'success' => false,
-        'error' => 'Unauthorized: Administrator session token required for video uploads.'
-    ]);
-    exit;
-}
+vdhRequireAdmin();
 
 $uploadDir = dirname(__DIR__, 2) . '/videos/uploads';
 if (!is_dir($uploadDir) && !mkdir($uploadDir, 0755, true)) {
-    http_response_code(500);
-    echo json_encode([
-        'success' => false,
-        'error' => 'Failed to initialize video storage directory.'
-    ]);
-    exit;
+    vdhSendJson(500, ['success' => false, 'error' => 'Failed to initialize video storage directory.']);
 }
 
 $allowedExts = ['mp4', 'mov', 'webm'];
@@ -49,16 +28,12 @@ $maxBytes = 250 * 1024 * 1024; // 250 MB
 $originalName = '';
 $mimeType = 'video/mp4';
 $sizeBytes = 0;
+$rawData = null;
 
 if (!empty($_FILES)) {
     $fileField = $_FILES['video'] ?? $_FILES['file'] ?? reset($_FILES);
     if (!$fileField || ($fileField['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
-        http_response_code(400);
-        echo json_encode([
-            'success' => false,
-            'error' => 'Video file upload failed or exceeded server upload limit.'
-        ]);
-        exit;
+        vdhSendJson(400, ['success' => false, 'error' => 'Video file upload failed or exceeded server upload limit.']);
     }
     $originalName = $fileField['name'] ?: ('vidhyaa_video_' . time() . '.mp4');
     $mimeType = $fileField['type'] ?: 'video/mp4';
@@ -66,12 +41,7 @@ if (!empty($_FILES)) {
 } else {
     $rawData = file_get_contents('php://input');
     if ($rawData === false || strlen($rawData) === 0) {
-        http_response_code(400);
-        echo json_encode([
-            'success' => false,
-            'error' => 'Empty video file received. Please select a valid MP4, MOV, or WebM video.'
-        ]);
-        exit;
+        vdhSendJson(400, ['success' => false, 'error' => 'Empty video file received. Please select a valid MP4, MOV, or WebM video.']);
     }
     $headerName = $_SERVER['HTTP_X_FILE_NAME'] ?? '';
     $originalName = $headerName ? urldecode($headerName) : ('vidhyaa_video_' . time() . '.mp4');
@@ -80,12 +50,7 @@ if (!empty($_FILES)) {
 }
 
 if ($sizeBytes <= 0 || $sizeBytes > $maxBytes) {
-    http_response_code(413);
-    echo json_encode([
-        'success' => false,
-        'error' => 'Video size must be between 1 byte and 250 MB.'
-    ]);
-    exit;
+    vdhSendJson(413, ['success' => false, 'error' => 'Video size must be between 1 byte and 250 MB.']);
 }
 
 $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
@@ -106,27 +71,16 @@ $destPath = $uploadDir . '/' . $finalFileName;
 if (!empty($_FILES)) {
     $fileField = $_FILES['video'] ?? $_FILES['file'] ?? reset($_FILES);
     if (!move_uploaded_file($fileField['tmp_name'], $destPath)) {
-        http_response_code(500);
-        echo json_encode([
-            'success' => false,
-            'error' => 'Failed to save uploaded video to persistent storage.'
-        ]);
-        exit;
+        vdhSendJson(500, ['success' => false, 'error' => 'Failed to save uploaded video to persistent storage.']);
     }
 } else {
     if (file_put_contents($destPath, $rawData) === false) {
-        http_response_code(500);
-        echo json_encode([
-            'success' => false,
-            'error' => 'Failed to write uploaded video to persistent storage.'
-        ]);
-        exit;
+        vdhSendJson(500, ['success' => false, 'error' => 'Failed to write uploaded video to persistent storage.']);
     }
 }
 
 $publicUrl = '/videos/uploads/' . $finalFileName;
-http_response_code(200);
-echo json_encode([
+vdhSendJson(200, [
     'success' => true,
     'url' => $publicUrl,
     'videoUrl' => $publicUrl,
@@ -136,4 +90,3 @@ echo json_encode([
     'mimeType' => $mimeType,
     'storageType' => 'server'
 ]);
-exit;

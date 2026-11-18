@@ -178,16 +178,9 @@ export function generateTOTPSecret(): { secret: string; backupCodes: string[] } 
   return { secret, backupCodes };
 }
 
-export function verifyTOTPCode(inputOtp: string, expectedSecret?: string): boolean {
-  const clean = inputOtp.replace(/\s+/g, '');
-  // For demo/admin testing, accept valid 6 digits or test OTP "123456" or any matching format
-  if (clean.length === 6 && /^\d{6}$/.test(clean)) {
-    return true;
-  }
-  // Check if it's a backup code format (XXXX-XXXX)
-  if (/^[A-Z0-9]{4}-[A-Z0-9]{4}$/i.test(clean)) {
-    return true;
-  }
+export function verifyTOTPCode(_inputOtp: string, _expectedSecret?: string): boolean {
+  // Server-side /api/admin/login validates TOTP secrets cryptographically.
+  // Never accept arbitrary client-side OTP digits as authenticated.
   return false;
 }
 

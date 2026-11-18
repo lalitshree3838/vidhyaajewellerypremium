@@ -33,7 +33,9 @@ import {
   syncOrderToLocalAndFirestore,
   isOrderPaid,
   formatIndianPhone,
-  formatFullAddress
+  formatFullAddress,
+  saveOrderReceiptToken,
+  getOrderReceiptToken
 } from '../lib/dbService';
 import { GooglePayQRCard } from '../components/GooglePayQRCard';
 import { isGenuineImageUrl } from '../lib/sampleData';
@@ -429,11 +431,18 @@ const WhatsAppOrderConfirmationView: React.FC<WhatsAppOrderConfirmationViewProps
   const handleConfirmSent = async () => {
     setIsSubmitting(true);
     try {
+      const orderKey = order.id || order.orderNumber;
+      const receiptTok = getOrderReceiptToken(order.id) || getOrderReceiptToken(order.orderNumber);
+      const patronTok = localStorage.getItem('vidhyaa_patron_token') || '';
       await fetch(
-        `/api/orders/${encodeURIComponent(order.id || order.orderNumber)}/customer-whatsapp-confirm`,
+        `/api/orders/${encodeURIComponent(orderKey)}/customer-whatsapp-confirm`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(receiptTok ? { 'x-order-token': receiptTok } : {}),
+            ...(patronTok ? { Authorization: `Bearer ${patronTok}`, 'x-customer-token': patronTok } : {})
+          },
           body: JSON.stringify({ whatsappCustomerConfirmed: true })
         }
       ).catch(() => {});
@@ -747,9 +756,17 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
             }
           : undefined;
 
+        const receiptTok =
+          getOrderReceiptToken(cfOrderId) || getOrderReceiptToken(orderNumber);
+        const patronTok = localStorage.getItem('vidhyaa_patron_token') || '';
+
         const verifyRes = await fetch('/api/payments/cashfree/verify-order', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(receiptTok ? { 'x-order-token': receiptTok } : {}),
+            ...(patronTok ? { Authorization: `Bearer ${patronTok}`, 'x-customer-token': patronTok } : {})
+          },
           body: JSON.stringify({
             orderId: cfOrderId,
             ...(hasShippingInForm && orderItems.length > 0
@@ -779,6 +796,10 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         const verifyData = await verifyRes.json().catch(() => ({}));
 
         if (verifyData.success && verifyData.isPaid === true && verifyData.order) {
+          if (verifyData.receiptToken) {
+            saveOrderReceiptToken(verifyData.order.id, verifyData.receiptToken);
+            saveOrderReceiptToken(verifyData.order.orderNumber || cfOrderId, verifyData.receiptToken);
+          }
           await finalizeVerifiedOrderSuccess(verifyData.order);
           return true;
         }
@@ -1134,6 +1155,11 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       const paymentSessionId = data.paymentSessionId || data.payment_session_id;
       const cfOrderId = data.orderId || data.order_id || orderNumber;
       const cfMode = data.mode;
+      if (data?.receiptToken) {
+        saveOrderReceiptToken(cfOrderId, data.receiptToken);
+        saveOrderReceiptToken(orderNumber, data.receiptToken);
+        if (data?.order?.id) saveOrderReceiptToken(data.order.id, data.receiptToken);
+      }
 
       if (!res.ok || !data.success || !paymentSessionId) {
         if (data.configured === false) {
@@ -2328,18 +2354,6 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                     <span>{paymentError}</span>
                   </div>
                 )}
-
-                {/* Fast Test Button for Preview */}
-                <div className="pt-1 flex items-center justify-between">
-                  <button
-                    type="button"
-                    onClick={() => setUtrNumber(`42890${Math.floor(1000000 + Math.random() * 9000000)}`)}
-                    className="text-[11px] text-[#802336] font-semibold underline hover:text-black cursor-pointer"
-                  >
-                    ⚡ Fill Sample Test UTR (Preview)
-                  </button>
-                  <span className="text-[10px] text-gray-400">Sandbox Secure Handshake</span>
-                </div>
               </div>
             )}
           </div>

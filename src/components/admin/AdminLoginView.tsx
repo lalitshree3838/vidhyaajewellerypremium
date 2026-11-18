@@ -20,7 +20,6 @@ import {
   checkRateLimit,
   recordFailedAttempt,
   resetFailedAttempts,
-  verifyTOTPCode,
   logAuditEvent
 } from '../../lib/securityService';
 import { useAuth } from '../../context/AuthContext';
@@ -34,7 +33,15 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
   onSuccessLogin,
   onNavigateHome
 }) => {
-  const { loginAdminBackend, signInWithGoogle, signInWithEmail, resetPassword, user, isAdmin } = useAuth();
+  const {
+    loginAdminBackend,
+    exchangeFirebaseAdminToken,
+    signInWithGoogle,
+    signInWithEmail,
+    resetPassword,
+    user,
+    adminSessionActive
+  } = useAuth();
 
   const [email, setEmail] = useState('anavneeraj2003@gmail.com');
   const [password, setPassword] = useState('');
@@ -63,12 +70,24 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
   // Password analysis
   const passwordAnalysis = analyzePassword(password);
 
-  // Auto-detect when Google OAuth sign-in verifies admin identity
+  // Auto-detect when Google/Firebase sign-in has exchanged a verified backend admin session token
   useEffect(() => {
-    if (user && (user.email?.toLowerCase() === 'anavneeraj2003@gmail.com' || isAdmin)) {
+    let active = true;
+    if (adminSessionActive) {
       onSuccessLogin();
+      return;
     }
-  }, [user, isAdmin, onSuccessLogin]);
+    if (user && user.email?.toLowerCase() === 'anavneeraj2003@gmail.com') {
+      exchangeFirebaseAdminToken(user).then((ok) => {
+        if (ok && active) {
+          onSuccessLogin();
+        }
+      });
+    }
+    return () => {
+      active = false;
+    };
+  }, [user, adminSessionActive, exchangeFirebaseAdminToken, onSuccessLogin]);
 
   useEffect(() => {
     // Check rate limiting on mount
@@ -111,26 +130,35 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
       // 1. Authenticate via secure backend administrator endpoint
       const backendRes = await loginAdminBackend(email.trim(), password);
 
-      if (backendRes.success) {
-        resetFailedAttempts(email);
-        // Also sign-in with Firebase Auth in the background if enabled
-        try {
-          await signInWithEmail(email.trim(), password);
-        } catch {
-          // Backend token serves as verified authority
-        }
+      if (backendRes.requires2FA) {
         setStep2FA(true);
         setLoading(false);
         return;
       }
 
-      // 2. Fallback check for Firebase Authentication (in case account was configured in Firebase)
+      if (backendRes.success) {
+        resetFailedAttempts(email);
+        // Optionally sync Firebase session if available
+        try {
+          await signInWithEmail(email.trim(), password);
+        } catch {}
+        setSuccessMessage('Authentication verified. Redirecting to Executive Admin Dashboard...');
+        setLoading(false);
+        onSuccessLogin();
+        return;
+      }
+
+      // 2. Try Firebase email/password login and exchange its verified ID token for a backend session
       try {
         await signInWithEmail(email.trim(), password);
-        resetFailedAttempts(email);
-        setStep2FA(true);
-        setLoading(false);
-        return;
+        const exchanged = await exchangeFirebaseAdminToken();
+        if (exchanged) {
+          resetFailedAttempts(email);
+          setSuccessMessage('Authentication verified. Redirecting to Executive Admin Dashboard...');
+          setLoading(false);
+          onSuccessLogin();
+          return;
+        }
       } catch (fbErr: any) {
         if (fbErr?.code === 'auth/operation-not-allowed') {
           console.warn('Firebase Auth Email/Password provider is disabled in Firebase Console.');
@@ -146,10 +174,10 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
         adminEmail: email.trim(),
         action: 'ADMIN_LOGIN_FAILED',
         category: 'auth',
-        ipAddress: '103.212.144.20',
+        ipAddress: 'client',
         userAgent: navigator.userAgent,
         result: 'failure',
-        details: `Failed credentials attempt for ${email.trim()}: ${backendRes.error}`
+        details: `Failed credentials attempt for ${email.trim()}: ${backendRes.error || 'Unauthorized'}`
       });
 
       if (failStatus.locked) {
@@ -169,6 +197,13 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
     setLoading(true);
     try {
       await signInWithGoogle();
+      const exchanged = await exchangeFirebaseAdminToken();
+      if (exchanged) {
+        onSuccessLogin();
+      } else {
+        setLoading(false);
+        setErrorMessage('Signed-in Google account is not authorized for Executive Admin access.');
+      }
     } catch (err: any) {
       setLoading(false);
       setErrorMessage(err.message || 'Google administrator sign-in failed. Please try again.');
@@ -185,32 +220,30 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
     }
 
     setLoading(true);
+    const res = await loginAdminBackend(email.trim(), password, otpCode.trim());
+    setLoading(false);
 
-    // Validate TOTP OTP or backup code
-    const valid = verifyTOTPCode(otpCode.trim());
-
-    if (!valid) {
-      setLoading(false);
-      setOtpError('Invalid two-factor authentication code. Please check your authenticator app or enter a valid backup recovery key.');
+    if (!res.success) {
+      setOtpError(res.error || 'Invalid two-factor authentication code.');
       return;
     }
 
-    // Success audit log
+    resetFailedAttempts(email);
     await logAuditEvent({
       adminId: user?.uid || 'super_admin',
       adminEmail: email.trim(),
       action: 'ADMIN_LOGIN_SUCCESS_2FA',
       category: 'auth',
-      ipAddress: '103.212.144.20',
+      ipAddress: 'client',
       userAgent: navigator.userAgent,
       result: 'success',
-      details: 'Super Admin authenticated with verified 2FA TOTP token.'
+      details: 'Super Admin authenticated with server-verified 2FA TOTP token.'
     });
 
     setSuccessMessage('Authentication verified. Redirecting to Executive Admin Dashboard...');
     setTimeout(() => {
       onSuccessLogin();
-    }, 800);
+    }, 400);
   };
 
   const handleForgotPassword = async (e: React.FormEvent) => {

@@ -30,10 +30,16 @@ export const AdminCashfreeSettingsPanel: React.FC = () => {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const token = sessionStorage.getItem('vidhyaa_admin_token') || localStorage.getItem('vidhyaa_admin_token') || 'vidhyaa-admin-authorized';
+      const token = sessionStorage.getItem('vidhyaa_admin_token') || localStorage.getItem('vidhyaa_admin_token') || '';
+      if (!token) {
+        setErrorMsg('Administrator session token missing. Please re-authenticate.');
+        setLoading(false);
+        return;
+      }
       const res = await fetch('/api/admin/cashfree-config', {
         headers: {
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${token}`,
+          'x-admin-token': token
         }
       });
       const data = await res.json();
@@ -61,12 +67,18 @@ export const AdminCashfreeSettingsPanel: React.FC = () => {
     setErrorMsg(null);
 
     try {
-      const token = sessionStorage.getItem('vidhyaa_admin_token') || localStorage.getItem('vidhyaa_admin_token') || 'vidhyaa-admin-authorized';
+      const token = sessionStorage.getItem('vidhyaa_admin_token') || localStorage.getItem('vidhyaa_admin_token') || '';
+      if (!token) {
+        setErrorMsg('Administrator session expired. Please sign in again.');
+        setSaving(false);
+        return;
+      }
       const res = await fetch('/api/admin/cashfree-config', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${token}`,
+          'x-admin-token': token
         },
         body: JSON.stringify({
           appId: appId.trim() || undefined,
@@ -166,6 +178,24 @@ export const AdminCashfreeSettingsPanel: React.FC = () => {
           </span>
         </div>
       </div>
+
+      {statusSummary?.env === 'SANDBOX' && (
+        <div className="p-3.5 bg-amber-50 border border-amber-300 text-amber-900 text-xs rounded-xl flex items-start gap-2 font-medium">
+          <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <strong className="block font-bold">
+              {statusSummary?.blockedOnLiveDomain
+                ? 'SANDBOX MODE BLOCKED ON LIVE STOREFRONT (vidhyaajewellerystudio.com)'
+                : 'Cashfree Gateway is Currently in SANDBOX Test Mode'}
+            </strong>
+            <span>
+              Sandbox checkout and verification are automatically rejected on live production domain{' '}
+              <code>vidhyaajewellerystudio.com</code> and test orders are excluded from verified revenue. Switch to{' '}
+              <strong>PRODUCTION</strong> credentials before going live.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Feedback Messages */}
       {successMsg && (

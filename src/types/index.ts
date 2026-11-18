@@ -228,6 +228,10 @@ export interface Order {
   verifiedAmount?: number;
   currency?: string;
   verifiedVia?: string;
+  paymentEnv?: 'SANDBOX' | 'PRODUCTION' | string;
+  isTestOrder?: boolean;
+  redactedPii?: boolean;
+  receiptToken?: string;
   failureReason?: string;
   orderStatus: OrderStatus;
   trackingNumber?: string;

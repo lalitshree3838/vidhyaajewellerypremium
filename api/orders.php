@@ -1,13 +1,15 @@
 <?php
 // VIDHYAA Jewellery Studio - Persistent Orders API (Hostinger Production)
+require_once __DIR__ . '/admin/_auth.php';
+
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, x-admin-token');
+header('Access-Control-Allow-Headers: Content-Type, Authorization, x-admin-token, x-customer-token, x-order-token');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 header('Expires: 0');
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
     http_response_code(204);
     exit;
 }
@@ -17,16 +19,8 @@ header('Content-Type: application/json; charset=UTF-8');
 $rootDir = dirname(__DIR__);
 $dataOrdersFile = $rootDir . '/data/orders.json';
 $apiOrdersFile = __DIR__ . '/orders';
-
-function vdhExtractAdminToken() {
-    $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
-    $adminHeader = $_SERVER['HTTP_X_ADMIN_TOKEN'] ?? '';
-    if (!empty($adminHeader)) return trim($adminHeader);
-    if (str_starts_with($authHeader, 'Bearer ')) {
-        return trim(substr($authHeader, 7));
-    }
-    return '';
-}
+$whatsappLogsFile = $rootDir . '/data/whatsapp_logs.json';
+define('VDH_OWNER_WHATSAPP', '917302187770');
 
 function vdhToMoney($val, $fallback = 0) {
     if (is_int($val) || is_float($val)) return (float)$val;
@@ -50,6 +44,45 @@ function vdhFormatIndianPhone($raw) {
 function vdhSanitizeGatewayOrderId($raw) {
     $clean = preg_replace('/[^a-zA-Z0-9_-]/', '_', trim((string)$raw));
     return substr($clean, 0, 45);
+}
+
+function vdhOwnerWhatsAppUrl(array $order): string {
+    $orderId = (string)($order['orderNumber'] ?? ($order['id'] ?? 'N/A'));
+    $customerName = (string)($order['customerName'] ?? ($order['shippingAddress']['name'] ?? 'Valued Patron'));
+    $customerMobile = (string)($order['customerPhone'] ?? ($order['shippingAddress']['phone'] ?? 'N/A'));
+    $items = is_array($order['items'] ?? null) ? $order['items'] : [];
+    $productName = 'Handcrafted Jewellery';
+    $quantity = 1;
+    if (!empty($items)) {
+        $names = array_map(fn($it) => (string)($it['productName'] ?? 'Piece'), $items);
+        $productName = implode(', ', $names);
+        $quantity = array_sum(array_map(fn($it) => (int)($it['quantity'] ?? 1), $items));
+    }
+    $addr = is_array($order['shippingAddress'] ?? null) ? $order['shippingAddress'] : [];
+    $addrParts = array_filter([
+        $addr['street'] ?? '',
+        $addr['landmark'] ?? '',
+        $addr['city'] ?? '',
+        !empty($addr['state']) ? $addr['state'] . (!empty($addr['pincode']) ? ' - ' . $addr['pincode'] : '') : ($addr['pincode'] ?? '')
+    ]);
+    $addressStr = !empty($addrParts) ? implode(', ', $addrParts) : 'Address provided at checkout';
+    $total = number_format((float)($order['totalAmount'] ?? 0), 0, '.', ',');
+    $method = (string)($order['paymentMethod'] ?? 'Online Payment');
+
+    $msg = "VIDHYAA JEWELLERY STUDIO\n"
+        . "🟢 NEW ORDER CONFIRMED ✓\n\n"
+        . "Order ID: {$orderId}\n"
+        . "Customer Name: {$customerName}\n"
+        . "Mobile: {$customerMobile}\n"
+        . "Product: {$productName}\n"
+        . "Quantity: {$quantity}\n"
+        . "Payment Status: SUCCESSFUL\n"
+        . "Payment Method: {$method}\n"
+        . "Total Amount: ₹{$total}\n\n"
+        . "Delivery Address:\n{$addressStr}\n\n"
+        . "Please prepare this order for delivery.";
+
+    return 'https://wa.me/' . VDH_OWNER_WHATSAPP . '?text=' . rawurlencode($msg);
 }
 
 function vdhSanitizeOrder($raw, $existing = null) {
@@ -186,10 +219,8 @@ function vdhReadOrders($dataFile, $apiFile) {
 function vdhWriteOrders($orders, $dataFile, $apiFile) {
     $json = json_encode(array_values($orders), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
     if ($json === false) return false;
-    $dir = dirname($dataFile);
-    if (!is_dir($dir)) @mkdir($dir, 0755, true);
-    $ok1 = file_put_contents($dataFile, $json, LOCK_EX) !== false;
-    $ok2 = file_put_contents($apiFile, $json, LOCK_EX) !== false;
+    $ok1 = vdhAtomicWriteFile($dataFile, $json);
+    $ok2 = vdhAtomicWriteFile($apiFile, $json);
     return $ok1 || $ok2;
 }
 
@@ -211,36 +242,94 @@ function vdhFindOrder($orders, $needle) {
     return [null, -1];
 }
 
+function vdhSaveWhatsAppLog($logFile, array $entry): void {
+    $logs = [];
+    if (is_file($logFile) && is_readable($logFile)) {
+        $parsed = json_decode((string)@file_get_contents($logFile), true);
+        if (is_array($parsed)) $logs = $parsed;
+    }
+    array_unshift($logs, $entry);
+    if (count($logs) > 100) $logs = array_slice($logs, 0, 100);
+    $encoded = json_encode($logs, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    if ($encoded !== false) {
+        vdhAtomicWriteFile($logFile, $encoded);
+    }
+}
+
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $uriPath = parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH) ?: '';
-$action = trim($_GET['action'] ?? '');
-$idParam = trim($_GET['id'] ?? '');
+$action = trim((string)($_GET['action'] ?? ''));
+$idParam = trim((string)($_GET['id'] ?? ''));
 if ($idParam === '' && preg_match('#/api/orders/([^/]+)$#', $uriPath, $m)) {
     $idParam = urldecode($m[1]);
 }
 
 if ($method === 'GET') {
     $orders = vdhReadOrders($dataOrdersFile, $apiOrdersFile);
+
     if ($idParam !== '') {
         [$order] = vdhFindOrder($orders, $idParam);
-        if ($order) {
-            echo json_encode($order, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-            exit;
+        if (!$order) {
+            vdhSendJson(404, ['success' => false, 'error' => 'Order not found']);
         }
-        http_response_code(404);
-        echo json_encode(['success' => false, 'error' => 'Order not found']);
-        exit;
+
+        $admin = vdhAuthenticateAdmin();
+        if ($admin) {
+            vdhSendJson(200, $order);
+        }
+
+        $customer = vdhAuthenticateCustomer();
+        if ($customer && vdhCustomerOwnsOrder($customer, $order)) {
+            vdhSendJson(200, $order);
+        }
+
+        $receiptTok = vdhExtractOrderReceiptToken();
+        if (vdhHasValidOrderReceiptToken($order, $receiptTok)) {
+            vdhSendJson(200, $order);
+        }
+
+        // Public tracking lookup strips all PII
+        vdhSendJson(200, vdhSanitizePublicOrderTracking($order));
     }
 
-    $userId = trim($_GET['userId'] ?? '');
-    $email = strtolower(trim($_GET['email'] ?? ''));
-    $phoneDigits = substr(preg_replace('/\D+/', '', trim($_GET['phone'] ?? '')), -10);
+    $userId = trim((string)($_GET['userId'] ?? ''));
+    $email = strtolower(trim((string)($_GET['email'] ?? '')));
+    $phoneDigits = vdhNormalizePhone10((string)($_GET['phone'] ?? ''));
+
     if ($userId !== '' || $email !== '' || $phoneDigits !== '') {
+        $customer = vdhAuthenticateCustomer();
+        if (!$customer) {
+            vdhSendJson(401, [
+                'success' => false,
+                'error' => 'Unauthorized: Customer sign-in is required to view account orders.'
+            ]);
+        }
+
+        if (empty($customer['isAdmin'])) {
+            $cUid = trim((string)($customer['uid'] ?? ''));
+            $cEmail = strtolower(trim((string)($customer['email'] ?? '')));
+            $cPhone = vdhNormalizePhone10((string)($customer['phone10'] ?? ''));
+
+            if ($userId !== '' && ($cUid === '' || !hash_equals($cUid, $userId))) {
+                vdhSendJson(403, ['success' => false, 'error' => 'Forbidden: Cannot access orders of another userId.']);
+            }
+            if ($email !== '' && !str_ends_with($email, '@phone.vidhyaajewellery.com') && ($cEmail === '' || !hash_equals($cEmail, $email))) {
+                vdhSendJson(403, ['success' => false, 'error' => 'Forbidden: Cannot access orders of another email address.']);
+            }
+            if ($phoneDigits !== '' && ($cPhone === '' || !hash_equals($cPhone, $phoneDigits))) {
+                vdhSendJson(403, ['success' => false, 'error' => 'Forbidden: Cannot access orders of another phone number.']);
+            }
+
+            $matched = array_values(array_filter($orders, fn($o) => vdhCustomerOwnsOrder($customer, $o)));
+            echo json_encode($matched, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
         $filtered = array_values(array_filter($orders, function ($o) use ($userId, $email, $phoneDigits) {
             if ($userId !== '' && ($o['userId'] ?? '') === $userId) return true;
             if ($email !== '' && strtolower($o['customerEmail'] ?? '') === $email) return true;
             if ($phoneDigits !== '') {
-                $ordDigits = substr(preg_replace('/\D+/', '', (string)($o['customerPhone'] ?? ($o['shippingAddress']['phone'] ?? ''))), -10);
+                $ordDigits = vdhNormalizePhone10((string)($o['customerPhone'] ?? ($o['shippingAddress']['phone'] ?? '')));
                 if ($ordDigits !== '' && $ordDigits === $phoneDigits) return true;
             }
             return false;
@@ -249,147 +338,217 @@ if ($method === 'GET') {
         exit;
     }
 
+    // Full un-filtered orders list requires verified admin session
+    vdhRequireAdmin();
     echo json_encode($orders, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     exit;
 }
 
 if ($method === 'POST') {
     $rawInput = file_get_contents('php://input');
-    $payload = json_decode($rawInput, true);
-    $orders = vdhReadOrders($dataOrdersFile, $apiOrdersFile);
-    $hasAdmin = vdhExtractAdminToken() !== '';
+    $payload = json_decode((string)$rawInput, true);
 
     if (str_contains($uriPath, '/confirm-payment') || $action === 'confirm-payment') {
-        if (!$hasAdmin) {
-            http_response_code(401);
-            echo json_encode(['success' => false, 'error' => 'Unauthorized: Admin session required.']);
-            exit;
+        vdhRequireAdmin();
+        if ($idParam === '' && preg_match('#/api/orders/([^/]+)/confirm-payment#', $uriPath, $m)) {
+            $idParam = urldecode($m[1]);
         }
-        [$target, $idx] = vdhFindOrder($orders, $idParam);
-        if (!$target) {
-            http_response_code(404);
-            echo json_encode(['success' => false, 'error' => 'Order not found']);
-            exit;
-        }
-        $now = gmdate('Y-m-d\TH:i:s.000\Z');
-        $target['paymentStatus'] = 'paid';
-        $target['isPaid'] = true;
-        if (!in_array($target['orderStatus'] ?? '', ['Processing', 'Shipped', 'Delivered'], true)) {
-            $target['orderStatus'] = 'Confirmed';
-        }
-        $target['confirmedAt'] = $target['confirmedAt'] ?? $now;
-        $target['paidAt'] = $target['paidAt'] ?? $now;
-        $target['paymentVerifiedAt'] = $now;
-        $target['verifiedVia'] = 'admin_manual';
-        $target['updatedAt'] = $now;
-        $orders[$idx] = vdhSanitizeOrder($target, $target);
-        vdhWriteOrders($orders, $dataOrdersFile, $apiOrdersFile);
-        echo json_encode(['success' => true, 'order' => $orders[$idx]], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        exit;
+
+        $res = vdhWithFileLock('orders', function () use ($dataOrdersFile, $apiOrdersFile, $idParam) {
+            $orders = vdhReadOrders($dataOrdersFile, $apiOrdersFile);
+            [$target, $idx] = vdhFindOrder($orders, $idParam);
+            if (!$target) {
+                return ['status' => 404, 'body' => ['success' => false, 'error' => 'Order not found']];
+            }
+            $now = gmdate('Y-m-d\TH:i:s.000\Z');
+            $target['paymentStatus'] = 'paid';
+            $target['isPaid'] = true;
+            if (!in_array($target['orderStatus'] ?? '', ['Processing', 'Shipped', 'Delivered'], true)) {
+                $target['orderStatus'] = 'Confirmed';
+            }
+            $target['confirmedAt'] = $target['confirmedAt'] ?? $now;
+            $target['paidAt'] = $target['paidAt'] ?? $now;
+            $target['paymentVerifiedAt'] = $now;
+            $target['verifiedVia'] = 'admin_manual';
+            $target['updatedAt'] = $now;
+            $sanitized = vdhSanitizeOrder($target, $target);
+            $sanitized['whatsappClickToChatUrl'] = vdhOwnerWhatsAppUrl($sanitized);
+            $orders[$idx] = $sanitized;
+            if (!vdhWriteOrders($orders, $dataOrdersFile, $apiOrdersFile)) {
+                return ['status' => 500, 'body' => ['success' => false, 'error' => 'Failed to persist confirmation.']];
+            }
+            return ['status' => 200, 'body' => ['success' => true, 'order' => $sanitized]];
+        });
+
+        vdhSendJson($res['status'], $res['body']);
     }
 
-    if (str_contains($uriPath, '/customer-whatsapp-confirm') || str_contains($uriPath, '/whatsapp-confirm')) {
-        [$target, $idx] = vdhFindOrder($orders, $idParam);
-        if (!$target) {
-            http_response_code(404);
-            echo json_encode(['success' => false, 'error' => 'Order not found']);
-            exit;
+    if (
+        str_contains($uriPath, '/customer-whatsapp-confirm') ||
+        str_contains($uriPath, '/whatsapp-confirm') ||
+        $action === 'customer-whatsapp-confirm' ||
+        $action === 'whatsapp-confirm'
+    ) {
+        if ($idParam === '' && preg_match('#/api/orders/([^/]+)/(?:customer-)?whatsapp-confirm#', $uriPath, $m)) {
+            $idParam = urldecode($m[1]);
         }
-        $now = gmdate('Y-m-d\TH:i:s.000\Z');
-        $target['whatsappCustomerConfirmed'] = true;
-        $target['whatsappCustomerConfirmedAt'] = $now;
-        $target['updatedAt'] = $now;
-        $orders[$idx] = $target;
-        vdhWriteOrders($orders, $dataOrdersFile, $apiOrdersFile);
-        echo json_encode(['success' => true, 'order' => $target], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        exit;
+
+        $res = vdhWithFileLock('orders', function () use ($dataOrdersFile, $apiOrdersFile, $whatsappLogsFile, $idParam) {
+            $orders = vdhReadOrders($dataOrdersFile, $apiOrdersFile);
+            [$target, $idx] = vdhFindOrder($orders, $idParam);
+            if (!$target) {
+                return ['status' => 404, 'body' => ['success' => false, 'error' => 'Order not found']];
+            }
+
+            $admin = vdhAuthenticateAdmin();
+            $customer = vdhAuthenticateCustomer();
+            $receiptTok = vdhExtractOrderReceiptToken();
+            $authorized = (bool)$admin
+                || ($customer && vdhCustomerOwnsOrder($customer, $target))
+                || vdhHasValidOrderReceiptToken($target, $receiptTok);
+
+            if (!$authorized) {
+                return ['status' => 403, 'body' => ['success' => false, 'error' => 'Forbidden: Valid order token or owner authentication required.']];
+            }
+
+            if (!empty($target['whatsappCustomerConfirmed'])) {
+                return ['status' => 200, 'body' => ['success' => true, 'alreadyConfirmed' => true, 'order' => $target]];
+            }
+
+            $now = gmdate('Y-m-d\TH:i:s.000\Z');
+            $target['whatsappCustomerConfirmed'] = true;
+            $target['whatsappCustomerConfirmedAt'] = $now;
+            $target['updatedAt'] = $now;
+            $orders[$idx] = $target;
+
+            vdhSaveWhatsAppLog($whatsappLogsFile, [
+                'orderId' => $target['orderNumber'] ?? $target['id'],
+                'recipient' => '+' . VDH_OWNER_WHATSAPP,
+                'timestamp' => $now,
+                'type' => 'CUSTOMER_WHATSAPP_CONFIRMATION',
+                'status' => 'CONFIRMED_BY_CUSTOMER',
+                'customerName' => $target['customerName'] ?? '',
+                'customerPhone' => $target['customerPhone'] ?? ''
+            ]);
+            vdhWriteOrders($orders, $dataOrdersFile, $apiOrdersFile);
+
+            return ['status' => 200, 'body' => ['success' => true, 'order' => $target]];
+        });
+
+        vdhSendJson($res['status'], $res['body']);
     }
 
     if (!is_array($payload) || (empty($payload['id']) && empty($payload['orderNumber']))) {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'Order payload requires an id or orderNumber.']);
-        exit;
+        vdhSendJson(400, ['success' => false, 'error' => 'Order payload requires an id or orderNumber.']);
     }
 
+    $admin = vdhAuthenticateAdmin();
+    $customer = vdhAuthenticateCustomer();
+    $receiptTok = vdhExtractOrderReceiptToken();
     $lookupKey = (string)($payload['id'] ?? $payload['orderNumber']);
-    [$existing, $existingIdx] = vdhFindOrder($orders, $lookupKey);
 
-    if (!$hasAdmin) {
-        if (($existing['paymentStatus'] ?? '') === 'paid') {
-            $payload['paymentStatus'] = 'paid';
-            $payload['isPaid'] = true;
-            $payload['orderStatus'] = $existing['orderStatus'];
-            $payload['paidAt'] = $existing['paidAt'] ?? null;
-            $payload['paymentVerifiedAt'] = $existing['paymentVerifiedAt'] ?? null;
-            $payload['verifiedVia'] = $existing['verifiedVia'] ?? null;
-        } else {
-            if (($payload['paymentStatus'] ?? '') === 'paid' || ($payload['isPaid'] ?? false) === true) {
-                $payload['paymentStatus'] = $existing['paymentStatus'] ?? 'pending';
-                $payload['isPaid'] = false;
-            }
-            if (($payload['orderStatus'] ?? '') === 'Confirmed' && ($existing['paymentStatus'] ?? '') !== 'paid') {
-                $payload['orderStatus'] = $existing['orderStatus'] ?? 'Pending';
+    $res = vdhWithFileLock('orders', function () use ($dataOrdersFile, $apiOrdersFile, $payload, $lookupKey, $admin, $customer, $receiptTok) {
+        $orders = vdhReadOrders($dataOrdersFile, $apiOrdersFile);
+        [$existing, $existingIdx] = vdhFindOrder($orders, $lookupKey);
+
+        if ($existing && !$admin) {
+            $canUpdateExisting = ($customer && vdhCustomerOwnsOrder($customer, $existing)) || vdhHasValidOrderReceiptToken($existing, $receiptTok);
+            if (!$canUpdateExisting) {
+                return ['status' => 403, 'body' => ['success' => false, 'error' => 'Order ID already exists. Cannot overwrite existing order without authorization.']];
             }
         }
-    }
 
-    $now = gmdate('Y-m-d\TH:i:s.000\Z');
-    $payload['createdAt'] = $existing['createdAt'] ?? ($payload['createdAt'] ?? $now);
-    $payload['updatedAt'] = $now;
-    $saved = vdhSanitizeOrder($payload, $existing);
+        if (!$admin) {
+            unset(
+                $payload['verifiedVia'],
+                $payload['paidAt'],
+                $payload['paymentVerifiedAt'],
+                $payload['verifiedAmount'],
+                $payload['paymentId'],
+                $payload['cfOrderId'],
+                $payload['webhookEventIds'],
+                $payload['whatsappClickToChatUrl'],
+                $payload['paymentEnv'],
+                $payload['isTestOrder']
+            );
+            if (($existing['paymentStatus'] ?? '') === 'paid') {
+                $payload['paymentStatus'] = 'paid';
+                $payload['isPaid'] = true;
+                $payload['orderStatus'] = $existing['orderStatus'];
+            } else {
+                $payload['paymentStatus'] = $existing['paymentStatus'] ?? 'pending';
+                $payload['isPaid'] = false;
+                if (($payload['orderStatus'] ?? '') === 'Confirmed') {
+                    $payload['orderStatus'] = $existing['orderStatus'] ?? 'Pending';
+                }
+            }
+        }
 
-    if ($existingIdx >= 0) {
-        $orders[$existingIdx] = $saved;
-    } else {
-        array_unshift($orders, $saved);
-    }
+        $now = gmdate('Y-m-d\TH:i:s.000\Z');
+        $payload['createdAt'] = $existing['createdAt'] ?? ($payload['createdAt'] ?? $now);
+        $payload['updatedAt'] = $now;
+        $saved = vdhSanitizeOrder($payload, $existing);
 
-    if (!vdhWriteOrders($orders, $dataOrdersFile, $apiOrdersFile)) {
-        http_response_code(500);
-        echo json_encode(['success' => false, 'error' => 'Failed to save order on server.']);
-        exit;
-    }
+        if (($saved['paymentStatus'] ?? '') === 'paid') {
+            $saved['whatsappClickToChatUrl'] = vdhOwnerWhatsAppUrl($saved);
+        }
 
-    echo json_encode(['success' => true, 'order' => $saved], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-    exit;
+        if ($existingIdx >= 0) {
+            $orders[$existingIdx] = $saved;
+        } else {
+            array_unshift($orders, $saved);
+        }
+
+        if (!vdhWriteOrders($orders, $dataOrdersFile, $apiOrdersFile)) {
+            return ['status' => 500, 'body' => ['success' => false, 'error' => 'Failed to save order on server.']];
+        }
+
+        return ['status' => 200, 'body' => [
+            'success' => true,
+            'order' => $saved,
+            'receiptToken' => vdhOrderReceiptToken($saved)
+        ]];
+    });
+
+    vdhSendJson($res['status'], $res['body']);
 }
 
 if ($method === 'PUT') {
+    vdhRequireAdmin();
+
     $rawInput = file_get_contents('php://input');
-    $updates = json_decode($rawInput, true);
+    $updates = json_decode((string)$rawInput, true);
     if (!is_array($updates) || $idParam === '') {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'Invalid update payload or order id.']);
-        exit;
-    }
-    $orders = vdhReadOrders($dataOrdersFile, $apiOrdersFile);
-    [$target, $idx] = vdhFindOrder($orders, $idParam);
-    if (!$target) {
-        http_response_code(404);
-        echo json_encode(['success' => false, 'error' => 'Order not found']);
-        exit;
+        vdhSendJson(400, ['success' => false, 'error' => 'Invalid update payload or order id.']);
     }
 
-    $hasAdmin = vdhExtractAdminToken() !== '';
-    if (!$hasAdmin && ($updates['paymentStatus'] ?? '') === 'paid' && ($target['paymentStatus'] ?? '') !== 'paid') {
-        unset($updates['paymentStatus'], $updates['isPaid']);
-    }
+    $res = vdhWithFileLock('orders', function () use ($dataOrdersFile, $apiOrdersFile, $updates, $idParam) {
+        $orders = vdhReadOrders($dataOrdersFile, $apiOrdersFile);
+        [$target, $idx] = vdhFindOrder($orders, $idParam);
+        if (!$target) {
+            return ['status' => 404, 'body' => ['success' => false, 'error' => 'Order not found']];
+        }
 
-    $now = gmdate('Y-m-d\TH:i:s.000\Z');
-    $updates['updatedAt'] = $now;
-    if (($updates['paymentStatus'] ?? '') === 'paid' && empty($target['paidAt'])) {
-        $updates['paidAt'] = $now;
-        $updates['paymentVerifiedAt'] = $now;
-        $updates['verifiedVia'] = $target['verifiedVia'] ?? 'admin_manual';
-    }
+        $now = gmdate('Y-m-d\TH:i:s.000\Z');
+        $updates['updatedAt'] = $now;
+        if (($updates['paymentStatus'] ?? '') === 'paid' && empty($target['paidAt'])) {
+            $updates['paidAt'] = $now;
+            $updates['paymentVerifiedAt'] = $now;
+            $updates['verifiedVia'] = $target['verifiedVia'] ?? 'admin_manual';
+        }
 
-    $next = vdhSanitizeOrder($updates, $target);
-    $orders[$idx] = $next;
-    vdhWriteOrders($orders, $dataOrdersFile, $apiOrdersFile);
-    echo json_encode(['success' => true, 'order' => $next], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-    exit;
+        $next = vdhSanitizeOrder($updates, $target);
+        if (($next['paymentStatus'] ?? '') === 'paid') {
+            $next['whatsappClickToChatUrl'] = vdhOwnerWhatsAppUrl($next);
+        }
+        $orders[$idx] = $next;
+        if (!vdhWriteOrders($orders, $dataOrdersFile, $apiOrdersFile)) {
+            return ['status' => 500, 'body' => ['success' => false, 'error' => 'Failed to save order update.']];
+        }
+        return ['status' => 200, 'body' => ['success' => true, 'order' => $next]];
+    });
+
+    vdhSendJson($res['status'], $res['body']);
 }
 
-http_response_code(405);
-echo json_encode(['success' => false, 'error' => 'Method not allowed']);
-exit;
+vdhSendJson(405, ['success' => false, 'error' => 'Method not allowed']);

@@ -183,6 +183,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         if (!res.ok || !data.success) {
           throw new Error(data.error || data.message || 'Registration failed. Please check your details.');
         }
+        if (data.token) {
+          try {
+            localStorage.setItem('vidhyaa_patron_token', data.token);
+          } catch {}
+        }
         if (data.user) {
           try {
             localStorage.setItem('vidhyaa_patron_session', JSON.stringify(data.user));
@@ -225,6 +230,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             data.message ||
             `No patron account found for +91 ${mobileDigits}. Please verify credentials or create an account.`
         );
+      }
+      if (data.token) {
+        try {
+          localStorage.setItem('vidhyaa_patron_token', data.token);
+        } catch {}
       }
       if (data.user) {
         try {

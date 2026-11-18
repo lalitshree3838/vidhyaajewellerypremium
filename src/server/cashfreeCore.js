@@ -2,14 +2,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { getOutsideSecretsDir, isLiveProductionRequest } from './sessionAuth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..', '..');
-const SECRETS_DIR = path.join(ROOT_DIR, '.admin-secrets');
-const SECRET_CONFIG_PATH = path.join(SECRETS_DIR, 'cashfree-config.json');
-const LEGACY_CONFIG_PATH = path.join(ROOT_DIR, 'cashfree-config.json');
 const ENV_FILE_PATH = path.join(ROOT_DIR, '.env');
+
+function resolveOutsideConfigPath() {
+  const override = String(process.env.VIDHYAA_SECRETS_DIR || '').trim();
+  if (override) {
+    return path.join(override, 'cashfree-config.json');
+  }
+  return path.join(path.dirname(ROOT_DIR), '.admin-secrets', 'cashfree-config.json');
+}
 
 function readDotEnvVars() {
   const vars = {};
@@ -36,20 +42,21 @@ function readDotEnvVars() {
 }
 
 export function getCashfreeCredentials() {
+  const outsideConfigPath = resolveOutsideConfigPath();
   let fileConfig = {};
-  for (const candidate of [SECRET_CONFIG_PATH, LEGACY_CONFIG_PATH]) {
-    try {
-      if (fs.existsSync(candidate)) {
-        const raw = fs.readFileSync(candidate, 'utf8');
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-          fileConfig = parsed;
-          break;
-        }
+  let storedOutsideWebroot = false;
+
+  try {
+    if (fs.existsSync(outsideConfigPath)) {
+      const raw = fs.readFileSync(outsideConfigPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        fileConfig = parsed;
+        storedOutsideWebroot = true;
       }
-    } catch (err) {
-      console.warn(`[Cashfree] Warning reading ${candidate}:`, err?.message || err);
     }
+  } catch (err) {
+    console.warn(`[Cashfree] Warning reading ${outsideConfigPath}:`, err?.message || err);
   }
 
   const dotEnv = readDotEnvVars();
@@ -76,12 +83,22 @@ export function getCashfreeCredentials() {
     notifyUrl,
     baseUrl,
     isConfigured,
-    hasLiveCredentials
+    hasLiveCredentials,
+    storedOutsideWebroot
   };
 }
 
 export function saveCashfreeConfig(newConfig = {}) {
   try {
+    const outsideDir = getOutsideSecretsDir();
+    if (!outsideDir) {
+      return {
+        success: false,
+        message:
+          'Cannot write Cashfree secrets outside webroot (../.admin-secrets/). Refusing insecure fallback inside public_html. Set CASHFREE_APP_ID and CASHFREE_SECRET_KEY in environment instead.'
+      };
+    }
+
     const existing = getCashfreeCredentials();
     const rawEnv = String(newConfig.env || existing.env || 'SANDBOX').trim().toUpperCase();
     const updated = {
@@ -93,37 +110,35 @@ export function saveCashfreeConfig(newConfig = {}) {
       updatedAt: new Date().toISOString()
     };
 
-    if (!fs.existsSync(SECRETS_DIR)) {
-      fs.mkdirSync(SECRETS_DIR, { recursive: true, mode: 0o700 });
-    }
+    const targetPath = path.join(outsideDir, 'cashfree-config.json');
+    fs.writeFileSync(targetPath, JSON.stringify(updated, null, 2), { encoding: 'utf8', mode: 0o600 });
     try {
-      fs.chmodSync(SECRETS_DIR, 0o700);
+      fs.chmodSync(targetPath, 0o600);
     } catch {}
 
-    fs.writeFileSync(SECRET_CONFIG_PATH, JSON.stringify(updated, null, 2), { encoding: 'utf8', mode: 0o600 });
-    try {
-      fs.chmodSync(SECRET_CONFIG_PATH, 0o600);
-    } catch {}
-
-    return { success: true, message: 'Cashfree configuration saved securely on server.' };
+    return { success: true, message: 'Cashfree configuration saved securely outside webroot.' };
   } catch (err) {
     return { success: false, message: err?.message || 'Failed to save Cashfree configuration.' };
   }
 }
 
-export function getCashfreeStatusSummary() {
+export function getCashfreeStatusSummary(req = null) {
   const creds = getCashfreeCredentials();
   const maskedAppId = creds.appId
     ? creds.appId.length > 8
       ? `${creds.appId.slice(0, 4)}••••${creds.appId.slice(-4)}`
       : '••••Configured'
     : 'Not Configured';
+  const isLiveDomain = req ? isLiveProductionRequest(req) : false;
 
   return {
     success: true,
     configured: creds.isConfigured,
     isConfigured: creds.isConfigured,
     hasLiveCredentials: creds.hasLiveCredentials,
+    isLiveDomain,
+    blockedOnLiveDomain: Boolean(isLiveDomain && creds.env === 'SANDBOX'),
+    storedOutsideWebroot: creds.storedOutsideWebroot,
     env: creds.env,
     mode: creds.env.toLowerCase(),
     appIdMasked: maskedAppId,
@@ -147,8 +162,21 @@ export async function createCashfreeOrder(params) {
       success: false,
       configured: false,
       mode: creds.env.toLowerCase(),
+      env: creds.env,
       error:
-        'Cashfree live/sandbox credentials are not configured yet. Set CASHFREE_APP_ID and CASHFREE_SECRET_KEY in .env or Admin Settings > Cashfree Gateway.'
+        'Cashfree credentials are not configured yet. Set CASHFREE_APP_ID and CASHFREE_SECRET_KEY in .env or Admin Settings > Cashfree Gateway.'
+    };
+  }
+
+  if (params?.isLiveDomain && creds.env === 'SANDBOX') {
+    return {
+      success: false,
+      configured: true,
+      blockedOnLiveDomain: true,
+      mode: 'sandbox',
+      env: 'SANDBOX',
+      error:
+        'Cashfree Gateway is in SANDBOX test mode and is disabled on live production domain vidhyaajewellerystudio.com. Switch to PRODUCTION credentials in Admin Settings.'
     };
   }
 
@@ -164,6 +192,7 @@ export async function createCashfreeOrder(params) {
       success: false,
       configured: true,
       mode: creds.env.toLowerCase(),
+      env: creds.env,
       error: 'Invalid order amount. Payment amount must be greater than ₹0.'
     };
   }
@@ -217,6 +246,7 @@ export async function createCashfreeOrder(params) {
         success: false,
         configured: true,
         mode: creds.env.toLowerCase(),
+        env: creds.env,
         error: errMsg
       };
     }
@@ -228,7 +258,8 @@ export async function createCashfreeOrder(params) {
       cfOrderId: data.cf_order_id,
       paymentSessionId: data.payment_session_id,
       orderStatus: data.order_status || 'ACTIVE',
-      mode: creds.env.toLowerCase()
+      mode: creds.env.toLowerCase(),
+      env: creds.env
     };
   } catch (err) {
     console.error('[Cashfree Order Network Error]', err);
@@ -236,6 +267,7 @@ export async function createCashfreeOrder(params) {
       success: false,
       configured: true,
       mode: creds.env.toLowerCase(),
+      env: creds.env,
       error: err?.message || 'Network error connecting to Cashfree Payments Gateway.'
     };
   }
@@ -287,6 +319,20 @@ export async function verifyCashfreeOrder(orderId, options = {}) {
       orderId: safeOrderId,
       orderStatus: 'UNCONFIGURED',
       error: 'Cashfree merchant credentials are not configured on the server.'
+    };
+  }
+
+  if (options?.isLiveDomain && creds.env === 'SANDBOX') {
+    return {
+      success: false,
+      isPaid: false,
+      isFailed: false,
+      blockedOnLiveDomain: true,
+      orderId: safeOrderId,
+      orderStatus: 'SANDBOX_BLOCKED_ON_PRODUCTION',
+      mode: 'sandbox',
+      env: 'SANDBOX',
+      error: 'Sandbox payment verification is disabled on live production domain vidhyaajewellerystudio.com.'
     };
   }
 
@@ -418,6 +464,8 @@ export async function verifyCashfreeOrder(orderId, options = {}) {
         orderStatus: rawOrderStatus,
         orderAmount: paidAmount,
         cfOrderId: orderData.cf_order_id,
+        env: creds.env,
+        mode: creds.env.toLowerCase(),
         paymentDetails
       };
     }
@@ -437,6 +485,8 @@ export async function verifyCashfreeOrder(orderId, options = {}) {
         : rawOrderStatus,
       orderAmount: gatewayOrderAmount,
       cfOrderId: orderData.cf_order_id,
+      env: creds.env,
+      mode: creds.env.toLowerCase(),
       paymentDetails,
       error: paymentDetails?.paymentMessage || (isFailed ? `Payment ${latestPaymentStatus || rawOrderStatus}` : undefined)
     };

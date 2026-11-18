@@ -260,11 +260,27 @@ export const TrackOrderView: React.FC<TrackOrderViewProps> = ({
               <span className="font-bold text-gray-700 uppercase tracking-wider block">
                 Shipping Address
               </span>
-              <p className="text-[#3B1E22] font-semibold">{order.customerName}</p>
-              <p className="text-gray-500">
-                {formatFullAddress(order.shippingAddress)}
-              </p>
-              <p className="text-gray-500">Phone: {order.customerPhone}</p>
+              {order.redactedPii ? (
+                <>
+                  <p className="text-gray-600">
+                    {[order.shippingAddress?.city, order.shippingAddress?.state]
+                      .filter(Boolean)
+                      .join(', ')}
+                    {order.shippingAddress?.pincode ? ` - ${order.shippingAddress.pincode}` : ''}
+                  </p>
+                  <p className="text-[11px] text-gray-500 italic">
+                    Full delivery address and contact details are hidden for privacy. Sign in to view full details.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-[#3B1E22] font-semibold">{order.customerName}</p>
+                  <p className="text-gray-500">
+                    {formatFullAddress(order.shippingAddress)}
+                  </p>
+                  <p className="text-gray-500">Phone: {order.customerPhone}</p>
+                </>
+              )}
             </div>
 
             <div className="space-y-1 sm:text-right">

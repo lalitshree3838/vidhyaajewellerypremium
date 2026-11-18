@@ -1,13 +1,14 @@
 export function getAdminSessionToken(): string {
   try {
     return (
-      localStorage.getItem('vidhyaa_admin_token') ||
       sessionStorage.getItem('vidhyaa_admin_token') ||
+      localStorage.getItem('vidhyaa_admin_token') ||
+      sessionStorage.getItem('admin_session_token') ||
       localStorage.getItem('admin_session_token') ||
-      'vidhyaa-admin-authorized'
+      ''
     );
   } catch {
-    return 'vidhyaa-admin-authorized';
+    return '';
   }
 }
 
@@ -132,7 +133,10 @@ export async function uploadJewelleryVideo(
     throw new Error(validation.error || 'Invalid video file.');
   }
 
-  const token = options?.adminToken || getAdminSessionToken() || 'vidhyaa-admin-authorized';
+  const token = options?.adminToken || getAdminSessionToken();
+  if (!token) {
+    throw new Error('Administrator session expired. Please sign in again before uploading videos.');
+  }
 
   // Upload to persistent server storage endpoint via XMLHttpRequest with real progress
   return new Promise<VideoUploadResult>((resolve, reject) => {

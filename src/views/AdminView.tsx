@@ -101,14 +101,12 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
   // Authentication session state for dedicated /admin/login gate
   const [adminAuthSession, setAdminAuthSession] = useState<boolean>(() => {
-    return Boolean(isAdmin || adminSessionActive);
+    return Boolean(adminSessionActive);
   });
 
   useEffect(() => {
-    if (isAdmin || adminSessionActive) {
-      setAdminAuthSession(true);
-    }
-  }, [isAdmin, adminSessionActive]);
+    setAdminAuthSession(Boolean(adminSessionActive));
+  }, [adminSessionActive]);
 
   // Mobile sidebar drawer state
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -327,9 +325,14 @@ export const AdminView: React.FC<AdminViewProps> = ({
   const [printOrder, setPrintOrder] = useState<Order | null>(null);
 
   useEffect(() => {
-    loadOrders();
     loadReviews();
   }, []);
+
+  useEffect(() => {
+    if (adminAuthSession) {
+      loadOrders();
+    }
+  }, [adminAuthSession]);
 
   useEffect(() => {
     setSettingsForm(storeSettings);
@@ -359,14 +362,14 @@ export const AdminView: React.FC<AdminViewProps> = ({
     }
   };
 
-  // Metrics
-  const paidOrders = orders.filter((o) => isOrderPaid(o));
-  const totalSales = paidOrders.reduce((sum, o) => sum + (Number(o.totalAmount) || 0), 0);
+  // Metrics (exclude Sandbox test orders from live paid revenue)
+  const paidOrders = orders.filter((o) => isOrderPaid(o) && !o.isTestOrder && o.paymentEnv !== 'SANDBOX');
+  const totalSales = paidOrders.reduce((sum, o) => sum + (Number(o.verifiedAmount ?? o.totalAmount) || 0), 0);
 
   const todayDateString = new Date().toISOString().split('T')[0];
   const todaySales = paidOrders
     .filter((o) => String(o.createdAt || '').startsWith(todayDateString))
-    .reduce((sum, o) => sum + (Number(o.totalAmount) || 0), 0);
+    .reduce((sum, o) => sum + (Number(o.verifiedAmount ?? o.totalAmount) || 0), 0);
 
   const pendingOrdersCount = orders.filter((o) => o.orderStatus === 'Pending' || o.orderStatus === 'Confirmed').length;
   const processingCount = orders.filter((o) => o.orderStatus === 'Processing' || o.orderStatus === 'Shipped').length;
@@ -1991,6 +1994,11 @@ export const AdminView: React.FC<AdminViewProps> = ({
                               >
                                 {ordPaid ? '✓ PAID' : ord.paymentStatus === 'failed' ? 'FAILED' : 'PENDING'}
                               </span>
+                              {(ord.isTestOrder || ord.paymentEnv === 'SANDBOX') && (
+                                <span className="inline-block ml-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                                  SANDBOX TEST
+                                </span>
+                              )}
                             </td>
 
                             <td className="py-3.5 px-4 font-bold text-sm text-[#802336] whitespace-nowrap">
@@ -2615,6 +2623,16 @@ export const AdminView: React.FC<AdminViewProps> = ({
                         Gateway Order ID: {selectedOrderDetails.gatewayOrderId}
                       </span>
                     )}
+                    {(selectedOrderDetails.isTestOrder || selectedOrderDetails.paymentEnv === 'SANDBOX') && (
+                      <span className="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                        SANDBOX TEST ORDER (Excluded from Live Revenue)
+                      </span>
+                    )}
+                    {selectedOrderDetails.verifiedVia && (
+                      <span className="text-[11px] text-gray-600 block">
+                        Verification Source: <strong>{selectedOrderDetails.verifiedVia}</strong>
+                      </span>
+                    )}
                     {selectedOrderDetails.failureReason && (
                       <span className="text-[11px] text-red-700 font-semibold block">
                         Reason: {selectedOrderDetails.failureReason}
@@ -2633,6 +2651,11 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     <span className="font-serif font-bold text-lg text-[#802336] block">
                       Total: ₹{Number(selectedOrderDetails.totalAmount || 0).toLocaleString('en-IN')}
                     </span>
+                    {selectedOrderDetails.verifiedAmount !== undefined && (
+                      <span className="text-[11px] font-semibold text-emerald-700 block">
+                        Verified Paid Amount: ₹{Number(selectedOrderDetails.verifiedAmount).toLocaleString('en-IN')}
+                      </span>
+                    )}
                   </div>
                 </div>
 

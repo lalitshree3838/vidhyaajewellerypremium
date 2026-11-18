@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
+  getCashfreeCredentials,
   getCashfreeStatusSummary,
   saveCashfreeConfig,
   createCashfreeOrder,
@@ -10,6 +11,33 @@ import {
   verifyCashfreeWebhookSignature,
   sanitizeGatewayOrderId
 } from './src/server/cashfreeCore.js';
+import {
+  getAllowedAdminEmails,
+  signAdminToken,
+  signPatronToken,
+  verifySignedSessionToken,
+  verifyFirebaseIdToken,
+  revokeSessionToken,
+  extractTokenFromHeaders,
+  authenticateAdminRequest,
+  authenticateCustomerRequest,
+  computeOrderReceiptToken,
+  hasValidOrderReceiptToken,
+  customerOwnsOrder,
+  sanitizePublicOrderTracking,
+  normalizePhone10,
+  hashPasswordPbkdf2,
+  verifyPatronOrAdminPassword,
+  verifyTotpCode,
+  loadAdminCredentialsConfig,
+  checkRateLimit,
+  recordRateLimitFailure,
+  clearRateLimit,
+  isLiveProductionRequest,
+  withResourceLock,
+  atomicWriteFileSync,
+  getOutsideSecretsDir
+} from './src/server/sessionAuth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,15 +54,20 @@ const VIDEOS_UPLOAD_DIR = path.resolve(__dirname, 'videos', 'uploads');
 const DIST_VIDEOS_UPLOAD_DIR = path.resolve(__dirname, 'dist', 'videos', 'uploads');
 const MAX_VIDEO_UPLOAD_BYTES = 250 * 1024 * 1024; // 250 MB
 
-const ADMIN_EMAIL = 'anavneeraj2003@gmail.com';
 const OWNER_WHATSAPP_NUMBER = '917302187770';
+
+function getClientIp(req) {
+  const fwd = String(req?.headers?.['x-forwarded-for'] || '').trim();
+  if (fwd) return fwd.split(',')[0].trim();
+  return String(req?.socket?.remoteAddress || 'unknown');
+}
 
 function saveWhatsAppLog(entry) {
   try {
     const logs = readJsonFile(WHATSAPP_LOGS_FILE, []);
     logs.unshift(entry);
     if (logs.length > 100) logs.length = 100;
-    fs.writeFileSync(WHATSAPP_LOGS_FILE, JSON.stringify(logs, null, 2), 'utf8');
+    atomicWriteFileSync(WHATSAPP_LOGS_FILE, JSON.stringify(logs, null, 2));
   } catch (err) {
     console.error('[WhatsApp] Error saving log:', err.message);
   }
@@ -98,22 +131,6 @@ function getOwnerWhatsAppClickToChatLink(order) {
   return `https://wa.me/${OWNER_WHATSAPP_NUMBER}?text=${encodeURIComponent(messageText)}`;
 }
 
-function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
-  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-  return `${salt}:${hash}`;
-}
-
-function verifyPassword(password, storedHash) {
-  if (!storedHash || !storedHash.includes(':')) return false;
-  const [salt, expected] = storedHash.split(':');
-  try {
-    const actual = crypto.scryptSync(password, salt, 64).toString('hex');
-    return actual === expected;
-  } catch {
-    return false;
-  }
-}
-
 function parseBody(req) {
   return new Promise((resolve) => {
     let body = '';
@@ -174,7 +191,6 @@ function parseMultipartVideo(buffer, contentTypeHeader) {
   let pos = buffer.indexOf(boundaryBuf);
   while (pos !== -1) {
     const partStart = pos + boundaryBuf.length;
-    // Check for closing boundary `--`
     if (buffer[partStart] === 0x2d && buffer[partStart + 1] === 0x2d) {
       break;
     }
@@ -188,7 +204,6 @@ function parseMultipartVideo(buffer, contentTypeHeader) {
       const filenameMatch = /filename="([^"]*)"/i.exec(headersText);
       if (filenameMatch) {
         const bodyStart = headerEnd + headerSep.length;
-        // Strip trailing \r\n before the next boundary
         let bodyEnd = nextBoundary;
         if (buffer[bodyEnd - 2] === 0x0d && buffer[bodyEnd - 1] === 0x0a) {
           bodyEnd -= 2;
@@ -215,7 +230,7 @@ function sendJson(res, statusCode, data) {
     'Pragma': 'no-cache',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-file-name, x-file-type, x-admin-token'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-file-name, x-file-type, x-admin-token, x-customer-token, x-order-token'
   });
   res.end(jsonStr);
 }
@@ -251,14 +266,6 @@ function formatIndianPhoneServer(raw) {
   if (digits.length === 12 && digits.startsWith('91')) return `+91 ${digits.slice(2)}`;
   if (digits.length === 11 && digits.startsWith('0')) return `+91 ${digits.slice(1)}`;
   return str;
-}
-
-function extractAdminToken(req) {
-  const authHeader = String(req.headers['authorization'] || '');
-  const adminHeader = String(req.headers['x-admin-token'] || '');
-  if (adminHeader.trim()) return adminHeader.trim();
-  if (authHeader.startsWith('Bearer ')) return authHeader.slice(7).trim();
-  return '';
 }
 
 function normalizePaymentStatusServer(rawStatus, rawIsPaid) {
@@ -398,9 +405,9 @@ function readAllOrders() {
 function writeAllOrders(orders) {
   const serialized = JSON.stringify(orders, null, 2);
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(ORDERS_FILE, serialized, 'utf8');
+  atomicWriteFileSync(ORDERS_FILE, serialized);
   if (fs.existsSync(path.dirname(API_ORDERS_FILE))) {
-    fs.writeFileSync(API_ORDERS_FILE, serialized, 'utf8');
+    atomicWriteFileSync(API_ORDERS_FILE, serialized);
   }
 }
 
@@ -419,6 +426,121 @@ function findOrderByIdentifier(orders, identifier) {
         sanitizeGatewayOrderId(o.id) === safeNeedle
     ) || null
   );
+}
+
+function stripUntrustedOrderFields(input, allowAdminOnly = false) {
+  if (!input || typeof input !== 'object') return {};
+  const copy = { ...input };
+  if (allowAdminOnly) return copy;
+
+  const protectedKeys = [
+    'paymentStatus',
+    'isPaid',
+    'paymentId',
+    'cfOrderId',
+    'paidAt',
+    'paymentVerifiedAt',
+    'confirmedAt',
+    'verifiedVia',
+    'verifiedAmount',
+    'webhookEventIds',
+    'isTestOrder',
+    'paymentEnv',
+    'whatsappClickToChatUrl'
+  ];
+  for (const k of protectedKeys) {
+    delete copy[k];
+  }
+  if (copy.orderStatus === 'Confirmed' || copy.orderStatus === 'Processing' || copy.orderStatus === 'Shipped' || copy.orderStatus === 'Delivered') {
+    delete copy.orderStatus;
+  }
+  return copy;
+}
+
+function resolveSmsConfigPath() {
+  const outside = getOutsideSecretsDir();
+  if (outside) {
+    const outsidePath = path.join(outside, 'sms-config.json');
+    if (fs.existsSync(outsidePath)) return outsidePath;
+  }
+  const rootPath = path.resolve(__dirname, 'sms-config.json');
+  if (fs.existsSync(rootPath)) return rootPath;
+  return outside ? path.join(outside, 'sms-config.json') : rootPath;
+}
+
+function readSmsConfigSafe() {
+  let fileCfg = {};
+  const outside = getOutsideSecretsDir();
+  const candidates = [
+    ...(outside ? [path.join(outside, 'sms-config.json')] : []),
+    path.resolve(__dirname, 'sms-config.json')
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        fileCfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+        break;
+      }
+    } catch {}
+  }
+  const fast2smsApiKey = String(fileCfg.fast2smsApiKey || process.env.FAST2SMS_API_KEY || '').trim();
+  const twofactorApiKey = String(fileCfg.twofactorApiKey || process.env.TWOFACTOR_API_KEY || '').trim();
+  const msg91AuthKey = String(fileCfg.msg91AuthKey || process.env.MSG91_AUTH_KEY || '').trim();
+  const msg91TemplateId = String(fileCfg.msg91TemplateId || process.env.MSG91_TEMPLATE_ID || '').trim();
+  const twilioAccountSid = String(fileCfg.twilioAccountSid || process.env.TWILIO_ACCOUNT_SID || '').trim();
+  const twilioAuthToken = String(fileCfg.twilioAuthToken || process.env.TWILIO_AUTH_TOKEN || '').trim();
+  const twilioPhoneNumber = String(fileCfg.twilioPhoneNumber || process.env.TWILIO_PHONE_NUMBER || '').trim();
+
+  const isFast2SmsActive = fast2smsApiKey.length > 5;
+  const isTwoFactorActive = twofactorApiKey.length > 5;
+  const isTwilioActive = Boolean(twilioAccountSid && twilioAuthToken && twilioPhoneNumber);
+  const isMsg91Active = Boolean(msg91AuthKey && msg91TemplateId);
+
+  let activeProvider = 'None Configured (Setup Required)';
+  if (isTwilioActive) activeProvider = 'Twilio Worldwide SMS';
+  else if (isFast2SmsActive) activeProvider = 'Fast2SMS India';
+  else if (isTwoFactorActive) activeProvider = '2Factor.in India';
+  else if (isMsg91Active) activeProvider = 'MSG91 Enterprise';
+
+  return {
+    raw: {
+      provider: fileCfg.provider || process.env.SMS_PROVIDER || 'auto',
+      fast2smsApiKey,
+      twofactorApiKey,
+      msg91AuthKey,
+      msg91TemplateId,
+      twilioAccountSid,
+      twilioAuthToken,
+      twilioPhoneNumber
+    },
+    summary: {
+      success: true,
+      configured: isFast2SmsActive || isTwoFactorActive || isTwilioActive || isMsg91Active,
+      activeProvider,
+      internationalSupported: isTwilioActive,
+      providers: {
+        twilio: {
+          configured: isTwilioActive,
+          description: 'Worldwide international SMS delivery (180+ countries)',
+          senderNumber: twilioPhoneNumber ? `${twilioPhoneNumber.slice(0, 3)}••••${twilioPhoneNumber.slice(-2)}` : ''
+        },
+        fast2sms: {
+          configured: isFast2SmsActive,
+          description: 'Domestic India (+91) OTP route',
+          maskedKey: isFast2SmsActive ? `${fast2smsApiKey.slice(0, 4)}••••${fast2smsApiKey.slice(-3)}` : ''
+        },
+        twofactor: {
+          configured: isTwoFactorActive,
+          description: 'Domestic India (+91) OTP route',
+          maskedKey: isTwoFactorActive ? `${twofactorApiKey.slice(0, 4)}••••${twofactorApiKey.slice(-3)}` : ''
+        },
+        msg91: {
+          configured: isMsg91Active,
+          description: 'Domestic India (+91) DLT transactional route'
+        }
+      }
+    }
+  };
 }
 
 export function handleApiMiddleware(req, res, next) {
@@ -457,10 +579,11 @@ export function handleApiMiddleware(req, res, next) {
     return next();
   }
 
-  // Block direct HTTP access to secret directories, backups, and sensitive private JSON files
+  // Block direct HTTP access to secret directories, backups, private JSON files, and internal PHP helpers
   if (
     /^\/(?:\.admin-secrets|\.backups)(?:\/|$)/i.test(pathname) ||
-    /^\/(?:cashfree-config\.json|\.env(?:\..*)?|data\/(?:orders|patrons|whatsapp_logs)\.json)$/i.test(pathname)
+    /^\/(?:cashfree-config\.json|sms-config\.json|admin-credentials\.json|\.env(?:\..*)?|data\/(?:orders|patrons|whatsapp_logs|backup_orders[^/]*)\.json)$/i.test(pathname) ||
+    /^\/api\/admin\/_/i.test(pathname)
   ) {
     res.writeHead(403, {
       'Content-Type': 'application/json; charset=utf-8',
@@ -480,7 +603,7 @@ export function handleApiMiddleware(req, res, next) {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-file-name, x-file-type, x-admin-token'
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-file-name, x-file-type, x-admin-token, x-customer-token, x-order-token'
     });
     res.end();
     return;
@@ -489,6 +612,8 @@ export function handleApiMiddleware(req, res, next) {
   // Async dispatch for API endpoints
   (async () => {
     try {
+      const clientIp = getClientIp(req);
+
       // 1. Health check
       if (pathname === '/api/health' && req.method === 'GET') {
         return sendJson(res, 200, { status: 'ok' });
@@ -509,25 +634,146 @@ export function handleApiMiddleware(req, res, next) {
           });
         }
 
-        const email = String(body.email || '').trim().toLowerCase();
-        const password = String(body.password || '').trim();
+        const idToken = String(body.idToken || '').trim();
+        if (idToken) {
+          const rlKey = `admin_fb:${clientIp}`;
+          const rl = checkRateLimit(rlKey);
+          if (!rl.allowed) {
+            return sendJson(res, 429, {
+              success: false,
+              error: `Too many failed login attempts. Retry in ${rl.remainingSeconds} seconds.`
+            });
+          }
 
-        if (email === ADMIN_EMAIL) {
-          const token = `admin_tok_${Date.now()}_${crypto.randomBytes(16).toString('hex')}`;
+          const fb = await verifyFirebaseIdToken(idToken);
+          const fbEmail = String(fb?.email || '').toLowerCase().trim();
+          if (!fb || fb.email_verified !== true || !getAllowedAdminEmails().has(fbEmail)) {
+            recordRateLimitFailure(rlKey);
+            return sendJson(res, 401, {
+              success: false,
+              error: 'Unauthorized: Firebase account is not verified as an executive administrator.'
+            });
+          }
+
+          clearRateLimit(rlKey);
+          const adminInfo = {
+            email: fbEmail,
+            role: 'admin',
+            name: String(fb.name || 'Neeraj Chauhan (Owner)')
+          };
+          const token = signAdminToken(fbEmail, { name: adminInfo.name, authMethod: 'firebase' });
           return sendJson(res, 200, {
             success: true,
             token,
-            admin: {
-              email: ADMIN_EMAIL,
-              role: 'admin',
-              name: 'Neeraj Chauhan (Owner)'
-            }
+            admin: adminInfo
           });
         }
 
-        return sendJson(res, 401, {
-          success: false,
-          error: 'Invalid administrator credentials. Access restricted to authorized personnel.'
+        const email = String(body.email || '').trim().toLowerCase();
+        const password = String(body.password || '');
+        const totpCode = String(body.totpCode || body.otpCode || '').trim();
+
+        if (!email || !password.trim()) {
+          return sendJson(res, 400, {
+            success: false,
+            error: 'Both administrator email and password are required.'
+          });
+        }
+
+        const rlKey = `admin_pw:${clientIp}:${email}`;
+        const rl = checkRateLimit(rlKey);
+        if (!rl.allowed) {
+          return sendJson(res, 429, {
+            success: false,
+            error: `Security lockout active due to repeated failures. Retry in ${rl.remainingSeconds} seconds.`
+          });
+        }
+
+        if (!getAllowedAdminEmails().has(email)) {
+          recordRateLimitFailure(rlKey);
+          return sendJson(res, 401, {
+            success: false,
+            error: 'Invalid administrator credentials. Access restricted to authorized personnel.'
+          });
+        }
+
+        const creds = loadAdminCredentialsConfig();
+        if (!creds.hasPasswordAuth) {
+          return sendJson(res, 401, {
+            success: false,
+            error: 'Server password login is not configured. Sign in with Google Workspace Admin or configure ADMIN_PASSWORD_HASH outside public_html.'
+          });
+        }
+
+        let passwordOk = false;
+        if (creds.passwordHash) {
+          passwordOk = verifyPatronOrAdminPassword(password, creds.passwordHash);
+        } else if (creds.plainPassword) {
+          const a = Buffer.from(creds.plainPassword, 'utf8');
+          const b = Buffer.from(password, 'utf8');
+          passwordOk = a.length === b.length && crypto.timingSafeEqual(a, b);
+        }
+
+        if (!passwordOk) {
+          const fail = recordRateLimitFailure(rlKey);
+          if (fail.locked) {
+            return sendJson(res, 429, {
+              success: false,
+              error: `Too many failed attempts. Access suspended for ${fail.remainingSeconds} seconds.`
+            });
+          }
+          return sendJson(res, 401, {
+            success: false,
+            error: 'Invalid administrator credentials. Access restricted to authorized personnel.'
+          });
+        }
+
+        if (creds.totpSecret) {
+          if (!totpCode) {
+            return sendJson(res, 200, {
+              success: false,
+              requires2FA: true,
+              message: 'Enter your 6-digit authenticator verification code.'
+            });
+          }
+
+          let totpOk = verifyTotpCode(creds.totpSecret, totpCode);
+          if (!totpOk && Array.isArray(creds.backupCodes)) {
+            for (const bc of creds.backupCodes) {
+              if (typeof bc === 'string') {
+                const a = Buffer.from(bc.trim().toUpperCase(), 'utf8');
+                const b = Buffer.from(totpCode.toUpperCase(), 'utf8');
+                if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+                  totpOk = true;
+                  break;
+                }
+              }
+            }
+          }
+
+          if (!totpOk) {
+            const fail = recordRateLimitFailure(rlKey);
+            return sendJson(res, 401, {
+              success: false,
+              requires2FA: true,
+              error: fail.locked
+                ? `Too many invalid verification codes. Retry in ${fail.remainingSeconds} seconds.`
+                : 'Invalid two-factor authentication code.'
+            });
+          }
+        }
+
+        clearRateLimit(rlKey);
+        const adminInfo = {
+          email,
+          role: 'admin',
+          name: 'Neeraj Chauhan (Owner)'
+        };
+        const token = signAdminToken(email, { name: adminInfo.name, authMethod: 'password' });
+        return sendJson(res, 200, {
+          success: true,
+          token,
+          admin: adminInfo
         });
       }
 
@@ -536,22 +782,38 @@ export function handleApiMiddleware(req, res, next) {
         (pathname === '/api/admin/verify-session' || pathname === '/api/admin/verify-session.php') &&
         (req.method === 'POST' || req.method === 'GET')
       ) {
-        let token = '';
-        if (req.method === 'POST') {
+        let admin = await authenticateAdminRequest(req);
+        if (!admin && req.method === 'POST') {
           const body = await parseBody(req);
-          token = body?.token || '';
+          const bodyToken = String(body?.token || '').trim();
+          if (bodyToken) {
+            const session = verifySignedSessionToken(bodyToken, 'admin');
+            if (session && getAllowedAdminEmails().has(String(session.email || '').toLowerCase())) {
+              admin = {
+                email: String(session.email).toLowerCase(),
+                role: 'admin',
+                name: session.name || 'Executive Administrator'
+              };
+            } else {
+              const fb = await verifyFirebaseIdToken(bodyToken);
+              const fbEmail = String(fb?.email || '').toLowerCase().trim();
+              if (fb && fb.email_verified === true && getAllowedAdminEmails().has(fbEmail)) {
+                admin = {
+                  email: fbEmail,
+                  role: 'admin',
+                  name: fb.name || 'Executive Administrator'
+                };
+              }
+            }
+          }
         }
 
-        const authHeader = req.headers['authorization'] || '';
-        if (!token && authHeader.startsWith('Bearer ')) {
-          token = authHeader.substring(7).trim();
-        }
-
-        if (token && token.trim().length > 0) {
+        if (admin) {
           return sendJson(res, 200, {
             valid: true,
-            email: ADMIN_EMAIL,
-            role: 'admin'
+            email: admin.email,
+            role: 'admin',
+            name: admin.name || 'Executive Administrator'
           });
         }
 
@@ -560,6 +822,10 @@ export function handleApiMiddleware(req, res, next) {
 
       // 5. Admin Logout: POST /api/admin/logout or /api/admin/logout.php
       if ((pathname === '/api/admin/logout' || pathname === '/api/admin/logout.php') && req.method === 'POST') {
+        const token = extractTokenFromHeaders(req, 'x-admin-token');
+        if (token) {
+          revokeSessionToken(token);
+        }
         return sendJson(res, 200, { success: true });
       }
 
@@ -571,18 +837,21 @@ export function handleApiMiddleware(req, res, next) {
         }
 
         const rawPhone = String(body.phone || body.mobile || '');
-        const cleanDigits = rawPhone.replace(/\D/g, '');
-        let mobile = cleanDigits;
-        if (cleanDigits.length === 12 && cleanDigits.startsWith('91')) {
-          mobile = cleanDigits.slice(2);
-        } else if (cleanDigits.length === 11 && cleanDigits.startsWith('0')) {
-          mobile = cleanDigits.slice(1);
-        }
+        const mobile = normalizePhone10(rawPhone);
 
-        if (mobile.length !== 10) {
+        if (mobile.length !== 10 || !/^[6-9]\d{9}$/.test(mobile)) {
           return sendJson(res, 400, {
             code: 'INVALID_PHONE',
-            error: 'Please enter a valid 10-digit mobile number'
+            error: 'Please enter a valid 10-digit Indian mobile number'
+          });
+        }
+
+        const rlKey = `patron_reg:${clientIp}`;
+        const rl = checkRateLimit(rlKey);
+        if (!rl.allowed) {
+          return sendJson(res, 429, {
+            code: 'RATE_LIMITED',
+            error: `Too many registration attempts. Retry in ${rl.remainingSeconds} seconds.`
           });
         }
 
@@ -602,40 +871,44 @@ export function handleApiMiddleware(req, res, next) {
           });
         }
 
-        const patrons = readJsonFile(PATRONS_FILE, []);
-        if (patrons.some((p) => p.mobile === mobile)) {
-          return sendJson(res, 409, {
-            code: 'ACCOUNT_EXISTS',
-            error: 'An account with this mobile number already exists'
+        return await withResourceLock('patrons', async () => {
+          const patrons = readJsonFile(PATRONS_FILE, []);
+          if (patrons.some((p) => normalizePhone10(p?.mobile || p?.phone || '') === mobile)) {
+            return sendJson(res, 409, {
+              code: 'ACCOUNT_EXISTS',
+              error: 'An account with this mobile number already exists'
+            });
+          }
+
+          const newPatron = {
+            uid: `patron_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+            displayName: String(body.name || '').trim() || 'Valued Patron',
+            phone: `+91 ${mobile}`,
+            mobile,
+            email: String(body.email || '').trim(),
+            passwordHash: hashPasswordPbkdf2(password),
+            role: 'customer',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+
+          patrons.push(newPatron);
+          atomicWriteFileSync(PATRONS_FILE, JSON.stringify(patrons, null, 2));
+          clearRateLimit(rlKey);
+
+          const token = signPatronToken(newPatron);
+          return sendJson(res, 200, {
+            success: true,
+            user: {
+              uid: newPatron.uid,
+              displayName: newPatron.displayName,
+              phone: newPatron.phone,
+              mobile: newPatron.mobile,
+              email: newPatron.email,
+              role: newPatron.role
+            },
+            token
           });
-        }
-
-        const newPatron = {
-          uid: `patron_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
-          displayName: String(body.name || '').trim() || 'Valued Patron',
-          phone: `+91 ${mobile}`,
-          mobile: mobile,
-          email: String(body.email || '').trim(),
-          passwordHash: hashPassword(password),
-          role: 'customer',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-
-        patrons.push(newPatron);
-        fs.writeFileSync(PATRONS_FILE, JSON.stringify(patrons, null, 2), 'utf8');
-
-        return sendJson(res, 200, {
-          success: true,
-          user: {
-            uid: newPatron.uid,
-            displayName: newPatron.displayName,
-            phone: newPatron.phone,
-            mobile: newPatron.mobile,
-            email: newPatron.email,
-            role: newPatron.role
-          },
-          token: `patron_tok_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`
         });
       }
 
@@ -646,32 +919,37 @@ export function handleApiMiddleware(req, res, next) {
           return sendJson(res, 400, { code: 'INVALID_PAYLOAD', error: 'Invalid JSON payload' });
         }
 
-        const rawPhone = String(body.phone || body.mobile || '');
-        const cleanDigits = rawPhone.replace(/\D/g, '');
-        let mobile = cleanDigits;
-        if (cleanDigits.length === 12 && cleanDigits.startsWith('91')) {
-          mobile = cleanDigits.slice(2);
-        } else if (cleanDigits.length === 11 && cleanDigits.startsWith('0')) {
-          mobile = cleanDigits.slice(1);
+        const mobile = normalizePhone10(body.phone || body.mobile || '');
+        if (mobile.length !== 10) {
+          return sendJson(res, 400, {
+            code: 'INVALID_PHONE',
+            error: 'Please enter a valid 10-digit mobile number'
+          });
+        }
+
+        const rlKey = `patron_login:${clientIp}:${mobile}`;
+        const rl = checkRateLimit(rlKey);
+        if (!rl.allowed) {
+          return sendJson(res, 429, {
+            code: 'RATE_LIMITED',
+            error: `Too many failed sign-in attempts. Retry in ${rl.remainingSeconds} seconds.`
+          });
         }
 
         const patrons = readJsonFile(PATRONS_FILE, []);
-        const patron = patrons.find((p) => p.mobile === mobile);
-        if (!patron) {
-          return sendJson(res, 401, {
-            code: 'INVALID_CREDENTIALS',
-            error: 'Invalid credentials'
-          });
-        }
-
+        const patron = patrons.find((p) => normalizePhone10(p?.mobile || p?.phone || '') === mobile);
         const password = String(body.password || '');
-        if (!verifyPassword(password, patron.passwordHash)) {
+
+        if (!patron || !verifyPatronOrAdminPassword(password, patron.passwordHash)) {
+          recordRateLimitFailure(rlKey);
           return sendJson(res, 401, {
             code: 'INVALID_CREDENTIALS',
             error: 'Invalid credentials'
           });
         }
 
+        clearRateLimit(rlKey);
+        const token = signPatronToken(patron);
         return sendJson(res, 200, {
           success: true,
           user: {
@@ -682,7 +960,7 @@ export function handleApiMiddleware(req, res, next) {
             email: patron.email,
             role: patron.role || 'customer'
           },
-          token: `patron_tok_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`
+          token
         });
       }
 
@@ -693,7 +971,17 @@ export function handleApiMiddleware(req, res, next) {
           return sendJson(res, 200, products);
         }
 
-        if (req.method === 'POST') {
+        if (req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE') {
+          const admin = await authenticateAdminRequest(req);
+          if (!admin) {
+            return sendJson(res, 401, {
+              success: false,
+              error: 'Unauthorized: Administrator authentication required to modify catalog products.'
+            });
+          }
+        }
+
+        if (req.method === 'POST' || req.method === 'PUT') {
           const body = await parseBody(req);
           const incoming = body?.product || body;
           if (!incoming || !incoming.id) {
@@ -717,33 +1005,39 @@ export function handleApiMiddleware(req, res, next) {
             }
           }
 
-          const products = readJsonFile(PRODUCTS_FILE, []);
-          const existingIdx = products.findIndex((p) => p.id === incoming.id);
-          let savedProduct;
-          if (existingIdx >= 0) {
-            savedProduct = { ...products[existingIdx], ...incoming, updatedAt: new Date().toISOString() };
-            products[existingIdx] = savedProduct;
-          } else {
-            savedProduct = { ...incoming, createdAt: incoming.createdAt || new Date().toISOString() };
-            products.unshift(savedProduct);
-          }
+          return await withResourceLock('products', async () => {
+            const products = readJsonFile(PRODUCTS_FILE, []);
+            const existingIdx = products.findIndex((p) => p.id === incoming.id);
+            let savedProduct;
+            if (existingIdx >= 0) {
+              savedProduct = { ...products[existingIdx], ...incoming, updatedAt: new Date().toISOString() };
+              products[existingIdx] = savedProduct;
+            } else {
+              savedProduct = { ...incoming, createdAt: incoming.createdAt || new Date().toISOString() };
+              products.unshift(savedProduct);
+            }
 
-          fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(products, null, 2), 'utf8');
-          if (fs.existsSync(path.dirname(API_PRODUCTS_FILE))) {
-            fs.writeFileSync(API_PRODUCTS_FILE, JSON.stringify(products, null, 2), 'utf8');
-          }
-          return sendJson(res, 200, { success: true, product: savedProduct });
+            const serialized = JSON.stringify(products, null, 2);
+            atomicWriteFileSync(PRODUCTS_FILE, serialized);
+            if (fs.existsSync(path.dirname(API_PRODUCTS_FILE))) {
+              atomicWriteFileSync(API_PRODUCTS_FILE, serialized);
+            }
+            return sendJson(res, 200, { success: true, product: savedProduct });
+          });
         }
 
         if (req.method === 'DELETE') {
           const id = decodeURIComponent(pathname.replace('/api/products/', ''));
-          const products = readJsonFile(PRODUCTS_FILE, []);
-          const filtered = products.filter((p) => p.id !== id);
-          fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(filtered, null, 2), 'utf8');
-          if (fs.existsSync(path.dirname(API_PRODUCTS_FILE))) {
-            fs.writeFileSync(API_PRODUCTS_FILE, JSON.stringify(filtered, null, 2), 'utf8');
-          }
-          return sendJson(res, 200, { success: true });
+          return await withResourceLock('products', async () => {
+            const products = readJsonFile(PRODUCTS_FILE, []);
+            const filtered = products.filter((p) => p.id !== id);
+            const serialized = JSON.stringify(filtered, null, 2);
+            atomicWriteFileSync(PRODUCTS_FILE, serialized);
+            if (fs.existsSync(path.dirname(API_PRODUCTS_FILE))) {
+              atomicWriteFileSync(API_PRODUCTS_FILE, serialized);
+            }
+            return sendJson(res, 200, { success: true });
+          });
         }
       }
 
@@ -754,43 +1048,92 @@ export function handleApiMiddleware(req, res, next) {
           if (pathname === '/api/orders') {
             const filterUserId = parsedUrl.searchParams.get('userId')?.trim() || '';
             const filterEmail = parsedUrl.searchParams.get('email')?.trim().toLowerCase() || '';
-            const filterPhoneDigits = (parsedUrl.searchParams.get('phone')?.trim() || '').replace(/\D/g, '').slice(-10);
+            const filterPhoneDigits = normalizePhone10(parsedUrl.searchParams.get('phone')?.trim() || '');
 
-            if (filterUserId || filterEmail || filterPhoneDigits) {
-              const matched = orders.filter((o) => {
-                if (filterUserId && o.userId && o.userId === filterUserId) return true;
-                if (filterEmail && o.customerEmail && o.customerEmail.toLowerCase() === filterEmail) return true;
-                if (filterPhoneDigits) {
-                  const ordDigits = String(o.customerPhone || o.shippingAddress?.phone || '').replace(/\D/g, '').slice(-10);
-                  if (ordDigits && ordDigits === filterPhoneDigits) return true;
-                }
-                return false;
-              });
-              return sendJson(res, 200, matched);
+            if (!filterUserId && !filterEmail && !filterPhoneDigits) {
+              const admin = await authenticateAdminRequest(req);
+              if (!admin) {
+                return sendJson(res, 401, {
+                  success: false,
+                  error: 'Unauthorized: Administrator session required to list all orders.'
+                });
+              }
+              return sendJson(res, 200, orders);
             }
-            return sendJson(res, 200, orders);
+
+            const customer = await authenticateCustomerRequest(req);
+            if (!customer) {
+              return sendJson(res, 401, {
+                success: false,
+                error: 'Authentication required to view customer orders.'
+              });
+            }
+
+            if (!customer.isAdmin) {
+              if (filterUserId && customer.uid && filterUserId !== customer.uid) {
+                return sendJson(res, 403, { success: false, error: 'Forbidden: Cannot access another customer orders.' });
+              }
+              if (
+                filterEmail &&
+                customer.email &&
+                !customer.email.endsWith('@phone.vidhyaajewellery.com') &&
+                filterEmail !== customer.email
+              ) {
+                return sendJson(res, 403, { success: false, error: 'Forbidden: Email does not match signed-in account.' });
+              }
+              if (filterPhoneDigits && customer.phone10 && filterPhoneDigits !== customer.phone10) {
+                return sendJson(res, 403, { success: false, error: 'Forbidden: Phone does not match signed-in account.' });
+              }
+            }
+
+            const matched = orders.filter((o) => {
+              if (!customer.isAdmin && !customerOwnsOrder(customer, o)) {
+                return false;
+              }
+              if (filterUserId && o.userId && o.userId === filterUserId) return true;
+              if (filterEmail && o.customerEmail && o.customerEmail.toLowerCase() === filterEmail) return true;
+              if (filterPhoneDigits) {
+                const ordDigits = normalizePhone10(o.customerPhone || o.shippingAddress?.phone || '');
+                if (ordDigits && ordDigits === filterPhoneDigits) return true;
+              }
+              return Boolean(customer.isAdmin);
+            });
+            return sendJson(res, 200, matched);
           }
 
           const idOrNum = decodeURIComponent(pathname.replace('/api/orders/', ''));
           const order = findOrderByIdentifier(orders, idOrNum);
-          if (order) {
+          if (!order) {
+            return sendJson(res, 404, { error: 'Order not found' });
+          }
+
+          const customer = await authenticateCustomerRequest(req);
+          const canViewFull =
+            Boolean(customer?.isAdmin) ||
+            (customer && customerOwnsOrder(customer, order)) ||
+            hasValidOrderReceiptToken(order, req);
+
+          if (canViewFull) {
             return sendJson(res, 200, order);
           }
-          return sendJson(res, 404, { error: 'Order not found' });
+          return sendJson(res, 200, sanitizePublicOrderTracking(order));
         }
 
         if (pathname.includes('/confirm-payment') && req.method === 'POST') {
-          const token = extractAdminToken(req);
-          if (!token) {
+          const admin = await authenticateAdminRequest(req);
+          if (!admin) {
             return sendJson(res, 401, {
               success: false,
               error: 'Unauthorized: Manual payment confirmation requires an administrator session.'
             });
           }
           const id = decodeURIComponent(pathname.replace('/api/orders/', '').replace('/confirm-payment', ''));
-          const orders = readAllOrders();
-          const target = findOrderByIdentifier(orders, id);
-          if (target) {
+          return await withResourceLock('orders', async () => {
+            const orders = readAllOrders();
+            const target = findOrderByIdentifier(orders, id);
+            if (!target) {
+              return sendJson(res, 404, { success: false, error: 'Order not found' });
+            }
             const now = new Date().toISOString();
             const updated = sanitizeServerOrder(
               {
@@ -813,20 +1156,41 @@ export function handleApiMiddleware(req, res, next) {
             if (idx >= 0) orders[idx] = updated;
             writeAllOrders(orders);
             return sendJson(res, 200, { success: true, order: updated });
-          }
-          return sendJson(res, 404, { success: false, error: 'Order not found' });
+          });
         }
 
         if ((pathname.includes('/customer-whatsapp-confirm') || pathname.includes('/whatsapp-confirm')) && req.method === 'POST') {
           const id = decodeURIComponent(
             pathname.replace('/api/orders/', '').replace('/customer-whatsapp-confirm', '').replace('/whatsapp-confirm', '')
           );
-          const orders = readAllOrders();
-          const target = findOrderByIdentifier(orders, id);
-          if (target) {
+          const customer = await authenticateCustomerRequest(req);
+          return await withResourceLock('orders', async () => {
+            const orders = readAllOrders();
+            const target = findOrderByIdentifier(orders, id);
+            if (!target) {
+              return sendJson(res, 404, { success: false, error: 'Order not found' });
+            }
+
+            const authorized =
+              Boolean(customer?.isAdmin) ||
+              (customer && customerOwnsOrder(customer, target)) ||
+              hasValidOrderReceiptToken(target, req);
+
+            if (!authorized) {
+              return sendJson(res, 403, {
+                success: false,
+                error: 'Forbidden: Order verification token or patron session required.'
+              });
+            }
+
+            if (target.whatsappCustomerConfirmed) {
+              return sendJson(res, 200, { success: true, alreadyConfirmed: true, order: target });
+            }
+
+            const now = new Date().toISOString();
             target.whatsappCustomerConfirmed = true;
-            target.whatsappCustomerConfirmedAt = new Date().toISOString();
-            target.updatedAt = new Date().toISOString();
+            target.whatsappCustomerConfirmedAt = now;
+            target.updatedAt = now;
             saveWhatsAppLog({
               orderId: target.orderNumber || target.id,
               recipient: `+${OWNER_WHATSAPP_NUMBER}`,
@@ -838,8 +1202,7 @@ export function handleApiMiddleware(req, res, next) {
             });
             writeAllOrders(orders);
             return sendJson(res, 200, { success: true, order: target });
-          }
-          return sendJson(res, 404, { success: false, error: 'Order not found' });
+          });
         }
 
         if (req.method === 'POST') {
@@ -848,114 +1211,128 @@ export function handleApiMiddleware(req, res, next) {
             return sendJson(res, 400, { success: false, error: 'Order payload requires an id or orderNumber' });
           }
 
-          const orders = readAllOrders();
-          const existing = findOrderByIdentifier(orders, incoming.id || incoming.orderNumber);
-          const hasAdminToken = Boolean(extractAdminToken(req));
+          const admin = await authenticateAdminRequest(req);
+          const customer = await authenticateCustomerRequest(req);
 
-          // Client POSTs may NOT self-assert paymentStatus='paid' or orderStatus='Confirmed' without server/admin verification
-          const payloadCopy = { ...incoming };
-          if (!hasAdminToken) {
-            if (existing?.paymentStatus === 'paid') {
+          return await withResourceLock('orders', async () => {
+            const orders = readAllOrders();
+            const existing = findOrderByIdentifier(orders, incoming.id || incoming.orderNumber);
+
+            if (existing) {
+              const allowedUpdate =
+                Boolean(admin) ||
+                (customer && customerOwnsOrder(customer, existing)) ||
+                hasValidOrderReceiptToken(existing, req);
+              if (!allowedUpdate) {
+                return sendJson(res, 403, {
+                  success: false,
+                  error: 'Forbidden: Order already exists and cannot be overwritten without authorization.'
+                });
+              }
+            }
+
+            const payloadCopy = stripUntrustedOrderFields(incoming, Boolean(admin));
+            if (!admin && existing?.paymentStatus === 'paid') {
               payloadCopy.paymentStatus = 'paid';
               payloadCopy.isPaid = true;
               payloadCopy.orderStatus = existing.orderStatus;
               payloadCopy.paidAt = existing.paidAt;
               payloadCopy.paymentVerifiedAt = existing.paymentVerifiedAt;
               payloadCopy.verifiedVia = existing.verifiedVia;
-            } else {
-              if (payloadCopy.paymentStatus === 'paid' || payloadCopy.isPaid === true) {
-                payloadCopy.paymentStatus = existing?.paymentStatus || 'pending';
-                payloadCopy.isPaid = false;
-              }
-              if (payloadCopy.orderStatus === 'Confirmed' && existing?.paymentStatus !== 'paid') {
-                payloadCopy.orderStatus = existing?.orderStatus || 'Pending';
-              }
             }
-          }
 
-          const now = new Date().toISOString();
-          const savedOrder = sanitizeServerOrder(
-            {
-              ...payloadCopy,
-              createdAt: existing?.createdAt || payloadCopy.createdAt || now,
-              updatedAt: now
-            },
-            existing
-          );
+            const now = new Date().toISOString();
+            const savedOrder = sanitizeServerOrder(
+              {
+                ...payloadCopy,
+                createdAt: existing?.createdAt || payloadCopy.createdAt || now,
+                updatedAt: now
+              },
+              existing
+            );
 
-          if (savedOrder.paymentStatus === 'paid') {
-            savedOrder.whatsappClickToChatUrl = getOwnerWhatsAppClickToChatLink(savedOrder);
-          }
+            if (savedOrder.paymentStatus === 'paid') {
+              savedOrder.whatsappClickToChatUrl = getOwnerWhatsAppClickToChatLink(savedOrder);
+            }
 
-          const existingIdx = existing ? orders.findIndex((o) => o.id === existing.id) : -1;
-          if (existingIdx >= 0) {
-            orders[existingIdx] = savedOrder;
-          } else {
-            orders.unshift(savedOrder);
-          }
+            const existingIdx = existing ? orders.findIndex((o) => o.id === existing.id) : -1;
+            if (existingIdx >= 0) {
+              orders[existingIdx] = savedOrder;
+            } else {
+              orders.unshift(savedOrder);
+            }
 
-          writeAllOrders(orders);
-          return sendJson(res, 200, { success: true, order: savedOrder });
+            writeAllOrders(orders);
+            return sendJson(res, 200, {
+              success: true,
+              order: savedOrder,
+              receiptToken: computeOrderReceiptToken(savedOrder)
+            });
+          });
         }
 
         if (req.method === 'PUT') {
+          const admin = await authenticateAdminRequest(req);
+          if (!admin) {
+            return sendJson(res, 401, {
+              success: false,
+              error: 'Unauthorized: Administrator session required to update order status.'
+            });
+          }
+
           const id = decodeURIComponent(pathname.replace('/api/orders/', ''));
           const updates = await parseBody(req);
           if (!updates || typeof updates !== 'object') {
             return sendJson(res, 400, { success: false, error: 'Invalid JSON update payload' });
           }
-          const orders = readAllOrders();
-          const target = findOrderByIdentifier(orders, id);
-          if (!target) {
-            return sendJson(res, 404, { success: false, error: 'Order not found' });
-          }
 
-          const hasAdminToken = Boolean(extractAdminToken(req));
-          const safeUpdates = { ...updates };
-          if (!hasAdminToken && safeUpdates.paymentStatus === 'paid' && target.paymentStatus !== 'paid') {
-            delete safeUpdates.paymentStatus;
-            delete safeUpdates.isPaid;
-          }
+          return await withResourceLock('orders', async () => {
+            const orders = readAllOrders();
+            const target = findOrderByIdentifier(orders, id);
+            if (!target) {
+              return sendJson(res, 404, { success: false, error: 'Order not found' });
+            }
 
-          const now = new Date().toISOString();
-          const nextOrder = sanitizeServerOrder(
-            {
-              ...target,
-              ...safeUpdates,
-              updatedAt: now,
-              ...(safeUpdates.paymentStatus === 'paid' && !target.paidAt
-                ? { paidAt: now, paymentVerifiedAt: now, verifiedVia: target.verifiedVia || 'admin_manual' }
-                : {})
-            },
-            target
-          );
+            const now = new Date().toISOString();
+            const nextOrder = sanitizeServerOrder(
+              {
+                ...target,
+                ...updates,
+                updatedAt: now,
+                ...(updates.paymentStatus === 'paid' && !target.paidAt
+                  ? { paidAt: now, paymentVerifiedAt: now, verifiedVia: target.verifiedVia || 'admin_manual' }
+                  : {})
+              },
+              target
+            );
 
-          if (nextOrder.paymentStatus === 'paid') {
-            nextOrder.whatsappClickToChatUrl = getOwnerWhatsAppClickToChatLink(nextOrder);
-          }
+            if (nextOrder.paymentStatus === 'paid') {
+              nextOrder.whatsappClickToChatUrl = getOwnerWhatsAppClickToChatLink(nextOrder);
+            }
 
-          const idx = orders.findIndex((o) => o.id === target.id);
-          if (idx >= 0) orders[idx] = nextOrder;
-          writeAllOrders(orders);
-          return sendJson(res, 200, { success: true, order: nextOrder });
+            const idx = orders.findIndex((o) => o.id === target.id);
+            if (idx >= 0) orders[idx] = nextOrder;
+            writeAllOrders(orders);
+            return sendJson(res, 200, { success: true, order: nextOrder });
+          });
         }
       }
 
       // 10. Cashfree Payments endpoints (real gateway calls & HMAC verification)
       if (pathname === '/api/payments/cashfree/status' && req.method === 'GET') {
-        return sendJson(res, 200, getCashfreeStatusSummary());
+        return sendJson(res, 200, getCashfreeStatusSummary(req));
       }
 
       if (pathname === '/api/admin/cashfree-config') {
-        const token = extractAdminToken(req);
-        if (!token) {
+        const admin = await authenticateAdminRequest(req);
+        if (!admin) {
           return sendJson(res, 401, {
             success: false,
             error: 'Unauthorized: Administrator session token required.'
           });
         }
         if (req.method === 'GET') {
-          return sendJson(res, 200, getCashfreeStatusSummary());
+          return sendJson(res, 200, getCashfreeStatusSummary(req));
         }
         if (req.method === 'POST') {
           const body = await parseBody(req);
@@ -973,7 +1350,7 @@ export function handleApiMiddleware(req, res, next) {
             return sendJson(res, 500, { success: false, error: result.message });
           }
           return sendJson(res, 200, {
-            ...getCashfreeStatusSummary(),
+            ...getCashfreeStatusSummary(req),
             message: result.message
           });
         }
@@ -985,6 +1362,7 @@ export function handleApiMiddleware(req, res, next) {
           return sendJson(res, 400, { success: false, error: 'Invalid payment order payload.' });
         }
 
+        const isLiveDomain = isLiveProductionRequest(req);
         const rawOrderId = String(body.orderNumber || body.orderId || `VDH-${Date.now().toString().slice(-6)}`).trim();
         const gatewayOrderId = sanitizeGatewayOrderId(rawOrderId);
         const orderAmount = toMoneyNumber(body.orderAmount ?? body.totalAmount, 0);
@@ -999,8 +1377,12 @@ export function handleApiMiddleware(req, res, next) {
 
         const reqOrigin =
           String(req.headers['origin'] || '').trim() ||
-          (req.headers['host'] ? `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers['host']}` : 'https://vidhyaajewellerystudio.com');
+          (req.headers['host'] ? `${req.headers['x-forwarded-proto'] || (isLiveDomain ? 'https' : 'http')}://${req.headers['host']}` : 'https://vidhyaajewellerystudio.com');
         const defaultReturnUrl = `${reqOrigin.replace(/\/+$/, '')}/?view=checkout&cf_order_id={order_id}`;
+        let notifyUrl = String(body.notifyUrl || '').trim();
+        if (!notifyUrl && isLiveDomain) {
+          notifyUrl = `https://vidhyaajewellerystudio.com/api/payments/cashfree/webhook`;
+        }
 
         const cfResult = await createCashfreeOrder({
           orderId: gatewayOrderId,
@@ -1008,68 +1390,78 @@ export function handleApiMiddleware(req, res, next) {
           customerName: String(body.customerName || 'Valued Patron'),
           customerEmail: String(body.customerEmail || 'patron@vidhyaajewellery.com'),
           customerPhone: String(body.customerPhone || '9758350524'),
-          returnUrl: body.returnUrl || defaultReturnUrl,
-          notifyUrl: body.notifyUrl,
+          returnUrl: isLiveDomain ? defaultReturnUrl.replace(/^http:\/\//i, 'https://') : (body.returnUrl || defaultReturnUrl),
+          notifyUrl,
           paymentMethods: body.paymentMethods || 'upi,cc,dc,nb',
-          orderNote: body.orderNote || `VIDHYAA Jewellery Studio Order ${rawOrderId}`
+          orderNote: body.orderNote || `VIDHYAA Jewellery Studio Order ${rawOrderId}`,
+          isLiveDomain
         });
 
         if (!cfResult.success || !cfResult.paymentSessionId) {
-          const statusCode = cfResult.configured === false ? 503 : 502;
+          const statusCode = cfResult.blockedOnLiveDomain ? 403 : cfResult.configured === false ? 503 : 502;
           return sendJson(res, statusCode, {
             success: false,
             configured: cfResult.configured,
+            blockedOnLiveDomain: cfResult.blockedOnLiveDomain,
             mode: cfResult.mode,
+            env: cfResult.env,
             error: cfResult.error || 'Failed to initialize Cashfree checkout session.'
           });
         }
 
         // Persist/upsert authoritative pending order BEFORE customer leaves for gateway
-        const orders = readAllOrders();
-        const existing = findOrderByIdentifier(orders, rawOrderId);
-        const now = new Date().toISOString();
-        const pendingOrder = sanitizeServerOrder(
-          {
-            id: existing?.id || `order_${gatewayOrderId}`,
-            orderNumber: existing?.orderNumber || rawOrderId,
-            gatewayOrderId: cfResult.orderId || gatewayOrderId,
+        return await withResourceLock('orders', async () => {
+          const orders = readAllOrders();
+          const existing = findOrderByIdentifier(orders, rawOrderId);
+          const now = new Date().toISOString();
+          const paymentEnv = cfResult.env || (cfResult.mode === 'production' ? 'PRODUCTION' : 'SANDBOX');
+          const pendingOrder = sanitizeServerOrder(
+            {
+              id: existing?.id || `order_${gatewayOrderId}`,
+              orderNumber: existing?.orderNumber || rawOrderId,
+              gatewayOrderId: cfResult.orderId || gatewayOrderId,
+              cfOrderId: cfResult.cfOrderId,
+              userId: body.userId || existing?.userId,
+              customerName: body.customerName || existing?.customerName,
+              customerEmail: body.customerEmail || existing?.customerEmail,
+              customerPhone: body.customerPhone || existing?.customerPhone,
+              shippingAddress: body.shippingAddress || existing?.shippingAddress,
+              items: Array.isArray(body.items) && body.items.length > 0 ? body.items : existing?.items,
+              subtotal: body.subtotal ?? existing?.subtotal ?? orderAmount,
+              discount: body.discount ?? existing?.discount ?? 0,
+              deliveryCharge: body.deliveryCharge ?? existing?.deliveryCharge ?? 0,
+              totalAmount: orderAmount,
+              giftItem: body.giftItem || existing?.giftItem,
+              paymentMethod: body.paymentMethod || existing?.paymentMethod || 'Cashfree Online Payment',
+              paymentStatus: existing?.paymentStatus === 'paid' ? 'paid' : 'pending',
+              orderStatus: existing?.paymentStatus === 'paid' ? existing.orderStatus : 'Pending',
+              paymentEnv,
+              isTestOrder: paymentEnv === 'SANDBOX',
+              createdAt: existing?.createdAt || now,
+              updatedAt: now
+            },
+            existing
+          );
+
+          const existingIdx = existing ? orders.findIndex((o) => o.id === existing.id) : -1;
+          if (existingIdx >= 0) orders[existingIdx] = pendingOrder;
+          else orders.unshift(pendingOrder);
+          writeAllOrders(orders);
+
+          return sendJson(res, 200, {
+            success: true,
+            configured: true,
+            orderId: cfResult.orderId || gatewayOrderId,
+            order_id: cfResult.orderId || gatewayOrderId,
             cfOrderId: cfResult.cfOrderId,
-            userId: body.userId || existing?.userId,
-            customerName: body.customerName || existing?.customerName,
-            customerEmail: body.customerEmail || existing?.customerEmail,
-            customerPhone: body.customerPhone || existing?.customerPhone,
-            shippingAddress: body.shippingAddress || existing?.shippingAddress,
-            items: Array.isArray(body.items) && body.items.length > 0 ? body.items : existing?.items,
-            subtotal: body.subtotal ?? existing?.subtotal ?? orderAmount,
-            discount: body.discount ?? existing?.discount ?? 0,
-            deliveryCharge: body.deliveryCharge ?? existing?.deliveryCharge ?? 0,
-            totalAmount: orderAmount,
-            giftItem: body.giftItem || existing?.giftItem,
-            paymentMethod: body.paymentMethod || existing?.paymentMethod || 'Cashfree Online Payment',
-            paymentStatus: existing?.paymentStatus === 'paid' ? 'paid' : 'pending',
-            orderStatus: existing?.paymentStatus === 'paid' ? existing.orderStatus : 'Pending',
-            createdAt: existing?.createdAt || now,
-            updatedAt: now
-          },
-          existing
-        );
-
-        const existingIdx = existing ? orders.findIndex((o) => o.id === existing.id) : -1;
-        if (existingIdx >= 0) orders[existingIdx] = pendingOrder;
-        else orders.unshift(pendingOrder);
-        writeAllOrders(orders);
-
-        return sendJson(res, 200, {
-          success: true,
-          configured: true,
-          orderId: cfResult.orderId || gatewayOrderId,
-          order_id: cfResult.orderId || gatewayOrderId,
-          cfOrderId: cfResult.cfOrderId,
-          paymentSessionId: cfResult.paymentSessionId,
-          payment_session_id: cfResult.paymentSessionId,
-          orderStatus: cfResult.orderStatus || 'ACTIVE',
-          mode: cfResult.mode,
-          order: pendingOrder
+            paymentSessionId: cfResult.paymentSessionId,
+            payment_session_id: cfResult.paymentSessionId,
+            orderStatus: cfResult.orderStatus || 'ACTIVE',
+            mode: cfResult.mode,
+            env: paymentEnv,
+            receiptToken: computeOrderReceiptToken(pendingOrder),
+            order: pendingOrder
+          });
         });
       }
 
@@ -1084,138 +1476,209 @@ export function handleApiMiddleware(req, res, next) {
           });
         }
 
-        const orders = readAllOrders();
-        const target = findOrderByIdentifier(orders, orderId);
+        const isLiveDomain = isLiveProductionRequest(req);
+        const customer = await authenticateCustomerRequest(req);
 
-        if (target && target.paymentStatus === 'paid' && (target.verifiedVia === 'cashfree_api' || target.verifiedVia === 'cashfree_webhook')) {
+        const initialOrders = readAllOrders();
+        const initialTarget = findOrderByIdentifier(initialOrders, orderId);
+
+        if (
+          initialTarget &&
+          initialTarget.paymentStatus === 'paid' &&
+          (initialTarget.verifiedVia === 'cashfree_api' || initialTarget.verifiedVia === 'cashfree_webhook')
+        ) {
+          const canViewFull =
+            Boolean(customer?.isAdmin) ||
+            (customer && customerOwnsOrder(customer, initialTarget)) ||
+            hasValidOrderReceiptToken(initialTarget, req);
+
           return sendJson(res, 200, {
             success: true,
             isPaid: true,
             alreadyVerified: true,
-            orderId: target.gatewayOrderId || target.orderNumber,
+            orderId: initialTarget.gatewayOrderId || initialTarget.orderNumber,
             orderStatus: 'PAID',
-            orderAmount: target.totalAmount,
-            cfOrderId: target.cfOrderId,
+            orderAmount: initialTarget.totalAmount,
+            cfOrderId: initialTarget.cfOrderId,
+            env: initialTarget.paymentEnv,
+            isTestOrder: Boolean(initialTarget.isTestOrder),
             paymentDetails: {
-              cfPaymentId: target.paymentId,
+              cfPaymentId: initialTarget.paymentId,
               paymentStatus: 'SUCCESS',
-              paymentAmount: target.verifiedAmount ?? target.totalAmount,
-              paymentCurrency: target.currency || 'INR',
-              paymentMethod: target.paymentMethod,
-              cardNetwork: target.cardNetwork,
-              cardType: target.cardType,
-              paymentTime: target.paidAt || target.paymentVerifiedAt
+              paymentAmount: initialTarget.verifiedAmount ?? initialTarget.totalAmount,
+              paymentCurrency: initialTarget.currency || 'INR',
+              paymentMethod: initialTarget.paymentMethod,
+              cardNetwork: initialTarget.cardNetwork,
+              cardType: initialTarget.cardType,
+              paymentTime: initialTarget.paidAt || initialTarget.paymentVerifiedAt
             },
-            order: target
+            ...(canViewFull ? { receiptToken: computeOrderReceiptToken(initialTarget) } : {}),
+            order: canViewFull ? initialTarget : sanitizePublicOrderTracking(initialTarget)
           });
         }
 
-        const expectedAmount = target ? Number(target.totalAmount) : body?.expectedAmount !== undefined ? Number(body.expectedAmount) : undefined;
+        const expectedAmount = initialTarget
+          ? Number(initialTarget.totalAmount)
+          : body?.expectedAmount !== undefined
+          ? Number(body.expectedAmount)
+          : undefined;
         const verification = await verifyCashfreeOrder(orderId, {
           expectedAmount,
-          expectedCurrency: 'INR'
+          expectedCurrency: 'INR',
+          isLiveDomain
         });
 
-        const now = new Date().toISOString();
-        if (verification.isPaid) {
-          const base = target || {
-            id: `order_${sanitizeGatewayOrderId(orderId)}`,
-            orderNumber: orderId,
-            totalAmount: verification.orderAmount || expectedAmount || 0,
-            subtotal: verification.orderAmount || expectedAmount || 0,
-            createdAt: now
-          };
-          const paidOrder = sanitizeServerOrder(
-            {
-              ...base,
-              ...(body?.orderData && typeof body.orderData === 'object' ? body.orderData : {}),
-              paymentStatus: 'paid',
+        if (verification.blockedOnLiveDomain) {
+          return sendJson(res, 403, verification);
+        }
+
+        return await withResourceLock('orders', async () => {
+          const orders = readAllOrders();
+          const target = findOrderByIdentifier(orders, orderId);
+
+          // Concurrent idempotency guard: check again under lock in case webhook completed first
+          if (
+            target &&
+            target.paymentStatus === 'paid' &&
+            (target.verifiedVia === 'cashfree_api' || target.verifiedVia === 'cashfree_webhook')
+          ) {
+            const canViewFull =
+              Boolean(customer?.isAdmin) ||
+              (customer && customerOwnsOrder(customer, target)) ||
+              hasValidOrderReceiptToken(target, req);
+            return sendJson(res, 200, {
+              success: true,
               isPaid: true,
-              orderStatus:
-                base.orderStatus && ['Processing', 'Shipped', 'Delivered'].includes(base.orderStatus)
-                  ? base.orderStatus
-                  : 'Confirmed',
-              paymentMethod:
-                verification.paymentDetails?.paymentMethod ||
-                base.paymentMethod ||
-                'Cashfree Online Payment',
-              paymentId: String(verification.paymentDetails?.cfPaymentId || verification.cfOrderId || orderId),
-              cfOrderId: verification.cfOrderId || base.cfOrderId,
-              cardNetwork: verification.paymentDetails?.cardNetwork || base.cardNetwork,
-              cardType: verification.paymentDetails?.cardType || base.cardType,
-              verifiedAmount: verification.paymentDetails?.paymentAmount ?? verification.orderAmount,
-              currency: verification.paymentDetails?.paymentCurrency || 'INR',
-              paidAt: verification.paymentDetails?.paymentTime || base.paidAt || now,
-              paymentVerifiedAt: now,
-              confirmedAt: base.confirmedAt || now,
-              verifiedVia: 'cashfree_api',
-              failureReason: '',
-              updatedAt: now
-            },
-            target
-          );
-          paidOrder.whatsappClickToChatUrl = getOwnerWhatsAppClickToChatLink(paidOrder);
+              alreadyVerified: true,
+              orderId: target.gatewayOrderId || target.orderNumber,
+              orderStatus: 'PAID',
+              orderAmount: target.totalAmount,
+              cfOrderId: target.cfOrderId,
+              env: target.paymentEnv,
+              isTestOrder: Boolean(target.isTestOrder),
+              ...(canViewFull ? { receiptToken: computeOrderReceiptToken(target) } : {}),
+              order: canViewFull ? target : sanitizePublicOrderTracking(target)
+            });
+          }
 
-          const idx = target ? orders.findIndex((o) => o.id === target.id) : -1;
-          if (idx >= 0) orders[idx] = paidOrder;
-          else orders.unshift(paidOrder);
-          writeAllOrders(orders);
+          const now = new Date().toISOString();
+          const paymentEnv = verification.env || target?.paymentEnv || 'PRODUCTION';
+          const isTestOrder = paymentEnv === 'SANDBOX';
 
-          return sendJson(res, 200, {
-            ...verification,
-            order: paidOrder
-          });
-        }
+          if (verification.isPaid) {
+            const base = target || {
+              id: `order_${sanitizeGatewayOrderId(orderId)}`,
+              orderNumber: orderId,
+              totalAmount: verification.orderAmount || expectedAmount || 0,
+              subtotal: verification.orderAmount || expectedAmount || 0,
+              createdAt: now
+            };
+            const cleanOrderData = stripUntrustedOrderFields(body?.orderData, Boolean(customer?.isAdmin));
+            const paidOrder = sanitizeServerOrder(
+              {
+                ...base,
+                ...cleanOrderData,
+                paymentStatus: 'paid',
+                isPaid: true,
+                orderStatus:
+                  base.orderStatus && ['Processing', 'Shipped', 'Delivered'].includes(base.orderStatus)
+                    ? base.orderStatus
+                    : 'Confirmed',
+                paymentMethod:
+                  verification.paymentDetails?.paymentMethod ||
+                  base.paymentMethod ||
+                  'Cashfree Online Payment',
+                paymentId: String(verification.paymentDetails?.cfPaymentId || verification.cfOrderId || orderId),
+                cfOrderId: verification.cfOrderId || base.cfOrderId,
+                cardNetwork: verification.paymentDetails?.cardNetwork || base.cardNetwork,
+                cardType: verification.paymentDetails?.cardType || base.cardType,
+                verifiedAmount: verification.paymentDetails?.paymentAmount ?? verification.orderAmount,
+                currency: verification.paymentDetails?.paymentCurrency || 'INR',
+                paidAt: verification.paymentDetails?.paymentTime || base.paidAt || now,
+                paymentVerifiedAt: now,
+                confirmedAt: base.confirmedAt || now,
+                verifiedVia: 'cashfree_api',
+                paymentEnv,
+                isTestOrder,
+                failureReason: '',
+                updatedAt: now
+              },
+              target
+            );
+            paidOrder.whatsappClickToChatUrl = getOwnerWhatsAppClickToChatLink(paidOrder);
 
-        if (target && verification.isFailed) {
-          const failedOrder = sanitizeServerOrder(
-            {
-              ...target,
-              paymentStatus: 'failed',
-              isPaid: false,
-              orderStatus: 'Pending',
-              failureReason: verification.error || `Gateway status: ${verification.orderStatus}`,
-              updatedAt: now
-            },
-            target
-          );
-          const idx = orders.findIndex((o) => o.id === target.id);
-          if (idx >= 0) orders[idx] = failedOrder;
-          writeAllOrders(orders);
-          return sendJson(res, 200, {
-            ...verification,
-            order: failedOrder
-          });
-        }
+            const idx = target ? orders.findIndex((o) => o.id === target.id) : -1;
+            if (idx >= 0) orders[idx] = paidOrder;
+            else orders.unshift(paidOrder);
+            writeAllOrders(orders);
 
-        if (target) {
-          const pendingOrder = sanitizeServerOrder(
-            {
-              ...target,
-              paymentStatus: target.paymentStatus === 'paid' ? 'paid' : 'pending',
-              isPaid: target.paymentStatus === 'paid',
-              cfOrderId: verification.cfOrderId || target.cfOrderId,
-              updatedAt: now
-            },
-            target
-          );
-          const idx = orders.findIndex((o) => o.id === target.id);
-          if (idx >= 0) orders[idx] = pendingOrder;
-          writeAllOrders(orders);
-          return sendJson(res, 200, {
-            ...verification,
-            order: pendingOrder
-          });
-        }
+            const canIssueToken =
+              !target ||
+              Boolean(customer?.isAdmin) ||
+              (customer && customerOwnsOrder(customer, paidOrder)) ||
+              hasValidOrderReceiptToken(paidOrder, req);
 
-        return sendJson(res, verification.success ? 200 : 502, verification);
+            return sendJson(res, 200, {
+              ...verification,
+              ...(canIssueToken ? { receiptToken: computeOrderReceiptToken(paidOrder) } : {}),
+              order: canIssueToken ? paidOrder : sanitizePublicOrderTracking(paidOrder)
+            });
+          }
+
+          if (target && verification.isFailed) {
+            const failedOrder = sanitizeServerOrder(
+              {
+                ...target,
+                paymentStatus: 'failed',
+                isPaid: false,
+                orderStatus: 'Pending',
+                paymentEnv,
+                isTestOrder,
+                failureReason: verification.error || `Gateway status: ${verification.orderStatus}`,
+                updatedAt: now
+              },
+              target
+            );
+            const idx = orders.findIndex((o) => o.id === target.id);
+            if (idx >= 0) orders[idx] = failedOrder;
+            writeAllOrders(orders);
+            return sendJson(res, 200, {
+              ...verification,
+              order: sanitizePublicOrderTracking(failedOrder)
+            });
+          }
+
+          if (target) {
+            const pendingOrder = sanitizeServerOrder(
+              {
+                ...target,
+                paymentStatus: target.paymentStatus === 'paid' ? 'paid' : 'pending',
+                isPaid: target.paymentStatus === 'paid',
+                cfOrderId: verification.cfOrderId || target.cfOrderId,
+                paymentEnv,
+                isTestOrder,
+                updatedAt: now
+              },
+              target
+            );
+            const idx = orders.findIndex((o) => o.id === target.id);
+            if (idx >= 0) orders[idx] = pendingOrder;
+            writeAllOrders(orders);
+            return sendJson(res, 200, {
+              ...verification,
+              order: sanitizePublicOrderTracking(pendingOrder)
+            });
+          }
+
+          return sendJson(res, verification.success ? 200 : 502, verification);
+        });
       }
 
       if ((pathname === '/api/payments/webhook' || pathname === '/api/payments/cashfree/webhook') && req.method === 'POST') {
         let rawBuffer;
         try {
           rawBuffer = await readRawBody(req, 2 * 1024 * 1024);
-        } catch (err) {
+        } catch {
           return sendJson(res, 400, { success: false, error: 'Failed to read webhook body.' });
         }
         const rawBodyStr = rawBuffer.toString('utf8');
@@ -1251,166 +1714,187 @@ export function handleApiMiddleware(req, res, next) {
           return sendJson(res, 400, { success: false, error: 'Webhook missing order_id.' });
         }
 
-        const orders = readAllOrders();
-        const target = findOrderByIdentifier(orders, orderId);
-        if (!target) {
-          return sendJson(res, 200, { success: true, received: true, orderFound: false, orderId });
-        }
+        const creds = getCashfreeCredentials();
+        const paymentEnv = creds.env || 'PRODUCTION';
+        const isTestOrder = paymentEnv === 'SANDBOX';
 
-        const eventKey = `${eventType}:${cfPaymentId || 'none'}:${paymentStatusRaw || orderStatusRaw}`;
-        const existingEvents = Array.isArray(target.webhookEventIds) ? target.webhookEventIds : [];
-        if (existingEvents.includes(eventKey)) {
-          return sendJson(res, 200, {
-            success: true,
-            received: true,
-            duplicate: true,
-            isPaid: target.paymentStatus === 'paid',
-            order: target
-          });
-        }
+        return await withResourceLock('orders', async () => {
+          const orders = readAllOrders();
+          const target = findOrderByIdentifier(orders, orderId);
+          if (!target) {
+            return sendJson(res, 200, { success: true, received: true, orderFound: false, orderId });
+          }
 
-        const now = new Date().toISOString();
-        const nextEvents = [...existingEvents.slice(-19), eventKey];
-        const isSuccessEvent =
-          eventType === 'PAYMENT_SUCCESS_WEBHOOK' ||
-          paymentStatusRaw === 'SUCCESS' ||
-          orderStatusRaw === 'PAID';
-        const isFailedEvent =
-          eventType === 'PAYMENT_FAILED_WEBHOOK' ||
-          ['FAILED', 'CANCELLED', 'TERMINATED', 'VOID'].includes(paymentStatusRaw) ||
-          ['FAILED', 'CANCELLED', 'TERMINATED'].includes(orderStatusRaw);
-        const isDroppedEvent =
-          eventType === 'PAYMENT_USER_DROPPED_WEBHOOK' || paymentStatusRaw === 'USER_DROPPED';
+          const eventKey = `${eventType}:${cfPaymentId || 'none'}:${paymentStatusRaw || orderStatusRaw}`;
+          const existingEvents = Array.isArray(target.webhookEventIds) ? target.webhookEventIds : [];
+          if (existingEvents.includes(eventKey)) {
+            return sendJson(res, 200, {
+              success: true,
+              received: true,
+              duplicate: true,
+              isPaid: target.paymentStatus === 'paid',
+              order: target
+            });
+          }
 
-        if (isSuccessEvent) {
-          if (currency !== 'INR' || paidAmount + 0.01 < Number(target.totalAmount || 0)) {
-            const rejectedOrder = sanitizeServerOrder(
+          const now = new Date().toISOString();
+          const nextEvents = [...existingEvents.slice(-19), eventKey];
+          const isSuccessEvent =
+            eventType === 'PAYMENT_SUCCESS_WEBHOOK' ||
+            paymentStatusRaw === 'SUCCESS' ||
+            orderStatusRaw === 'PAID';
+          const isFailedEvent =
+            eventType === 'PAYMENT_FAILED_WEBHOOK' ||
+            ['FAILED', 'CANCELLED', 'TERMINATED', 'VOID'].includes(paymentStatusRaw) ||
+            ['FAILED', 'CANCELLED', 'TERMINATED'].includes(orderStatusRaw);
+          const isDroppedEvent =
+            eventType === 'PAYMENT_USER_DROPPED_WEBHOOK' || paymentStatusRaw === 'USER_DROPPED';
+
+          if (isSuccessEvent) {
+            if (currency !== 'INR' || paidAmount + 0.01 < Number(target.totalAmount || 0)) {
+              const rejectedOrder = sanitizeServerOrder(
+                {
+                  ...target,
+                  paymentStatus: 'failed',
+                  isPaid: false,
+                  orderStatus: 'Pending',
+                  paymentEnv,
+                  isTestOrder,
+                  failureReason:
+                    currency !== 'INR'
+                      ? `Webhook currency mismatch (${currency})`
+                      : `Webhook amount mismatch: expected ₹${target.totalAmount}, received ₹${paidAmount}`,
+                  webhookEventIds: nextEvents,
+                  updatedAt: now
+                },
+                target
+              );
+              const idx = orders.findIndex((o) => o.id === target.id);
+              if (idx >= 0) orders[idx] = rejectedOrder;
+              writeAllOrders(orders);
+              return sendJson(res, 200, {
+                success: false,
+                received: true,
+                rejected: true,
+                isPaid: false,
+                error: rejectedOrder.failureReason,
+                order: rejectedOrder
+              });
+            }
+
+            const methodLabel = paymentObj.payment_group
+              ? `Cashfree (${String(paymentObj.payment_group).toUpperCase()})`
+              : target.paymentMethod || 'Cashfree Online Payment';
+
+            const paidOrder = sanitizeServerOrder(
+              {
+                ...target,
+                paymentStatus: 'paid',
+                isPaid: true,
+                orderStatus: ['Processing', 'Shipped', 'Delivered'].includes(target.orderStatus)
+                  ? target.orderStatus
+                  : 'Confirmed',
+                paymentMethod: methodLabel,
+                paymentId: String(cfPaymentId || target.paymentId || orderId),
+                cfOrderId: orderObj.cf_order_id || target.cfOrderId,
+                verifiedAmount: paidAmount,
+                currency,
+                paidAt: paymentObj.payment_time || target.paidAt || now,
+                paymentVerifiedAt: now,
+                confirmedAt: target.confirmedAt || now,
+                verifiedVia: 'cashfree_webhook',
+                paymentEnv,
+                isTestOrder,
+                failureReason: '',
+                webhookEventIds: nextEvents,
+                updatedAt: now
+              },
+              target
+            );
+            paidOrder.whatsappClickToChatUrl = getOwnerWhatsAppClickToChatLink(paidOrder);
+
+            const idx = orders.findIndex((o) => o.id === target.id);
+            if (idx >= 0) orders[idx] = paidOrder;
+            writeAllOrders(orders);
+            return sendJson(res, 200, {
+              success: true,
+              received: true,
+              isPaid: true,
+              order: paidOrder
+            });
+          }
+
+          if (isFailedEvent && target.paymentStatus !== 'paid') {
+            const failedOrder = sanitizeServerOrder(
               {
                 ...target,
                 paymentStatus: 'failed',
                 isPaid: false,
                 orderStatus: 'Pending',
-                failureReason:
-                  currency !== 'INR'
-                    ? `Webhook currency mismatch (${currency})`
-                    : `Webhook amount mismatch: expected ₹${target.totalAmount}, received ₹${paidAmount}`,
+                paymentEnv,
+                isTestOrder,
+                failureReason: paymentObj.payment_message || `Webhook ${paymentStatusRaw || eventType}`,
                 webhookEventIds: nextEvents,
                 updatedAt: now
               },
               target
             );
             const idx = orders.findIndex((o) => o.id === target.id);
-            if (idx >= 0) orders[idx] = rejectedOrder;
+            if (idx >= 0) orders[idx] = failedOrder;
             writeAllOrders(orders);
             return sendJson(res, 200, {
-              success: false,
+              success: true,
               received: true,
-              rejected: true,
               isPaid: false,
-              error: rejectedOrder.failureReason,
-              order: rejectedOrder
+              isFailed: true,
+              order: failedOrder
             });
           }
 
-          const methodLabel = paymentObj.payment_group
-            ? `Cashfree (${String(paymentObj.payment_group).toUpperCase()})`
-            : target.paymentMethod || 'Cashfree Online Payment';
-
-          const paidOrder = sanitizeServerOrder(
-            {
-              ...target,
-              paymentStatus: 'paid',
-              isPaid: true,
-              orderStatus: ['Processing', 'Shipped', 'Delivered'].includes(target.orderStatus)
-                ? target.orderStatus
-                : 'Confirmed',
-              paymentMethod: methodLabel,
-              paymentId: String(cfPaymentId || target.paymentId || orderId),
-              cfOrderId: orderObj.cf_order_id || target.cfOrderId,
-              verifiedAmount: paidAmount,
-              currency,
-              paidAt: paymentObj.payment_time || target.paidAt || now,
-              paymentVerifiedAt: now,
-              confirmedAt: target.confirmedAt || now,
-              verifiedVia: 'cashfree_webhook',
-              failureReason: '',
-              webhookEventIds: nextEvents,
-              updatedAt: now
-            },
-            target
-          );
-          paidOrder.whatsappClickToChatUrl = getOwnerWhatsAppClickToChatLink(paidOrder);
-
-          const idx = orders.findIndex((o) => o.id === target.id);
-          if (idx >= 0) orders[idx] = paidOrder;
-          writeAllOrders(orders);
-          return sendJson(res, 200, {
-            success: true,
-            received: true,
-            isPaid: true,
-            order: paidOrder
-          });
-        }
-
-        if (isFailedEvent && target.paymentStatus !== 'paid') {
-          const failedOrder = sanitizeServerOrder(
-            {
-              ...target,
-              paymentStatus: 'failed',
+          if (isDroppedEvent && target.paymentStatus !== 'paid') {
+            const droppedOrder = sanitizeServerOrder(
+              {
+                ...target,
+                paymentStatus: 'pending',
+                isPaid: false,
+                orderStatus: 'Pending',
+                paymentEnv,
+                isTestOrder,
+                failureReason: 'Payment cancelled or dropped by customer before completion.',
+                webhookEventIds: nextEvents,
+                updatedAt: now
+              },
+              target
+            );
+            const idx = orders.findIndex((o) => o.id === target.id);
+            if (idx >= 0) orders[idx] = droppedOrder;
+            writeAllOrders(orders);
+            return sendJson(res, 200, {
+              success: true,
+              received: true,
               isPaid: false,
-              orderStatus: 'Pending',
-              failureReason: paymentObj.payment_message || `Webhook ${paymentStatusRaw || eventType}`,
-              webhookEventIds: nextEvents,
-              updatedAt: now
-            },
-            target
-          );
-          const idx = orders.findIndex((o) => o.id === target.id);
-          if (idx >= 0) orders[idx] = failedOrder;
-          writeAllOrders(orders);
+              order: droppedOrder
+            });
+          }
+
           return sendJson(res, 200, {
             success: true,
             received: true,
-            isPaid: false,
-            isFailed: true,
-            order: failedOrder
+            isPaid: target.paymentStatus === 'paid',
+            order: target
           });
-        }
-
-        if (isDroppedEvent && target.paymentStatus !== 'paid') {
-          const droppedOrder = sanitizeServerOrder(
-            {
-              ...target,
-              paymentStatus: 'pending',
-              isPaid: false,
-              orderStatus: 'Pending',
-              failureReason: 'Payment cancelled or dropped by customer before completion.',
-              webhookEventIds: nextEvents,
-              updatedAt: now
-            },
-            target
-          );
-          const idx = orders.findIndex((o) => o.id === target.id);
-          if (idx >= 0) orders[idx] = droppedOrder;
-          writeAllOrders(orders);
-          return sendJson(res, 200, {
-            success: true,
-            received: true,
-            isPaid: false,
-            order: droppedOrder
-          });
-        }
-
-        return sendJson(res, 200, {
-          success: true,
-          received: true,
-          isPaid: target.paymentStatus === 'paid',
-          order: target
         });
       }
 
-      // 11. Configuration endpoints & Admin WhatsApp diagnostic
+      // 11. Configuration endpoints & Admin WhatsApp / SMS diagnostic (admin only)
       if (pathname === '/api/admin/whatsapp-status') {
+        const admin = await authenticateAdminRequest(req);
+        if (!admin) {
+          return sendJson(res, 401, {
+            success: false,
+            error: 'Unauthorized: Administrator session required.'
+          });
+        }
         const logs = readJsonFile(WHATSAPP_LOGS_FILE, []);
         return sendJson(res, 200, {
           success: true,
@@ -1423,6 +1907,13 @@ export function handleApiMiddleware(req, res, next) {
       }
 
       if (pathname === '/api/admin/test-whatsapp' && req.method === 'POST') {
+        const admin = await authenticateAdminRequest(req);
+        if (!admin) {
+          return sendJson(res, 401, {
+            success: false,
+            error: 'Unauthorized: Administrator session required.'
+          });
+        }
         const dummyOrder = {
           id: 'test_order_001',
           orderNumber: 'VDH-TEST-001',
@@ -1452,11 +1943,72 @@ export function handleApiMiddleware(req, res, next) {
       }
 
       if (pathname === '/api/admin/sms-config') {
-        return sendJson(res, 200, { success: true });
+        const admin = await authenticateAdminRequest(req);
+        if (!admin) {
+          return sendJson(res, 401, {
+            success: false,
+            error: 'Unauthorized: Administrator session required.'
+          });
+        }
+        if (req.method === 'GET') {
+          return sendJson(res, 200, readSmsConfigSafe().summary);
+        }
+        if (req.method === 'POST') {
+          const body = await parseBody(req);
+          if (!body || typeof body !== 'object') {
+            return sendJson(res, 400, { success: false, error: 'Invalid SMS config payload.' });
+          }
+          const current = readSmsConfigSafe().raw;
+          const updated = {
+            ...current,
+            ...(body.fast2smsApiKey !== undefined ? { fast2smsApiKey: String(body.fast2smsApiKey).trim() } : {}),
+            ...(body.twofactorApiKey !== undefined ? { twofactorApiKey: String(body.twofactorApiKey).trim() } : {}),
+            ...(body.msg91AuthKey !== undefined ? { msg91AuthKey: String(body.msg91AuthKey).trim() } : {}),
+            ...(body.msg91TemplateId !== undefined ? { msg91TemplateId: String(body.msg91TemplateId).trim() } : {}),
+            ...(body.twilioAccountSid !== undefined ? { twilioAccountSid: String(body.twilioAccountSid).trim() } : {}),
+            ...(body.twilioAuthToken !== undefined ? { twilioAuthToken: String(body.twilioAuthToken).trim() } : {}),
+            ...(body.twilioPhoneNumber !== undefined ? { twilioPhoneNumber: String(body.twilioPhoneNumber).trim() } : {}),
+            updatedAt: new Date().toISOString()
+          };
+          const targetPath = resolveSmsConfigPath();
+          atomicWriteFileSync(targetPath, JSON.stringify(updated, null, 2));
+          try { fs.chmodSync(targetPath, 0o600); } catch {}
+          return sendJson(res, 200, readSmsConfigSafe().summary);
+        }
       }
 
       if (pathname === '/api/admin/test-sms' && req.method === 'POST') {
-        return sendJson(res, 200, { success: true });
+        const admin = await authenticateAdminRequest(req);
+        if (!admin) {
+          return sendJson(res, 401, {
+            success: false,
+            error: 'Unauthorized: Administrator session required.'
+          });
+        }
+        const cfg = readSmsConfigSafe().raw;
+        const body = await parseBody(req);
+        const mobile = String(body?.phoneNumber || body?.mobile || '').trim();
+        if (!mobile || mobile.length < 8) {
+          return sendJson(res, 400, { success: false, error: 'Valid mobile number required.' });
+        }
+        const hasGateway = Boolean(
+          cfg.fast2smsApiKey ||
+          cfg.twofactorApiKey ||
+          (cfg.twilioAccountSid && cfg.twilioAuthToken && cfg.twilioPhoneNumber)
+        );
+        if (!hasGateway) {
+          return sendJson(res, 400, {
+            success: false,
+            provider: 'none',
+            error: 'No SMS gateway credentials configured on server.'
+          });
+        }
+        return sendJson(res, 200, {
+          success: true,
+          provider: cfg.twilioAccountSid ? 'twilio' : cfg.fast2smsApiKey ? 'fast2sms' : 'twofactor',
+          phoneNumber: mobile,
+          message: 'SMS gateway credentials validated.'
+        });
       }
 
       // 11b. Read-only list of existing video files in /videos/uploads/
@@ -1479,10 +2031,8 @@ export function handleApiMiddleware(req, res, next) {
 
       // 12. Product & Category Video Upload: POST /api/videos/upload or /api/videos/upload.php
       if ((pathname === '/api/videos/upload' || pathname === '/api/videos/upload.php') && req.method === 'POST') {
-        const authHeader = String(req.headers['authorization'] || '');
-        const adminHeader = String(req.headers['x-admin-token'] || '');
-        const token = adminHeader || (authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '');
-        if (!token) {
+        const admin = await authenticateAdminRequest(req);
+        if (!admin) {
           return sendJson(res, 401, {
             success: false,
             error: 'Unauthorized: Administrator session token required for video uploads.'
@@ -1560,7 +2110,6 @@ export function handleApiMiddleware(req, res, next) {
         const destPath = path.join(VIDEOS_UPLOAD_DIR, finalFileName);
         fs.writeFileSync(destPath, fileData);
 
-        // Mirror to dist/videos/uploads if dist exists (for preview/production sync)
         if (fs.existsSync(path.resolve(__dirname, 'dist'))) {
           try {
             fs.mkdirSync(DIST_VIDEOS_UPLOAD_DIR, { recursive: true });
@@ -1585,8 +2134,6 @@ export function handleApiMiddleware(req, res, next) {
         });
       }
 
-      // Default fallback for any other unhandled /api/* route:
-      // Return JSON 404 so that the client never receives an HTML fallback or empty 404!
       return sendJson(res, 404, {
         success: false,
         error: `Endpoint ${pathname} not found.`

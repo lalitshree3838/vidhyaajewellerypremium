@@ -1,35 +1,49 @@
 <?php
 // VIDHYAA Jewellery Studio - Executive Admin Session Verification Endpoint
+require_once __DIR__ . '/_auth.php';
+
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, GET, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, x-file-name, x-file-type, x-admin-token');
+header('Access-Control-Allow-Headers: Content-Type, Authorization, x-file-name, x-file-type, x-admin-token, x-customer-token, x-order-token');
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
     http_response_code(204);
     exit;
 }
 
-header('Content-Type: application/json; charset=UTF-8');
-
 $rawInput = file_get_contents('php://input');
-$data = json_decode($rawInput, true);
+$data = json_decode((string)$rawInput, true);
+$bodyToken = is_array($data) ? trim((string)($data['token'] ?? '')) : '';
 
-$token = $data['token'] ?? '';
-$authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
-if (empty($token) && str_starts_with($authHeader, 'Bearer ')) {
-    $token = trim(substr($authHeader, 7));
+$admin = vdhAuthenticateAdmin();
+if (!$admin && $bodyToken !== '') {
+    $session = vdhVerifySignedSessionToken($bodyToken, 'admin');
+    if ($session && in_array(strtolower((string)($session['email'] ?? '')), vdhAllowedAdminEmails(), true)) {
+        $admin = [
+            'email' => strtolower((string)$session['email']),
+            'role' => 'admin',
+            'name' => (string)($session['name'] ?? 'Executive Administrator')
+        ];
+    } else {
+        $fb = vdhVerifyFirebaseIdToken($bodyToken);
+        $fbEmail = strtolower(trim((string)($fb['email'] ?? '')));
+        if ($fb && ($fb['email_verified'] ?? false) === true && in_array($fbEmail, vdhAllowedAdminEmails(), true)) {
+            $admin = [
+                'email' => $fbEmail,
+                'role' => 'admin',
+                'name' => (string)($fb['name'] ?? 'Executive Administrator')
+            ];
+        }
+    }
 }
 
-if (!empty($token)) {
-    http_response_code(200);
-    echo json_encode([
+if ($admin) {
+    vdhSendJson(200, [
         'valid' => true,
-        'email' => 'anavneeraj2003@gmail.com',
-        'role' => 'admin'
+        'email' => $admin['email'],
+        'role' => 'admin',
+        'name' => $admin['name']
     ]);
-    exit;
 }
 
-http_response_code(401);
-echo json_encode(['valid' => false]);
-exit;
+vdhSendJson(401, ['valid' => false]);

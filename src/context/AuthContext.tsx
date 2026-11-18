@@ -42,7 +42,12 @@ interface AuthContextType {
   signInWithEmail: (email: string, pass: string) => Promise<void>;
   signUpWithEmail: (email: string, pass: string, name: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
-  loginAdminBackend: (email: string, pass: string) => Promise<{ success: boolean; token?: string; admin?: AdminSessionData; error?: string }>;
+  loginAdminBackend: (
+    email: string,
+    pass: string,
+    totpCode?: string
+  ) => Promise<{ success: boolean; requires2FA?: boolean; token?: string; admin?: AdminSessionData; error?: string }>;
+  exchangeFirebaseAdminToken: (firebaseUser?: User | null) => Promise<boolean>;
   logoutAdminSession: () => Promise<void>;
   signOut: () => Promise<void>;
   saveAddress: (address: Address) => Promise<void>;
@@ -136,6 +141,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     verifyStoredAdminSession();
   }, []);
 
+  const exchangeFirebaseAdminToken = async (firebaseUser?: User | null): Promise<boolean> => {
+    const targetUser = firebaseUser || auth.currentUser;
+    if (!targetUser || targetUser.email?.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+      return false;
+    }
+    try {
+      const idToken = await targetUser.getIdToken();
+      if (!idToken) return false;
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken })
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success && data?.token) {
+        sessionStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
+        localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
+        setAdminSessionActive(true);
+        setAdminUser(data.admin || { email: ADMIN_EMAIL, role: 'admin', name: 'Neeraj Chauhan (Owner)' });
+        return true;
+      }
+    } catch {}
+    return false;
+  };
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
@@ -166,8 +196,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // rule check
         }
 
-        setIsAdminState(isOfficialAdmin || hasAdminDoc || profile.role === 'admin');
+        const adminEligible = isOfficialAdmin || hasAdminDoc || profile.role === 'admin';
+        setIsAdminState(adminEligible);
         setUserProfile(profile);
+
+        if (isOfficialAdmin) {
+          const existingToken =
+            sessionStorage.getItem(ADMIN_SESSION_STORAGE_KEY) ||
+            localStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
+          if (!existingToken) {
+            await exchangeFirebaseAdminToken(currentUser);
+          }
+        }
       } else {
         setUserProfile(null);
         setIsAdminState(false);
@@ -178,12 +218,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribe();
   }, []);
 
-  const loginAdminBackend = async (email: string, pass: string): Promise<{ success: boolean; token?: string; admin?: AdminSessionData; error?: string }> => {
+  const loginAdminBackend = async (
+    email: string,
+    pass: string,
+    totpCode?: string
+  ): Promise<{ success: boolean; requires2FA?: boolean; token?: string; admin?: AdminSessionData; error?: string }> => {
     try {
       const res = await fetch('/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), password: pass })
+        body: JSON.stringify({
+          email: email.trim(),
+          password: pass,
+          ...(totpCode ? { totpCode } : {})
+        })
       });
 
       const text = await res.text();
@@ -191,23 +239,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         data = JSON.parse(text);
       } catch {
-        if ((text.trim().startsWith('<') || text.includes('<!doctype')) && email.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-          const tok = `admin_tok_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
-          sessionStorage.setItem(ADMIN_SESSION_STORAGE_KEY, tok);
-          localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, tok);
-          setAdminSessionActive(true);
-          const ownerAdmin = { email: email.trim(), role: 'admin', name: 'Neeraj Chauhan (Owner)' };
-          setAdminUser(ownerAdmin);
-          return { success: true, token: tok, admin: ownerAdmin };
-        }
-        return { success: false, error: 'Invalid response format from server.' };
+        return { success: false, error: 'Authentication server returned a non-JSON response.' };
+      }
+
+      if (data?.requires2FA) {
+        return {
+          success: false,
+          requires2FA: true,
+          error: data.error || data.message
+        };
       }
 
       if (!res.ok) {
-        return { success: false, error: data.error || 'Authentication failed. Please verify credentials.' };
+        return { success: false, error: data?.error || 'Authentication failed. Please verify credentials.' };
       }
 
-      if (data.token) {
+      if (data?.token) {
         sessionStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
         localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
         setAdminSessionActive(true);
@@ -229,13 +276,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${storedToken}`
+            'Authorization': `Bearer ${storedToken}`,
+            'x-admin-token': storedToken
           }
         });
       } catch {}
     }
     sessionStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
     localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
+    sessionStorage.removeItem('admin_session_token');
+    localStorage.removeItem('admin_session_token');
     setAdminSessionActive(false);
     setAdminUser(null);
   };
@@ -276,6 +326,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {}
     try {
       localStorage.removeItem('vidhyaa_patron_session');
+      localStorage.removeItem('vidhyaa_patron_token');
       window.dispatchEvent(new Event('vidhyaa_patron_auth_changed'));
     } catch {}
     setUser(null);
@@ -331,6 +382,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signUpWithEmail,
         resetPassword,
         loginAdminBackend,
+        exchangeFirebaseAdminToken,
         logoutAdminSession,
         signOut,
         saveAddress,

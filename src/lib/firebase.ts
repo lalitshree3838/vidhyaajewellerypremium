@@ -1,12 +1,34 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import {
+  getFirestore,
+  initializeFirestore,
+  doc,
+  getDocFromServer,
+  Firestore
+} from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 // Ensure singleton Firebase App instance across the entire application runtime
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId); /* CRITICAL: The app will break without this line */
+
+function createFirestoreInstance(): Firestore {
+  try {
+    // Force long-polling to prevent WebChannel 10-second stream timeouts in proxied/iframe environments
+    return initializeFirestore(
+      app,
+      {
+        experimentalForceLongPolling: true,
+      },
+      firebaseConfig.firestoreDatabaseId
+    );
+  } catch {
+    return getFirestore(app, firebaseConfig.firestoreDatabaseId); /* CRITICAL: Fallback preserves named database ID */
+  }
+}
+
+export const db = createFirestoreInstance();
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 
@@ -57,15 +79,19 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Connection check helper (only runs on explicit demand, not on module import)
+// Connection check helper to verify Firestore reachability on startup
 export async function testConnection(): Promise<boolean> {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
     return true;
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn("Firebase client is currently in offline mode.");
+      console.warn('Firebase client is currently in offline mode.');
     }
     return false;
   }
+}
+
+if (typeof window !== 'undefined') {
+  void testConnection();
 }
