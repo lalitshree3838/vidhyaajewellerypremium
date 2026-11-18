@@ -51,22 +51,98 @@ function vdhEnv(string $key, string $default = ''): string {
     return $default;
 }
 
+function vdhNormalizeFsPath(string $path): string {
+    $norm = str_replace('\\', '/', trim($path));
+    return rtrim($norm, '/') ?: '/';
+}
+
+function vdhIsPathPermittedByOpenBasedir(string $path): bool {
+    $openBasedir = trim((string)@ini_get('open_basedir'));
+    if ($openBasedir === '') return true;
+    $target = vdhNormalizeFsPath($path);
+    $roots = explode(PATH_SEPARATOR, $openBasedir);
+    foreach ($roots as $root) {
+        $rootTrim = trim($root);
+        if ($rootTrim === '') continue;
+        $real = @realpath($rootTrim);
+        $base = vdhNormalizeFsPath($real !== false ? $real : $rootTrim);
+        if ($base === '/') return true;
+        if ($target === $base || str_starts_with($target, $base . '/')) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function vdhOutsideSecretsDir(): ?string {
-    $parent = dirname(vdhRootDir());
-    $dir = $parent . '/.admin-secrets';
-    if (@is_dir($dir) && @is_writable($dir)) return $dir;
-    if (@mkdir($dir, 0700, true)) {
-        @chmod($dir, 0700);
-        return $dir;
+    $candidates = [];
+    $override = vdhEnv('VIDHYAA_SECRETS_DIR');
+    if ($override !== '') {
+        $candidates[] = rtrim($override, '/\\');
+    }
+    $candidates[] = dirname(vdhRootDir()) . '/.admin-secrets';
+
+    foreach ($candidates as $dir) {
+        if (!vdhIsPathPermittedByOpenBasedir($dir)) {
+            continue;
+        }
+        if (@is_dir($dir) && @is_writable($dir)) {
+            return $dir;
+        }
+        $parent = dirname($dir);
+        if (!vdhIsPathPermittedByOpenBasedir($parent)) {
+            continue;
+        }
+        if (@mkdir($dir, 0700, true)) {
+            @chmod($dir, 0700);
+            if (@is_dir($dir) && @is_writable($dir)) {
+                return $dir;
+            }
+        }
+    }
+    return null;
+}
+
+function vdhOutsideSecretsFilePath(string $filename): ?string {
+    $dir = vdhOutsideSecretsDir();
+    if ($dir !== null) {
+        return $dir . '/' . ltrim($filename, '/\\');
+    }
+    $override = vdhEnv('VIDHYAA_SECRETS_DIR');
+    $fallbackDirs = [];
+    if ($override !== '') $fallbackDirs[] = rtrim($override, '/\\');
+    $fallbackDirs[] = dirname(vdhRootDir()) . '/.admin-secrets';
+    foreach ($fallbackDirs as $candDir) {
+        $candFile = $candDir . '/' . ltrim($filename, '/\\');
+        if (vdhIsPathPermittedByOpenBasedir($candFile) && @is_file($candFile) && @is_readable($candFile)) {
+            return $candFile;
+        }
     }
     return null;
 }
 
 function vdhTempStateDir(): string {
-    $dir = rtrim(sys_get_temp_dir(), '/\\') . '/vidhyaa_state_' . substr(md5(vdhRootDir()), 0, 12);
-    if (!is_dir($dir)) {
-        @mkdir($dir, 0700, true);
-        @chmod($dir, 0700);
+    $base = rtrim(sys_get_temp_dir(), '/\\');
+    $dir = $base . '/vidhyaa_state_' . substr(md5(vdhRootDir()), 0, 12);
+    if (vdhIsPathPermittedByOpenBasedir($dir)) {
+        if (!@is_dir($dir)) {
+            @mkdir($dir, 0700, true);
+            @chmod($dir, 0700);
+        }
+        if (@is_dir($dir) && @is_writable($dir)) {
+            return $dir;
+        }
+    }
+    $outside = vdhOutsideSecretsDir();
+    if ($outside !== null) {
+        $stateSub = $outside . '/state';
+        if (!@is_dir($stateSub)) {
+            @mkdir($stateSub, 0700, true);
+            @chmod($stateSub, 0700);
+        }
+        if (@is_dir($stateSub) && @is_writable($stateSub)) {
+            return $stateSub;
+        }
     }
     return $dir;
 }
@@ -101,8 +177,9 @@ function vdhGetSessionSecret(): string {
     }
 
     $outside = vdhOutsideSecretsDir();
-    $keyFile = ($outside ?? vdhTempStateDir()) . '/session-secret.key';
-    if (is_file($keyFile) && is_readable($keyFile)) {
+    $keyDir = $outside ?? vdhTempStateDir();
+    $keyFile = $keyDir . '/session-secret.key';
+    if (vdhIsPathPermittedByOpenBasedir($keyFile) && @is_file($keyFile) && @is_readable($keyFile)) {
         $existing = trim((string)@file_get_contents($keyFile));
         if (strlen($existing) >= 32) {
             $secret = $existing;
@@ -111,8 +188,10 @@ function vdhGetSessionSecret(): string {
     }
 
     $generated = bin2hex(random_bytes(32));
-    @file_put_contents($keyFile, $generated, LOCK_EX);
-    @chmod($keyFile, 0600);
+    if (vdhIsPathPermittedByOpenBasedir($keyFile)) {
+        @file_put_contents($keyFile, $generated, LOCK_EX);
+        @chmod($keyFile, 0600);
+    }
     $secret = $generated;
     return $secret;
 }
@@ -520,6 +599,106 @@ function vdhSanitizePublicOrderTracking(array $order): array {
     ];
 }
 
+function vdhSalsa20_8(array &$b): void {
+    $x = $b;
+    for ($i = 0; $i < 8; $i += 2) {
+        $s = ($x[0] + $x[12]) & 0xFFFFFFFF;  $x[4]  ^= ((($s << 7) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 25) & 0x7F));
+        $s = ($x[4] + $x[0])  & 0xFFFFFFFF;  $x[8]  ^= ((($s << 9) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 23) & 0x1FF));
+        $s = ($x[8] + $x[4])  & 0xFFFFFFFF;  $x[12] ^= ((($s << 13) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 19) & 0x1FFF));
+        $s = ($x[12] + $x[8]) & 0xFFFFFFFF;  $x[0]  ^= ((($s << 18) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 14) & 0x3FFFF));
+
+        $s = ($x[5] + $x[1])  & 0xFFFFFFFF;  $x[9]  ^= ((($s << 7) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 25) & 0x7F));
+        $s = ($x[9] + $x[5])  & 0xFFFFFFFF;  $x[13] ^= ((($s << 9) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 23) & 0x1FF));
+        $s = ($x[13] + $x[9]) & 0xFFFFFFFF;  $x[1]  ^= ((($s << 13) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 19) & 0x1FFF));
+        $s = ($x[1] + $x[13]) & 0xFFFFFFFF;  $x[5]  ^= ((($s << 18) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 14) & 0x3FFFF));
+
+        $s = ($x[10] + $x[6])  & 0xFFFFFFFF; $x[14] ^= ((($s << 7) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 25) & 0x7F));
+        $s = ($x[14] + $x[10]) & 0xFFFFFFFF; $x[2]  ^= ((($s << 9) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 23) & 0x1FF));
+        $s = ($x[2] + $x[14])  & 0xFFFFFFFF; $x[6]  ^= ((($s << 13) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 19) & 0x1FFF));
+        $s = ($x[6] + $x[2])   & 0xFFFFFFFF; $x[10] ^= ((($s << 18) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 14) & 0x3FFFF));
+
+        $s = ($x[15] + $x[11]) & 0xFFFFFFFF; $x[3]  ^= ((($s << 7) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 25) & 0x7F));
+        $s = ($x[3] + $x[15])  & 0xFFFFFFFF; $x[7]  ^= ((($s << 9) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 23) & 0x1FF));
+        $s = ($x[7] + $x[3])   & 0xFFFFFFFF; $x[11] ^= ((($s << 13) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 19) & 0x1FFF));
+        $s = ($x[11] + $x[7])  & 0xFFFFFFFF; $x[15] ^= ((($s << 18) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 14) & 0x3FFFF));
+
+        $s = ($x[0] + $x[3]) & 0xFFFFFFFF;   $x[1] ^= ((($s << 7) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 25) & 0x7F));
+        $s = ($x[1] + $x[0]) & 0xFFFFFFFF;   $x[2] ^= ((($s << 9) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 23) & 0x1FF));
+        $s = ($x[2] + $x[1]) & 0xFFFFFFFF;   $x[3] ^= ((($s << 13) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 19) & 0x1FFF));
+        $s = ($x[3] + $x[2]) & 0xFFFFFFFF;   $x[0] ^= ((($s << 18) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 14) & 0x3FFFF));
+
+        $s = ($x[5] + $x[4]) & 0xFFFFFFFF;   $x[6] ^= ((($s << 7) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 25) & 0x7F));
+        $s = ($x[6] + $x[5]) & 0xFFFFFFFF;   $x[7] ^= ((($s << 9) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 23) & 0x1FF));
+        $s = ($x[7] + $x[6]) & 0xFFFFFFFF;   $x[4] ^= ((($s << 13) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 19) & 0x1FFF));
+        $s = ($x[4] + $x[7]) & 0xFFFFFFFF;   $x[5] ^= ((($s << 18) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 14) & 0x3FFFF));
+
+        $s = ($x[10] + $x[9])  & 0xFFFFFFFF; $x[11] ^= ((($s << 7) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 25) & 0x7F));
+        $s = ($x[11] + $x[10]) & 0xFFFFFFFF; $x[8]  ^= ((($s << 9) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 23) & 0x1FF));
+        $s = ($x[8] + $x[11])  & 0xFFFFFFFF; $x[9]  ^= ((($s << 13) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 19) & 0x1FFF));
+        $s = ($x[9] + $x[8])   & 0xFFFFFFFF; $x[10] ^= ((($s << 18) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 14) & 0x3FFFF));
+
+        $s = ($x[15] + $x[14]) & 0xFFFFFFFF; $x[12] ^= ((($s << 7) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 25) & 0x7F));
+        $s = ($x[12] + $x[15]) & 0xFFFFFFFF; $x[13] ^= ((($s << 9) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 23) & 0x1FF));
+        $s = ($x[13] + $x[12]) & 0xFFFFFFFF; $x[14] ^= ((($s << 13) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 19) & 0x1FFF));
+        $s = ($x[14] + $x[13]) & 0xFFFFFFFF; $x[15] ^= ((($s << 18) & 0xFFFFFFFF) | ((($s & 0xFFFFFFFF) >> 14) & 0x3FFFF));
+    }
+    for ($i = 0; $i < 16; $i++) {
+        $b[$i] = ($b[$i] + $x[$i]) & 0xFFFFFFFF;
+    }
+}
+
+function vdhScryptBlockMix(array $bWords, int $r): array {
+    $blocks = 2 * $r;
+    $lastStart = ($blocks - 1) * 16;
+    $x = array_slice($bWords, $lastStart, 16);
+    $y = array_fill(0, $blocks * 16, 0);
+
+    for ($i = 0; $i < $blocks; $i++) {
+        $offset = $i * 16;
+        for ($k = 0; $k < 16; $k++) {
+            $x[$k] ^= $bWords[$offset + $k];
+        }
+        vdhSalsa20_8($x);
+        $outBlock = (($i & 1) === 0) ? ($i >> 1) : ($r + ($i >> 1));
+        $outOffset = $outBlock * 16;
+        for ($k = 0; $k < 16; $k++) {
+            $y[$outOffset + $k] = $x[$k];
+        }
+    }
+    return $y;
+}
+
+function vdhScrypt(string $password, string $salt, int $n = 16384, int $r = 8, int $p = 1, int $dkLen = 64): string {
+    $blockBytes = 128 * $r;
+    $wordsPerBlock = 32 * $r;
+    $packFmt = 'V' . $wordsPerBlock;
+    $b = hash_pbkdf2('sha256', $password, $salt, 1, $p * $blockBytes, true);
+    $mixed = '';
+    $nMask = $n - 1;
+    $intIdx = (2 * $r - 1) * 16;
+
+    for ($bi = 0; $bi < $p; $bi++) {
+        $chunk = substr($b, $bi * $blockBytes, $blockBytes);
+        $x = array_values(unpack($packFmt, $chunk));
+        $v = new \SplFixedArray($n);
+        for ($i = 0; $i < $n; $i++) {
+            $v[$i] = pack($packFmt, ...$x);
+            $x = vdhScryptBlockMix($x, $r);
+        }
+        for ($i = 0; $i < $n; $i++) {
+            $j = $x[$intIdx] & $nMask;
+            $vj = array_values(unpack($packFmt, $v[$j]));
+            for ($k = 0; $k < $wordsPerBlock; $k++) {
+                $x[$k] ^= $vj[$k];
+            }
+            $x = vdhScryptBlockMix($x, $r);
+        }
+        $mixed .= pack($packFmt, ...$x);
+    }
+
+    return hash_pbkdf2('sha256', $password, $mixed, 1, $dkLen, true);
+}
+
 function vdhVerifyPasswordHash(string $password, string $storedHash): bool {
     $storedHash = trim($storedHash);
     if ($storedHash === '' || $password === '') return false;
@@ -533,7 +712,7 @@ function vdhVerifyPasswordHash(string $password, string $storedHash): bool {
         if (count($parts) === 4) {
             $iters = max(10000, (int)$parts[1]);
             $salt = $parts[2];
-            $expected = $parts[3];
+            $expected = strtolower($parts[3]);
             $actual = hash_pbkdf2('sha256', $password, $salt, $iters, 64, false);
             return hash_equals($expected, $actual);
         }
@@ -544,9 +723,17 @@ function vdhVerifyPasswordHash(string $password, string $storedHash): bool {
         $parts = explode(':', $storedHash, 3);
         if (count($parts) === 3) {
             $actual = hash('sha256', $parts[1] . ':' . $password);
-            return hash_equals($parts[2], $actual);
+            return hash_equals(strtolower($parts[2]), $actual);
         }
         return false;
+    }
+
+    // Legacy Node scrypt format from data/patrons.json (<saltHex>:<128-hex-hash>)
+    if (preg_match('/^([0-9a-f]{16,64}):([0-9a-f]{128})$/i', $storedHash, $m)) {
+        $salt = $m[1];
+        $expected = strtolower($m[2]);
+        $actual = bin2hex(vdhScrypt($password, $salt, 16384, 8, 1, 64));
+        return hash_equals($expected, $actual);
     }
 
     return false;
@@ -601,11 +788,20 @@ function vdhVerifyTotp(string $secretBase32, string $code): bool {
 
 function vdhLoadAdminCredentialsConfig(): array {
     $root = vdhRootDir();
-    $outsideFile = dirname($root) . '/.admin-secrets/admin-credentials.json';
-    $localFile = $root . '/.admin-secrets/admin-credentials.json';
+    $candidates = [];
+    $override = vdhEnv('VIDHYAA_SECRETS_DIR');
+    if ($override !== '') {
+        $candidates[] = rtrim($override, '/\\') . '/admin-credentials.json';
+    }
+    $candidates[] = dirname($root) . '/.admin-secrets/admin-credentials.json';
+    $candidates[] = $root . '/.admin-secrets/admin-credentials.json';
+
     $cfg = [];
-    foreach ([$outsideFile, $localFile] as $cand) {
-        if (is_file($cand) && is_readable($cand)) {
+    foreach ($candidates as $cand) {
+        if (!vdhIsPathPermittedByOpenBasedir($cand)) {
+            continue;
+        }
+        if (@is_file($cand) && @is_readable($cand)) {
             $parsed = json_decode((string)@file_get_contents($cand), true);
             if (is_array($parsed)) {
                 $cfg = $parsed;
@@ -670,16 +866,56 @@ function vdhClearRateLimit(string $bucketKey): void {
     if (is_file($file)) @unlink($file);
 }
 
+function vdhNormalizeHostname(string $raw): string {
+    $parts = explode(',', $raw);
+    $first = strtolower(trim((string)($parts[0] ?? '')));
+    if ($first === '') return '';
+    if (str_starts_with($first, '[')) {
+        $end = strpos($first, ']');
+        return $end !== false ? substr($first, 0, $end + 1) : $first;
+    }
+    return (string)preg_replace('/:\d+$/', '', $first);
+}
+
+function vdhIsTrustedProxyIp(string $addr): bool {
+    $ip = strtolower(trim($addr));
+    if ($ip === '') return false;
+    if ($ip === '127.0.0.1' || $ip === '::1' || $ip === '::ffff:127.0.0.1') return true;
+    $clean = str_starts_with($ip, '::ffff:') ? substr($ip, 7) : $ip;
+    if (str_starts_with($clean, '10.') || str_starts_with($clean, '192.168.')) return true;
+    if (preg_match('/^172\.(\d+)\./', $clean, $m)) {
+        $second = (int)$m[1];
+        if ($second >= 16 && $second <= 31) return true;
+    }
+    return false;
+}
+
 function vdhIsLiveProductionHost(): bool {
-    $host = strtolower(trim((string)($_SERVER['HTTP_HOST'] ?? ($_SERVER['SERVER_NAME'] ?? ''))));
-    $host = preg_replace('/:\d+$/', '', $host);
-    if ($host === '' || $host === 'localhost' || $host === '127.0.0.1') {
-        return false;
+    $livePattern = '/^(?:www\.)?vidhyaajewellerystudio\.com$/i';
+    $directHost = vdhNormalizeHostname((string)($_SERVER['HTTP_HOST'] ?? ''));
+    if ($directHost !== '' && preg_match($livePattern, $directHost)) {
+        return true;
     }
-    if (str_starts_with($host, 'staging.') || str_starts_with($host, 'sandbox.') || str_starts_with($host, 'dev.')) {
-        return false;
+
+    $serverName = vdhNormalizeHostname((string)($_SERVER['SERVER_NAME'] ?? ''));
+    if ($directHost === '' && $serverName !== '' && preg_match($livePattern, $serverName)) {
+        return true;
     }
-    return str_contains($host, 'vidhyaajewellerystudio.com');
+
+    $remoteAddr = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+    $canTrustForwarded = vdhIsTrustedProxyIp($remoteAddr)
+        || $directHost === ''
+        || $directHost === 'localhost'
+        || $directHost === '127.0.0.1';
+
+    if ($canTrustForwarded) {
+        $fwdHost = vdhNormalizeHostname((string)($_SERVER['HTTP_X_FORWARDED_HOST'] ?? ''));
+        if ($fwdHost !== '' && preg_match($livePattern, $fwdHost)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 function vdhWithFileLock(string $lockName, callable $callback) {

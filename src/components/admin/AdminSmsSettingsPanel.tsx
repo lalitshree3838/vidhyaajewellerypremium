@@ -56,9 +56,17 @@ export const AdminSmsSettingsPanel: React.FC = () => {
           'x-admin-token': token,
         },
       });
-      if (res.ok) {
-        const data = await res.json();
+      const rawText = await res.text();
+      let data: any = null;
+      try {
+        data = rawText ? JSON.parse(rawText) : null;
+      } catch {
+        data = null;
+      }
+      if (res.ok && data) {
         setStatus(data);
+      } else if (!res.ok) {
+        setError(data?.error || `SMS configuration endpoint returned HTTP ${res.status}.`);
       }
     } catch (err: any) {
       console.warn('Could not load SMS config:', err);
@@ -98,7 +106,13 @@ export const AdminSmsSettingsPanel: React.FC = () => {
         }),
       });
 
-      const data = await res.json();
+      const rawText = await res.text();
+      let data: any = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        throw new Error(`Unexpected server response (HTTP ${res.status}).`);
+      }
       if (!res.ok) {
         throw new Error(data.error || 'Failed to update SMS settings.');
       }
@@ -145,7 +159,13 @@ export const AdminSmsSettingsPanel: React.FC = () => {
         body: JSON.stringify({ phoneNumber: clean, mobile: clean }),
       });
 
-      const data = await res.json();
+      const rawText = await res.text();
+      let data: any = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        data = { success: false, error: `Unexpected server response (HTTP ${res.status}).` };
+      }
       setTestResult(data);
       if (res.ok && data.success) {
         setSuccess(`Test SMS successfully dispatched! Carrier: ${data.provider} to ${data.phoneNumber || clean}`);

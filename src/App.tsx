@@ -18,6 +18,7 @@ import {
   getCachedCategories,
   __mergeProductMedia
 } from './lib/dbService';
+import { connectionReadyPromise } from './lib/firebase';
 import { INITIAL_CATEGORIES, INITIAL_PRODUCTS, INITIAL_STORE_SETTINGS, isGenuineProduct } from './lib/sampleData';
 import { Header } from './components/Header';
 import { Footer } from './components/Footer';
@@ -202,6 +203,10 @@ function MainApp() {
   const loadData = async () => {
     try {
       setInitError(null);
+      await Promise.race([
+        connectionReadyPromise,
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2000))
+      ]);
       const [prods, cats, sets] = await Promise.all([
         fetchProducts(),
         fetchCategories(),
@@ -231,19 +236,7 @@ function MainApp() {
   };
 
   useEffect(() => {
-    loadData();
-
-    // Subscribe to live Firestore products collection updates
-    const unsubscribe = subscribeToProducts(
-      (liveProds) => {
-        if (Array.isArray(liveProds) && liveProds.length > 0) {
-          safeSetProducts(liveProds);
-        }
-      },
-      (err) => {
-        console.warn('[Storefront] Firestore real-time notice:', err?.message || err);
-      }
-    );
+    void loadData();
 
     const handleProductsUpdated = (e: any) => {
       if (e.detail && Array.isArray(e.detail) && e.detail.length > 0) {
@@ -253,10 +246,37 @@ function MainApp() {
     window.addEventListener('vidhyaa_products_updated', handleProductsUpdated);
 
     return () => {
-      unsubscribe();
       window.removeEventListener('vidhyaa_products_updated', handleProductsUpdated);
     };
   }, []);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    let active = true;
+    let unsubscribe = () => {};
+
+    Promise.race([
+      connectionReadyPromise,
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2000))
+    ]).then(() => {
+      if (!active) return;
+      unsubscribe = subscribeToProducts(
+        (liveProds) => {
+          if (Array.isArray(liveProds) && liveProds.length > 0) {
+            safeSetProducts(liveProds);
+          }
+        },
+        (err) => {
+          console.warn('[Storefront] Firestore real-time notice:', err?.message || err);
+        }
+      );
+    });
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [isAdmin]);
 
   useEffect(() => {
 

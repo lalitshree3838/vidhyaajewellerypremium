@@ -587,7 +587,9 @@ export function verifyTotpCode(secretBase32, code) {
 }
 
 export function loadAdminCredentialsConfig() {
+  const overrideDir = getEnvVar('VIDHYAA_SECRETS_DIR');
   const candidates = [
+    ...(overrideDir ? [path.join(overrideDir, 'admin-credentials.json')] : []),
     path.join(path.dirname(ROOT_DIR), '.admin-secrets', 'admin-credentials.json'),
     path.join(ROOT_DIR, '.admin-secrets', 'admin-credentials.json')
   ];
@@ -675,17 +677,52 @@ export function clearRateLimit(bucketKey) {
   } catch {}
 }
 
-export function isLiveProductionRequest(req) {
-  const rawHost = String(req?.headers?.['x-forwarded-host'] || req?.headers?.host || '').toLowerCase();
-  const rawOrigin = String(req?.headers?.origin || '').toLowerCase();
-  const host = rawHost.replace(/:\d+$/, '');
-  const originHost = rawOrigin.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/:\d+$/, '');
-  for (const h of [host, originHost]) {
-    if (!h) continue;
-    if (h === 'localhost' || h === '127.0.0.1') continue;
-    if (h.startsWith('staging.') || h.startsWith('sandbox.') || h.startsWith('dev.')) continue;
-    if (h.includes('vidhyaajewellerystudio.com')) return true;
+function normalizeHostname(raw) {
+  const first = String(raw || '').split(',')[0].trim().toLowerCase();
+  if (!first) return '';
+  if (first.startsWith('[')) {
+    const end = first.indexOf(']');
+    return end !== -1 ? first.slice(0, end + 1) : first;
   }
+  return first.replace(/:\d+$/, '');
+}
+
+function isTrustedProxyAddress(addr) {
+  const ip = String(addr || '').trim().toLowerCase();
+  if (!ip) return false;
+  if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return true;
+  const clean = ip.startsWith('::ffff:') ? ip.slice(7) : ip;
+  if (clean.startsWith('10.') || clean.startsWith('192.168.')) return true;
+  const m = /^172\.(\d+)\./.exec(clean);
+  if (m) {
+    const second = Number(m[1]);
+    if (second >= 16 && second <= 31) return true;
+  }
+  return false;
+}
+
+const LIVE_PRODUCTION_HOST_RE = /^(?:www\.)?vidhyaajewellerystudio\.com$/i;
+
+export function isLiveProductionRequest(req) {
+  const directHost = normalizeHostname(req?.headers?.host || '');
+  if (LIVE_PRODUCTION_HOST_RE.test(directHost)) {
+    return true;
+  }
+
+  const remoteAddr = req?.socket?.remoteAddress || req?.connection?.remoteAddress || '';
+  const canTrustForwarded =
+    isTrustedProxyAddress(remoteAddr) ||
+    !directHost ||
+    directHost === 'localhost' ||
+    directHost === '127.0.0.1';
+
+  if (canTrustForwarded) {
+    const fwdHost = normalizeHostname(req?.headers?.['x-forwarded-host'] || '');
+    if (LIVE_PRODUCTION_HOST_RE.test(fwdHost)) {
+      return true;
+    }
+  }
+
   return false;
 }
 

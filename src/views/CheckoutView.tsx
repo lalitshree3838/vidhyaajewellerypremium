@@ -35,8 +35,10 @@ import {
   formatIndianPhone,
   formatFullAddress,
   saveOrderReceiptToken,
-  getOrderReceiptToken
+  getOrderReceiptToken,
+  getCustomerAuthToken
 } from '../lib/dbService';
+import { auth } from '../lib/firebase';
 import { GooglePayQRCard } from '../components/GooglePayQRCard';
 import { isGenuineImageUrl } from '../lib/sampleData';
 import { formatPrice, OrderSavingsSummaryCard } from '../lib/priceUtils';
@@ -87,12 +89,56 @@ function getOrCreateDraftOrderNumber(): string {
   try {
     const existing = sessionStorage.getItem(DRAFT_ORDER_KEY);
     if (existing && /^VDH-\d{6,}$/.test(existing)) return existing;
-    const next = `VDH-${Math.floor(100000 + Math.random() * 900000)}`;
+    const next = `VDH-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
     sessionStorage.setItem(DRAFT_ORDER_KEY, next);
     return next;
   } catch {
-    return `VDH-${Math.floor(100000 + Math.random() * 900000)}`;
+    return `VDH-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
   }
+}
+
+function rotateDraftOrderNumber(): string {
+  const next = `VDH-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
+  try {
+    sessionStorage.setItem(DRAFT_ORDER_KEY, next);
+  } catch {}
+  return next;
+}
+
+async function resolveCheckoutCustomerHeaders(orderKeys: Array<string | undefined>): Promise<Record<string, string>> {
+  let receiptTok = '';
+  for (const key of orderKeys) {
+    if (key) {
+      const found = getOrderReceiptToken(key);
+      if (found) {
+        receiptTok = found;
+        break;
+      }
+    }
+  }
+
+  let customerTok = '';
+  try {
+    const patronTok =
+      typeof localStorage !== 'undefined' ? localStorage.getItem('vidhyaa_patron_token') || '' : '';
+    const hasPatronSession =
+      typeof localStorage !== 'undefined' ? Boolean(localStorage.getItem('vidhyaa_patron_session')) : false;
+    if (patronTok && hasPatronSession) {
+      customerTok = patronTok;
+    } else if (auth?.currentUser) {
+      customerTok = await auth.currentUser.getIdToken().catch(() => '');
+    }
+    if (!customerTok) {
+      customerTok = patronTok || (await getCustomerAuthToken().catch(() => ''));
+    }
+  } catch {
+    customerTok = await getCustomerAuthToken().catch(() => '');
+  }
+
+  return {
+    ...(receiptTok ? { 'x-order-token': receiptTok } : {}),
+    ...(customerTok ? { Authorization: `Bearer ${customerTok}`, 'x-customer-token': customerTok } : {})
+  };
 }
 
 function formatOrderDateIST(isoDate?: string): string {
@@ -432,16 +478,14 @@ const WhatsAppOrderConfirmationView: React.FC<WhatsAppOrderConfirmationViewProps
     setIsSubmitting(true);
     try {
       const orderKey = order.id || order.orderNumber;
-      const receiptTok = getOrderReceiptToken(order.id) || getOrderReceiptToken(order.orderNumber);
-      const patronTok = localStorage.getItem('vidhyaa_patron_token') || '';
+      const authHeaders = await resolveCheckoutCustomerHeaders([order.id, order.orderNumber]);
       await fetch(
         `/api/orders/${encodeURIComponent(orderKey)}/customer-whatsapp-confirm`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            ...(receiptTok ? { 'x-order-token': receiptTok } : {}),
-            ...(patronTok ? { Authorization: `Bearer ${patronTok}`, 'x-customer-token': patronTok } : {})
+            ...authHeaders
           },
           body: JSON.stringify({ whatsappCustomerConfirmed: true })
         }
@@ -756,16 +800,13 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
             }
           : undefined;
 
-        const receiptTok =
-          getOrderReceiptToken(cfOrderId) || getOrderReceiptToken(orderNumber);
-        const patronTok = localStorage.getItem('vidhyaa_patron_token') || '';
+        const authHeaders = await resolveCheckoutCustomerHeaders([cfOrderId, orderNumber]);
 
         const verifyRes = await fetch('/api/payments/cashfree/verify-order', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            ...(receiptTok ? { 'x-order-token': receiptTok } : {}),
-            ...(patronTok ? { Authorization: `Bearer ${patronTok}`, 'x-customer-token': patronTok } : {})
+            ...authHeaders
           },
           body: JSON.stringify({
             orderId: cfOrderId,
@@ -1128,36 +1169,50 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         pincode: pincode.trim()
       };
 
-      const res = await fetch('/api/payments/cashfree/create-order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderId: orderNumber,
-          orderNumber,
-          orderAmount: finalTotal,
-          customerName: name.trim() || 'Valued Patron',
-          customerEmail: email.trim() || 'patron@vidhyaajewellery.com',
-          customerPhone: formattedPhone || '9758350524',
-          shippingAddress,
-          items: orderItems,
-          subtotal,
-          discount,
-          deliveryCharge,
-          userId: effectiveUserId,
-          giftItem: subtotal >= 2000 ? 'Gold Imitation Bangles' : subtotal >= 1500 ? 'Gold Imitation Jhoomki' : undefined,
-          paymentMethods: 'upi,cc,dc,nb',
-          paymentMethod: 'Cashfree (UPI / Cards / Netbanking)',
-          orderNote: `VIDHYAA Jewellery Studio Order ${orderNumber} (${items.length} items)`
-        })
-      });
+      const customerHeaders = await resolveCheckoutCustomerHeaders([orderNumber]);
+      let attemptOrderNumber = orderNumber;
+
+      const postCreateOrder = async (targetOrderNum: string) =>
+        fetch('/api/payments/cashfree/create-order', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...customerHeaders
+          },
+          body: JSON.stringify({
+            orderId: targetOrderNum,
+            orderNumber: targetOrderNum,
+            orderAmount: finalTotal,
+            customerName: name.trim() || 'Valued Patron',
+            customerEmail: email.trim() || 'patron@vidhyaajewellery.com',
+            customerPhone: formattedPhone || '9758350524',
+            shippingAddress,
+            items: orderItems,
+            subtotal,
+            discount,
+            deliveryCharge,
+            userId: effectiveUserId,
+            giftItem: subtotal >= 2000 ? 'Gold Imitation Bangles' : subtotal >= 1500 ? 'Gold Imitation Jhoomki' : undefined,
+            paymentMethods: 'upi,cc,dc,nb',
+            paymentMethod: 'Cashfree (UPI / Cards / Netbanking)',
+            orderNote: `VIDHYAA Jewellery Studio Order ${targetOrderNum} (${items.length} items)`
+          })
+        });
+
+      let res = await postCreateOrder(attemptOrderNumber);
+      if (res.status === 409) {
+        attemptOrderNumber = rotateDraftOrderNumber();
+        setOrderNumber(attemptOrderNumber);
+        res = await postCreateOrder(attemptOrderNumber);
+      }
 
       const data = await res.json().catch(() => ({}));
       const paymentSessionId = data.paymentSessionId || data.payment_session_id;
-      const cfOrderId = data.orderId || data.order_id || orderNumber;
+      const cfOrderId = data.orderId || data.order_id || attemptOrderNumber;
       const cfMode = data.mode;
       if (data?.receiptToken) {
         saveOrderReceiptToken(cfOrderId, data.receiptToken);
-        saveOrderReceiptToken(orderNumber, data.receiptToken);
+        saveOrderReceiptToken(attemptOrderNumber, data.receiptToken);
         if (data?.order?.id) saveOrderReceiptToken(data.order.id, data.receiptToken);
       }
 

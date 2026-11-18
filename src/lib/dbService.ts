@@ -808,15 +808,25 @@ function getAdminAuthToken(): string {
   }
 }
 
-async function getCustomerAuthToken(): Promise<string> {
+export async function getCustomerAuthToken(): Promise<string> {
   try {
-    if (typeof localStorage !== 'undefined') {
-      const patronTok = localStorage.getItem('vidhyaa_patron_token');
-      if (patronTok) return patronTok;
+    const patronTok =
+      typeof localStorage !== 'undefined' ? localStorage.getItem('vidhyaa_patron_token') || '' : '';
+    const hasPatronSession =
+      typeof localStorage !== 'undefined' ? Boolean(localStorage.getItem('vidhyaa_patron_session')) : false;
+
+    if (patronTok && hasPatronSession) {
+      return patronTok;
     }
+
     const { auth } = await import('./firebase');
     if (auth?.currentUser) {
-      return await auth.currentUser.getIdToken();
+      const idToken = await auth.currentUser.getIdToken();
+      if (idToken) return idToken;
+    }
+
+    if (patronTok) {
+      return patronTok;
     }
   } catch {}
   return '';

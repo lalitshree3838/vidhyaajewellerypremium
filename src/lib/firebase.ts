@@ -15,16 +15,15 @@ export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfi
 
 function createFirestoreInstance(): Firestore {
   try {
-    // Force long-polling to prevent WebChannel 10-second stream timeouts in proxied/iframe environments
     return initializeFirestore(
       app,
       {
-        experimentalForceLongPolling: true,
+        experimentalAutoDetectLongPolling: true,
       },
       firebaseConfig.firestoreDatabaseId
     );
   } catch {
-    return getFirestore(app, firebaseConfig.firestoreDatabaseId); /* CRITICAL: Fallback preserves named database ID */
+    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
   }
 }
 
@@ -79,19 +78,17 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Connection check helper to verify Firestore reachability on startup
 export async function testConnection(): Promise<boolean> {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
     return true;
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firebase client is currently in offline mode.');
+      console.error('Please check your Firebase configuration.');
     }
     return false;
   }
 }
 
-if (typeof window !== 'undefined') {
-  void testConnection();
-}
+export const connectionReadyPromise: Promise<boolean> =
+  typeof window !== 'undefined' ? testConnection() : Promise.resolve(true);

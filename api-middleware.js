@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import https from 'node:https';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
@@ -42,19 +43,26 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DATA_DIR = path.resolve(__dirname, 'data');
-const API_DIR = path.resolve(__dirname, 'api');
+const DATA_DIR = process.env.VIDHYAA_DATA_DIR
+  ? path.resolve(process.env.VIDHYAA_DATA_DIR)
+  : path.resolve(__dirname, 'data');
+const API_DIR = process.env.VIDHYAA_API_DIR
+  ? path.resolve(process.env.VIDHYAA_API_DIR)
+  : path.resolve(__dirname, 'api');
 const PATRONS_FILE = path.join(DATA_DIR, 'patrons.json');
 const PRODUCTS_FILE = path.join(DATA_DIR, 'products.json');
 const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
 const WHATSAPP_LOGS_FILE = path.join(DATA_DIR, 'whatsapp_logs.json');
 const API_PRODUCTS_FILE = path.join(API_DIR, 'products');
 const API_ORDERS_FILE = path.join(API_DIR, 'orders');
-const VIDEOS_UPLOAD_DIR = path.resolve(__dirname, 'videos', 'uploads');
+const VIDEOS_UPLOAD_DIR = process.env.VIDHYAA_VIDEOS_DIR
+  ? path.resolve(process.env.VIDHYAA_VIDEOS_DIR)
+  : path.resolve(__dirname, 'videos', 'uploads');
 const DIST_VIDEOS_UPLOAD_DIR = path.resolve(__dirname, 'dist', 'videos', 'uploads');
 const MAX_VIDEO_UPLOAD_BYTES = 250 * 1024 * 1024; // 250 MB
 
 const OWNER_WHATSAPP_NUMBER = '917302187770';
+const inflightCashfreeOrders = new Set();
 
 function getClientIp(req) {
   const fwd = String(req?.headers?.['x-forwarded-for'] || '').trim();
@@ -459,21 +467,14 @@ function stripUntrustedOrderFields(input, allowAdminOnly = false) {
 
 function resolveSmsConfigPath() {
   const outside = getOutsideSecretsDir();
-  if (outside) {
-    const outsidePath = path.join(outside, 'sms-config.json');
-    if (fs.existsSync(outsidePath)) return outsidePath;
-  }
-  const rootPath = path.resolve(__dirname, 'sms-config.json');
-  if (fs.existsSync(rootPath)) return rootPath;
-  return outside ? path.join(outside, 'sms-config.json') : rootPath;
+  return outside ? path.join(outside, 'sms-config.json') : null;
 }
 
 function readSmsConfigSafe() {
   let fileCfg = {};
   const outside = getOutsideSecretsDir();
   const candidates = [
-    ...(outside ? [path.join(outside, 'sms-config.json')] : []),
-    path.resolve(__dirname, 'sms-config.json')
+    ...(outside ? [path.join(outside, 'sms-config.json')] : [])
   ];
   for (const p of candidates) {
     try {
@@ -1365,6 +1366,9 @@ export function handleApiMiddleware(req, res, next) {
         const isLiveDomain = isLiveProductionRequest(req);
         const rawOrderId = String(body.orderNumber || body.orderId || `VDH-${Date.now().toString().slice(-6)}`).trim();
         const gatewayOrderId = sanitizeGatewayOrderId(rawOrderId);
+        if (!gatewayOrderId) {
+          return sendJson(res, 400, { success: false, configured: true, error: 'Valid orderNumber is required.' });
+        }
         const orderAmount = toMoneyNumber(body.orderAmount ?? body.totalAmount, 0);
 
         if (orderAmount <= 0) {
@@ -1375,94 +1379,192 @@ export function handleApiMiddleware(req, res, next) {
           });
         }
 
-        const reqOrigin =
-          String(req.headers['origin'] || '').trim() ||
-          (req.headers['host'] ? `${req.headers['x-forwarded-proto'] || (isLiveDomain ? 'https' : 'http')}://${req.headers['host']}` : 'https://vidhyaajewellerystudio.com');
-        const defaultReturnUrl = `${reqOrigin.replace(/\/+$/, '')}/?view=checkout&cf_order_id={order_id}`;
+        const directHostRaw = String(req.headers['host'] || '').split(',')[0].trim();
+        const canonicalLiveHost = /^(?:www\.)?vidhyaajewellerystudio\.com(?::\d+)?$/i.test(directHostRaw)
+          ? directHostRaw.replace(/:\d+$/, '').toLowerCase()
+          : 'vidhyaajewellerystudio.com';
+        const defaultOrigin = isLiveDomain
+          ? `https://${canonicalLiveHost}`
+          : directHostRaw
+          ? `${String(req.headers['x-forwarded-proto'] || 'http').split(',')[0].trim() === 'https' ? 'https' : 'http'}://${directHostRaw}`
+          : 'http://localhost:3000';
+        const defaultReturnUrl = `${defaultOrigin}/?view=checkout&cf_order_id={order_id}`;
+
+        let validatedReturnUrl = defaultReturnUrl;
+        if (body.returnUrl !== undefined && String(body.returnUrl).trim() !== '') {
+          const candidateUrl = String(body.returnUrl).trim();
+          let parsedReturn = null;
+          try {
+            parsedReturn = new URL(candidateUrl);
+          } catch {
+            parsedReturn = null;
+          }
+          if (!parsedReturn) {
+            return sendJson(res, 400, {
+              success: false,
+              configured: true,
+              error: 'Invalid returnUrl format.'
+            });
+          }
+          if (isLiveDomain) {
+            if (
+              parsedReturn.protocol !== 'https:' ||
+              !/^(?:www\.)?vidhyaajewellerystudio\.com$/i.test(parsedReturn.hostname)
+            ) {
+              return sendJson(res, 400, {
+                success: false,
+                configured: true,
+                error: 'Invalid returnUrl for live production domain. Only HTTPS URLs on vidhyaajewellerystudio.com are permitted.'
+              });
+            }
+          } else {
+            const reqHostname = directHostRaw.replace(/:\d+$/, '').toLowerCase();
+            if (
+              !['http:', 'https:'].includes(parsedReturn.protocol) ||
+              (reqHostname && parsedReturn.hostname.toLowerCase() !== reqHostname)
+            ) {
+              return sendJson(res, 400, {
+                success: false,
+                configured: true,
+                error: 'Invalid returnUrl: must use http(s) and match the active host origin.'
+              });
+            }
+          }
+          validatedReturnUrl = candidateUrl;
+        }
+
         let notifyUrl = String(body.notifyUrl || '').trim();
         if (!notifyUrl && isLiveDomain) {
-          notifyUrl = `https://vidhyaajewellerystudio.com/api/payments/cashfree/webhook`;
+          notifyUrl = `https://${canonicalLiveHost}/api/payments/cashfree/webhook`;
+        } else if (notifyUrl && isLiveDomain) {
+          try {
+            const u = new URL(notifyUrl);
+            if (u.protocol !== 'https:' || !/^(?:www\.)?vidhyaajewellerystudio\.com$/i.test(u.hostname)) {
+              notifyUrl = `https://${canonicalLiveHost}/api/payments/cashfree/webhook`;
+            }
+          } catch {
+            notifyUrl = `https://${canonicalLiveHost}/api/payments/cashfree/webhook`;
+          }
         }
 
-        const cfResult = await createCashfreeOrder({
-          orderId: gatewayOrderId,
-          orderAmount,
-          customerName: String(body.customerName || 'Valued Patron'),
-          customerEmail: String(body.customerEmail || 'patron@vidhyaajewellery.com'),
-          customerPhone: String(body.customerPhone || '9758350524'),
-          returnUrl: isLiveDomain ? defaultReturnUrl.replace(/^http:\/\//i, 'https://') : (body.returnUrl || defaultReturnUrl),
-          notifyUrl,
-          paymentMethods: body.paymentMethods || 'upi,cc,dc,nb',
-          orderNote: body.orderNote || `VIDHYAA Jewellery Studio Order ${rawOrderId}`,
-          isLiveDomain
+        const customer = await authenticateCustomerRequest(req);
+        const resolvedUserId = customer?.isAdmin
+          ? (body.userId || customer.uid || undefined)
+          : customer?.uid
+          ? customer.uid
+          : undefined;
+
+        const conflictReason = await withResourceLock('orders', async () => {
+          const orders = readAllOrders();
+          const existing =
+            findOrderByIdentifier(orders, rawOrderId) ||
+            findOrderByIdentifier(orders, gatewayOrderId) ||
+            (body.orderId ? findOrderByIdentifier(orders, String(body.orderId)) : null);
+          if (existing) return 'existing';
+          if (inflightCashfreeOrders.has(gatewayOrderId)) return 'inflight';
+          inflightCashfreeOrders.add(gatewayOrderId);
+          return null;
         });
 
-        if (!cfResult.success || !cfResult.paymentSessionId) {
-          const statusCode = cfResult.blockedOnLiveDomain ? 403 : cfResult.configured === false ? 503 : 502;
-          return sendJson(res, statusCode, {
+        if (conflictReason) {
+          return sendJson(res, 409, {
             success: false,
-            configured: cfResult.configured,
-            blockedOnLiveDomain: cfResult.blockedOnLiveDomain,
-            mode: cfResult.mode,
-            env: cfResult.env,
-            error: cfResult.error || 'Failed to initialize Cashfree checkout session.'
+            code: 'ORDER_ALREADY_EXISTS',
+            error:
+              conflictReason === 'inflight'
+                ? 'Payment session creation is already in progress for this order number. Please retry with a fresh order number.'
+                : 'Order ID already exists and cannot be overwritten. Please initiate checkout with a fresh order number.'
           });
         }
 
-        // Persist/upsert authoritative pending order BEFORE customer leaves for gateway
-        return await withResourceLock('orders', async () => {
-          const orders = readAllOrders();
-          const existing = findOrderByIdentifier(orders, rawOrderId);
-          const now = new Date().toISOString();
-          const paymentEnv = cfResult.env || (cfResult.mode === 'production' ? 'PRODUCTION' : 'SANDBOX');
-          const pendingOrder = sanitizeServerOrder(
-            {
-              id: existing?.id || `order_${gatewayOrderId}`,
-              orderNumber: existing?.orderNumber || rawOrderId,
+        try {
+          const cfResult = await createCashfreeOrder({
+            orderId: gatewayOrderId,
+            orderAmount,
+            customerName: String(body.customerName || 'Valued Patron'),
+            customerEmail: String(body.customerEmail || 'patron@vidhyaajewellery.com'),
+            customerPhone: String(body.customerPhone || '9758350524'),
+            returnUrl: validatedReturnUrl,
+            notifyUrl,
+            paymentMethods: body.paymentMethods || 'upi,cc,dc,nb',
+            orderNote: body.orderNote || `VIDHYAA Jewellery Studio Order ${rawOrderId}`,
+            isLiveDomain
+          });
+
+          if (!cfResult.success || !cfResult.paymentSessionId) {
+            const statusCode = cfResult.blockedOnLiveDomain ? 403 : cfResult.configured === false ? 503 : 502;
+            return sendJson(res, statusCode, {
+              success: false,
+              configured: cfResult.configured,
+              blockedOnLiveDomain: cfResult.blockedOnLiveDomain,
+              mode: cfResult.mode,
+              env: cfResult.env,
+              error: cfResult.error || 'Failed to initialize Cashfree checkout session.'
+            });
+          }
+
+          return await withResourceLock('orders', async () => {
+            const orders = readAllOrders();
+            const existing =
+              findOrderByIdentifier(orders, rawOrderId) ||
+              findOrderByIdentifier(orders, gatewayOrderId);
+            if (existing) {
+              return sendJson(res, 409, {
+                success: false,
+                code: 'ORDER_ALREADY_EXISTS',
+                error: 'Order ID already exists and cannot be overwritten. Please retry with a fresh order number.'
+              });
+            }
+
+            const now = new Date().toISOString();
+            const paymentEnv = cfResult.env || (cfResult.mode === 'production' ? 'PRODUCTION' : 'SANDBOX');
+            const pendingOrder = sanitizeServerOrder({
+              id: `order_${gatewayOrderId}`,
+              orderNumber: rawOrderId,
               gatewayOrderId: cfResult.orderId || gatewayOrderId,
               cfOrderId: cfResult.cfOrderId,
-              userId: body.userId || existing?.userId,
-              customerName: body.customerName || existing?.customerName,
-              customerEmail: body.customerEmail || existing?.customerEmail,
-              customerPhone: body.customerPhone || existing?.customerPhone,
-              shippingAddress: body.shippingAddress || existing?.shippingAddress,
-              items: Array.isArray(body.items) && body.items.length > 0 ? body.items : existing?.items,
-              subtotal: body.subtotal ?? existing?.subtotal ?? orderAmount,
-              discount: body.discount ?? existing?.discount ?? 0,
-              deliveryCharge: body.deliveryCharge ?? existing?.deliveryCharge ?? 0,
+              userId: resolvedUserId,
+              customerName: body.customerName,
+              customerEmail: body.customerEmail,
+              customerPhone: body.customerPhone,
+              shippingAddress: body.shippingAddress,
+              items: Array.isArray(body.items) ? body.items : [],
+              subtotal: body.subtotal ?? orderAmount,
+              discount: body.discount ?? 0,
+              deliveryCharge: body.deliveryCharge ?? 0,
               totalAmount: orderAmount,
-              giftItem: body.giftItem || existing?.giftItem,
-              paymentMethod: body.paymentMethod || existing?.paymentMethod || 'Cashfree Online Payment',
-              paymentStatus: existing?.paymentStatus === 'paid' ? 'paid' : 'pending',
-              orderStatus: existing?.paymentStatus === 'paid' ? existing.orderStatus : 'Pending',
+              giftItem: body.giftItem,
+              paymentMethod: body.paymentMethod || 'Cashfree Online Payment',
+              paymentStatus: 'pending',
+              orderStatus: 'Pending',
               paymentEnv,
               isTestOrder: paymentEnv === 'SANDBOX',
-              createdAt: existing?.createdAt || now,
+              createdAt: now,
               updatedAt: now
-            },
-            existing
-          );
+            });
 
-          const existingIdx = existing ? orders.findIndex((o) => o.id === existing.id) : -1;
-          if (existingIdx >= 0) orders[existingIdx] = pendingOrder;
-          else orders.unshift(pendingOrder);
-          writeAllOrders(orders);
+            orders.unshift(pendingOrder);
+            writeAllOrders(orders);
 
-          return sendJson(res, 200, {
-            success: true,
-            configured: true,
-            orderId: cfResult.orderId || gatewayOrderId,
-            order_id: cfResult.orderId || gatewayOrderId,
-            cfOrderId: cfResult.cfOrderId,
-            paymentSessionId: cfResult.paymentSessionId,
-            payment_session_id: cfResult.paymentSessionId,
-            orderStatus: cfResult.orderStatus || 'ACTIVE',
-            mode: cfResult.mode,
-            env: paymentEnv,
-            receiptToken: computeOrderReceiptToken(pendingOrder),
-            order: pendingOrder
+            return sendJson(res, 200, {
+              success: true,
+              configured: true,
+              orderId: cfResult.orderId || gatewayOrderId,
+              order_id: cfResult.orderId || gatewayOrderId,
+              cfOrderId: cfResult.cfOrderId,
+              paymentSessionId: cfResult.paymentSessionId,
+              payment_session_id: cfResult.paymentSessionId,
+              orderStatus: cfResult.orderStatus || 'ACTIVE',
+              mode: cfResult.mode,
+              env: paymentEnv,
+              isTestOrder: paymentEnv === 'SANDBOX',
+              receiptToken: computeOrderReceiptToken(pendingOrder),
+              order: pendingOrder
+            });
           });
-        });
+        } finally {
+          inflightCashfreeOrders.delete(gatewayOrderId);
+        }
       }
 
       if (pathname === '/api/payments/cashfree/verify-order' && req.method === 'POST') {
@@ -1491,6 +1593,7 @@ export function handleApiMiddleware(req, res, next) {
             Boolean(customer?.isAdmin) ||
             (customer && customerOwnsOrder(customer, initialTarget)) ||
             hasValidOrderReceiptToken(initialTarget, req);
+          const envStr = initialTarget.paymentEnv || 'PRODUCTION';
 
           return sendJson(res, 200, {
             success: true,
@@ -1498,16 +1601,20 @@ export function handleApiMiddleware(req, res, next) {
             alreadyVerified: true,
             orderId: initialTarget.gatewayOrderId || initialTarget.orderNumber,
             orderStatus: 'PAID',
-            orderAmount: initialTarget.totalAmount,
+            orderAmount: initialTarget.verifiedAmount ?? initialTarget.totalAmount,
             cfOrderId: initialTarget.cfOrderId,
-            env: initialTarget.paymentEnv,
+            paymentMethod: initialTarget.paymentMethod || 'Cashfree Online Payment',
+            cardNetwork: initialTarget.cardNetwork,
+            cardType: initialTarget.cardType,
+            env: envStr,
+            mode: String(envStr).toLowerCase(),
             isTestOrder: Boolean(initialTarget.isTestOrder),
             paymentDetails: {
               cfPaymentId: initialTarget.paymentId,
               paymentStatus: 'SUCCESS',
               paymentAmount: initialTarget.verifiedAmount ?? initialTarget.totalAmount,
               paymentCurrency: initialTarget.currency || 'INR',
-              paymentMethod: initialTarget.paymentMethod,
+              paymentMethod: initialTarget.paymentMethod || 'Cashfree Online Payment',
               cardNetwork: initialTarget.cardNetwork,
               cardType: initialTarget.cardType,
               paymentTime: initialTarget.paidAt || initialTarget.paymentVerifiedAt
@@ -1546,16 +1653,31 @@ export function handleApiMiddleware(req, res, next) {
               Boolean(customer?.isAdmin) ||
               (customer && customerOwnsOrder(customer, target)) ||
               hasValidOrderReceiptToken(target, req);
+            const envStr = target.paymentEnv || 'PRODUCTION';
             return sendJson(res, 200, {
               success: true,
               isPaid: true,
               alreadyVerified: true,
               orderId: target.gatewayOrderId || target.orderNumber,
               orderStatus: 'PAID',
-              orderAmount: target.totalAmount,
+              orderAmount: target.verifiedAmount ?? target.totalAmount,
               cfOrderId: target.cfOrderId,
-              env: target.paymentEnv,
+              paymentMethod: target.paymentMethod || 'Cashfree Online Payment',
+              cardNetwork: target.cardNetwork,
+              cardType: target.cardType,
+              env: envStr,
+              mode: String(envStr).toLowerCase(),
               isTestOrder: Boolean(target.isTestOrder),
+              paymentDetails: {
+                cfPaymentId: target.paymentId,
+                paymentStatus: 'SUCCESS',
+                paymentAmount: target.verifiedAmount ?? target.totalAmount,
+                paymentCurrency: target.currency || 'INR',
+                paymentMethod: target.paymentMethod || 'Cashfree Online Payment',
+                cardNetwork: target.cardNetwork,
+                cardType: target.cardType,
+                paymentTime: target.paidAt || target.paymentVerifiedAt
+              },
               ...(canViewFull ? { receiptToken: computeOrderReceiptToken(target) } : {}),
               order: canViewFull ? target : sanitizePublicOrderTracking(target)
             });
@@ -1566,6 +1688,13 @@ export function handleApiMiddleware(req, res, next) {
           const isTestOrder = paymentEnv === 'SANDBOX';
 
           if (verification.isPaid) {
+            const cleanOrderData = !target
+              ? stripUntrustedOrderFields(body?.orderData, Boolean(customer?.isAdmin))
+              : {};
+            if (!target && !customer?.isAdmin) {
+              delete cleanOrderData.userId;
+              if (customer?.uid) cleanOrderData.userId = customer.uid;
+            }
             const base = target || {
               id: `order_${sanitizeGatewayOrderId(orderId)}`,
               orderNumber: orderId,
@@ -1573,11 +1702,10 @@ export function handleApiMiddleware(req, res, next) {
               subtotal: verification.orderAmount || expectedAmount || 0,
               createdAt: now
             };
-            const cleanOrderData = stripUntrustedOrderFields(body?.orderData, Boolean(customer?.isAdmin));
             const paidOrder = sanitizeServerOrder(
               {
-                ...base,
                 ...cleanOrderData,
+                ...base,
                 paymentStatus: 'paid',
                 isPaid: true,
                 orderStatus:
@@ -1613,13 +1741,18 @@ export function handleApiMiddleware(req, res, next) {
             writeAllOrders(orders);
 
             const canIssueToken =
-              !target ||
               Boolean(customer?.isAdmin) ||
               (customer && customerOwnsOrder(customer, paidOrder)) ||
               hasValidOrderReceiptToken(paidOrder, req);
 
             return sendJson(res, 200, {
               ...verification,
+              paymentMethod: paidOrder.paymentMethod,
+              cardNetwork: paidOrder.cardNetwork,
+              cardType: paidOrder.cardType,
+              env: paymentEnv,
+              mode: String(paymentEnv).toLowerCase(),
+              isTestOrder,
               ...(canIssueToken ? { receiptToken: computeOrderReceiptToken(paidOrder) } : {}),
               order: canIssueToken ? paidOrder : sanitizePublicOrderTracking(paidOrder)
             });
@@ -1644,6 +1777,7 @@ export function handleApiMiddleware(req, res, next) {
             writeAllOrders(orders);
             return sendJson(res, 200, {
               ...verification,
+              isTestOrder,
               order: sanitizePublicOrderTracking(failedOrder)
             });
           }
@@ -1666,11 +1800,12 @@ export function handleApiMiddleware(req, res, next) {
             writeAllOrders(orders);
             return sendJson(res, 200, {
               ...verification,
+              isTestOrder,
               order: sanitizePublicOrderTracking(pendingOrder)
             });
           }
 
-          return sendJson(res, verification.success ? 200 : 502, verification);
+          return sendJson(res, verification.success ? 200 : 502, { ...verification, isTestOrder });
         });
       }
 
@@ -1971,6 +2106,12 @@ export function handleApiMiddleware(req, res, next) {
             updatedAt: new Date().toISOString()
           };
           const targetPath = resolveSmsConfigPath();
+          if (!targetPath) {
+            return sendJson(res, 500, {
+              success: false,
+              error: 'Cannot access outside-webroot .admin-secrets directory. Refusing insecure webroot secrets write.'
+            });
+          }
           atomicWriteFileSync(targetPath, JSON.stringify(updated, null, 2));
           try { fs.chmodSync(targetPath, 0o600); } catch {}
           return sendJson(res, 200, readSmsConfigSafe().summary);

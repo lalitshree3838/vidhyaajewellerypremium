@@ -17,28 +17,29 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
 header('Content-Type: application/json; charset=UTF-8');
 
 $rootDir = dirname(__DIR__, 2);
-$outsideSecretsFile = dirname($rootDir) . '/.admin-secrets/cashfree-config.json';
+$outsideSecretsFile = vdhOutsideSecretsFilePath('cashfree-config.json') ?? (dirname($rootDir) . '/.admin-secrets/cashfree-config.json');
 $envFile = $rootDir . '/.env';
 $dataOrdersFile = $rootDir . '/data/orders.json';
 $apiOrdersFile = dirname(__DIR__) . '/orders';
 
 function cfGetCredentials($outsideSecretsFile, $envFile) {
     $cfg = [];
-    if (is_file($outsideSecretsFile) && is_readable($outsideSecretsFile)) {
+    if ($outsideSecretsFile !== '' && vdhIsPathPermittedByOpenBasedir($outsideSecretsFile) && @is_file($outsideSecretsFile) && @is_readable($outsideSecretsFile)) {
         $parsed = json_decode((string)@file_get_contents($outsideSecretsFile), true);
         if (is_array($parsed)) {
             $cfg = $parsed;
         }
     }
-    $dotEnv = vdhReadDotEnv();
-    $appId = trim((string)($cfg['appId'] ?? (getenv('CASHFREE_APP_ID') ?: ($dotEnv['CASHFREE_APP_ID'] ?? ''))));
-    $secretKey = trim((string)($cfg['secretKey'] ?? (getenv('CASHFREE_SECRET_KEY') ?: ($dotEnv['CASHFREE_SECRET_KEY'] ?? ''))));
-    $rawEnv = strtoupper(trim((string)($cfg['env'] ?? (getenv('CASHFREE_ENV') ?: ($dotEnv['CASHFREE_ENV'] ?? 'SANDBOX')))));
+    $appId = trim((string)($cfg['appId'] ?? vdhEnv('CASHFREE_APP_ID')));
+    $secretKey = trim((string)($cfg['secretKey'] ?? vdhEnv('CASHFREE_SECRET_KEY')));
+    $rawEnv = strtoupper(trim((string)($cfg['env'] ?? (vdhEnv('CASHFREE_ENV') ?: vdhEnv('CASHFREE_MODE', 'SANDBOX')))));
     $env = $rawEnv === 'PRODUCTION' ? 'PRODUCTION' : 'SANDBOX';
-    $apiVersion = trim((string)($cfg['apiVersion'] ?? (getenv('CASHFREE_API_VERSION') ?: ($dotEnv['CASHFREE_API_VERSION'] ?? '2023-08-01'))));
-    $notifyUrl = trim((string)($cfg['notifyUrl'] ?? (getenv('CASHFREE_NOTIFY_URL') ?: ($dotEnv['CASHFREE_NOTIFY_URL'] ?? ''))));
-    $baseUrl = $env === 'PRODUCTION' ? 'https://api.cashfree.com/pg' : 'https://sandbox.cashfree.com/pg';
+    $apiVersion = trim((string)($cfg['apiVersion'] ?? vdhEnv('CASHFREE_API_VERSION', '2023-08-01')));
+    $notifyUrl = trim((string)($cfg['notifyUrl'] ?? vdhEnv('CASHFREE_NOTIFY_URL')));
+    $overrideBase = rtrim(vdhEnv('CASHFREE_API_BASE_URL'), '/');
+    $baseUrl = $overrideBase !== '' ? $overrideBase : ($env === 'PRODUCTION' ? 'https://api.cashfree.com/pg' : 'https://sandbox.cashfree.com/pg');
     $isConfigured = ($appId !== '' && $secretKey !== '');
+    $storedOutside = $outsideSecretsFile !== '' && vdhIsPathPermittedByOpenBasedir($outsideSecretsFile) && @is_file($outsideSecretsFile);
 
     return [
         'appId' => $appId,
@@ -49,7 +50,7 @@ function cfGetCredentials($outsideSecretsFile, $envFile) {
         'baseUrl' => $baseUrl,
         'isConfigured' => $isConfigured,
         'hasLiveCredentials' => ($isConfigured && $env === 'PRODUCTION'),
-        'storedOutsideWebroot' => is_file($outsideSecretsFile)
+        'storedOutsideWebroot' => $storedOutside
     ];
 }
 
@@ -75,6 +76,28 @@ function cfStatusSummary($creds) {
 
 function cfSanitizeOrderId($raw) {
     return substr(preg_replace('/[^a-zA-Z0-9_-]/', '_', trim((string)$raw)), 0, 45);
+}
+
+function cfFormatPaymentMethodLabel($methodObj): string {
+    if (!is_array($methodObj)) return 'Cashfree Online Payment';
+    if (!empty($methodObj['upi']) && is_array($methodObj['upi'])) {
+        $channel = !empty($methodObj['upi']['channel']) ? ' (' . strtoupper((string)$methodObj['upi']['channel']) . ')' : '';
+        return 'UPI via Cashfree' . $channel;
+    }
+    if (!empty($methodObj['card']) && is_array($methodObj['card'])) {
+        $net = (string)($methodObj['card']['card_network'] ?? 'Credit/Debit');
+        $type = !empty($methodObj['card']['card_type']) ? ' (' . (string)$methodObj['card']['card_type'] . ')' : ' Card';
+        return $net . $type;
+    }
+    if (!empty($methodObj['netbanking']) && is_array($methodObj['netbanking'])) {
+        $bank = (string)($methodObj['netbanking']['netbanking_bank_name'] ?? 'Bank');
+        return 'Netbanking (' . $bank . ')';
+    }
+    if (!empty($methodObj['app']) && is_array($methodObj['app'])) {
+        $prov = (string)($methodObj['app']['provider'] ?? 'App');
+        return 'Wallet (' . $prov . ')';
+    }
+    return 'Cashfree Online Payment';
 }
 
 function cfOwnerWhatsAppUrl(array $order): string {
@@ -167,11 +190,64 @@ function cfFindOrder($orders, $needle) {
     if ($needle === '') return [null, -1];
     $safe = cfSanitizeOrderId($needle);
     foreach ($orders as $idx => $o) {
-        if (($o['id'] ?? '') === $needle || ($o['orderNumber'] ?? '') === $needle || ($o['gatewayOrderId'] ?? '') === $needle || (string)($o['cfOrderId'] ?? '') === $needle || cfSanitizeOrderId($o['orderNumber'] ?? '') === $safe) {
+        $oid = (string)($o['id'] ?? '');
+        $oNum = (string)($o['orderNumber'] ?? '');
+        $gId = (string)($o['gatewayOrderId'] ?? '');
+        $cfId = (string)($o['cfOrderId'] ?? '');
+        if ($oid === $needle || $oNum === $needle || $gId === $needle || $cfId === $needle || ($safe !== '' && (cfSanitizeOrderId($oNum) === $safe || $oid === ('order_' . $safe)))) {
             return [$o, $idx];
         }
     }
     return [null, -1];
+}
+
+function cfCanonicalLiveHost(): string {
+    $direct = vdhNormalizeHostname((string)($_SERVER['HTTP_HOST'] ?? ''));
+    if (preg_match('/^(?:www\.)?vidhyaajewellerystudio\.com$/i', $direct)) {
+        return $direct;
+    }
+    $fwd = vdhNormalizeHostname((string)($_SERVER['HTTP_X_FORWARDED_HOST'] ?? ''));
+    if (preg_match('/^(?:www\.)?vidhyaajewellerystudio\.com$/i', $fwd)) {
+        return $fwd;
+    }
+    return 'vidhyaajewellerystudio.com';
+}
+
+function cfResolveValidatedReturnUrl(?string $rawReturnUrl, bool $isLiveHost): array {
+    if ($isLiveHost) {
+        $liveHost = cfCanonicalLiveHost();
+        $defaultUrl = 'https://' . $liveHost . '/?view=checkout&cf_order_id={order_id}';
+        $trimmed = trim((string)($rawReturnUrl ?? ''));
+        if ($trimmed === '') {
+            return [true, $defaultUrl, null];
+        }
+        $parsed = @parse_url($trimmed);
+        $scheme = strtolower((string)($parsed['scheme'] ?? ''));
+        $host = strtolower((string)($parsed['host'] ?? ''));
+        if ($scheme !== 'https' || !preg_match('/^(?:www\.)?vidhyaajewellerystudio\.com$/i', $host)) {
+            return [false, null, 'Invalid returnUrl for live production domain. Only HTTPS URLs on vidhyaajewellerystudio.com are permitted.'];
+        }
+        return [true, $trimmed, null];
+    }
+
+    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https';
+    $scheme = $isHttps ? 'https' : 'http';
+    $rawHost = trim((string)($_SERVER['HTTP_HOST'] ?? 'localhost'));
+    $reqHostName = vdhNormalizeHostname($rawHost);
+    $defaultUrl = $scheme . '://' . $rawHost . '/?view=checkout&cf_order_id={order_id}';
+
+    $trimmed = trim((string)($rawReturnUrl ?? ''));
+    if ($trimmed === '') {
+        return [true, $defaultUrl, null];
+    }
+    $parsed = @parse_url($trimmed);
+    $rScheme = strtolower((string)($parsed['scheme'] ?? ''));
+    $rHost = strtolower((string)($parsed['host'] ?? ''));
+    if (!in_array($rScheme, ['http', 'https'], true) || $rHost === '' || ($reqHostName !== '' && $rHost !== $reqHostName)) {
+        return [false, null, 'Invalid returnUrl: must use http(s) and match the active host origin.'];
+    }
+    return [true, $trimmed, null];
 }
 
 $action = trim((string)($_GET['action'] ?? ''));
@@ -202,22 +278,22 @@ if ($action === 'admin-config') {
             'updatedAt' => gmdate('Y-m-d\TH:i:s.000\Z')
         ];
 
-        $outsideDir = dirname($outsideSecretsFile);
-        if (!is_dir($outsideDir) && !@mkdir($outsideDir, 0700, true)) {
+        $outsideDir = vdhOutsideSecretsDir();
+        if ($outsideDir === null) {
             vdhSendJson(500, [
                 'success' => false,
-                'error' => 'Cannot create outside-webroot .admin-secrets directory (open_basedir or permissions restriction). Refusing to write Cashfree secrets inside public_html. Set CASHFREE_APP_ID and CASHFREE_SECRET_KEY in environment or create ../.admin-secrets/ manually.'
+                'error' => 'Cannot access or create outside-webroot .admin-secrets directory (open_basedir or permissions restriction). Refusing to write Cashfree secrets inside public_html. Set CASHFREE_APP_ID and CASHFREE_SECRET_KEY in environment or configure VIDHYAA_SECRETS_DIR.'
             ]);
         }
-        @chmod($outsideDir, 0700);
-        if (!is_writable($outsideDir) || @file_put_contents($outsideSecretsFile, json_encode($updated, JSON_PRETTY_PRINT), LOCK_EX) === false) {
+        $targetSecretsFile = $outsideDir . '/cashfree-config.json';
+        if (!vdhIsPathPermittedByOpenBasedir($targetSecretsFile) || @file_put_contents($targetSecretsFile, json_encode($updated, JSON_PRETTY_PRINT), LOCK_EX) === false) {
             vdhSendJson(500, [
                 'success' => false,
                 'error' => 'Failed to write Cashfree credentials outside public_html. Refusing insecure webroot fallback.'
             ]);
         }
-        @chmod($outsideSecretsFile, 0600);
-        $nextCreds = cfGetCredentials($outsideSecretsFile, $envFile);
+        @chmod($targetSecretsFile, 0600);
+        $nextCreds = cfGetCredentials($targetSecretsFile, $envFile);
         vdhSendJson(200, array_merge(cfStatusSummary($nextCreds), ['message' => 'Cashfree configuration saved securely outside public_html.']));
     }
 }
@@ -232,126 +308,205 @@ if ($action === 'create-order' && $method === 'POST') {
             'success' => false,
             'configured' => false,
             'mode' => strtolower($creds['env']),
+            'env' => $creds['env'],
             'error' => 'Cashfree credentials are not configured yet.'
         ]);
     }
-    if (vdhIsLiveProductionHost() && $creds['env'] === 'SANDBOX') {
+    $isLiveHost = vdhIsLiveProductionHost();
+    if ($isLiveHost && $creds['env'] === 'SANDBOX') {
         vdhSendJson(403, [
             'success' => false,
             'configured' => true,
+            'blockedOnLiveDomain' => true,
             'mode' => 'sandbox',
+            'env' => 'SANDBOX',
             'error' => 'Cashfree Gateway is currently set to SANDBOX test mode and is disabled on live production domain vidhyaajewellerystudio.com. Switch to PRODUCTION credentials in Admin Settings.'
         ]);
     }
 
     $rawOrderId = trim((string)($body['orderNumber'] ?? ($body['orderId'] ?? 'VDH-' . substr((string)time(), -6))));
     $safeOrderId = cfSanitizeOrderId($rawOrderId);
+    if ($safeOrderId === '') {
+        vdhSendJson(400, ['success' => false, 'configured' => true, 'error' => 'Valid orderNumber is required.']);
+    }
     $amount = round((float)($body['orderAmount'] ?? ($body['totalAmount'] ?? 0)), 2);
     if ($amount <= 0) {
         vdhSendJson(400, ['success' => false, 'configured' => true, 'error' => 'Order amount must exceed ₹0.']);
     }
 
-    $rawPhone = preg_replace('/\D+/', '', (string)($body['customerPhone'] ?? ''));
-    $cleanPhone = strlen($rawPhone) >= 10 ? substr($rawPhone, -10) : '9758350524';
-    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-    $host = $_SERVER['HTTP_HOST'] ?? 'vidhyaajewellerystudio.com';
-    $returnUrl = $body['returnUrl'] ?? ($scheme . '://' . $host . '/?view=checkout&cf_order_id={order_id}');
-
-    $orderMeta = [
-        'return_url' => $returnUrl,
-        'payment_methods' => $body['paymentMethods'] ?? 'upi,cc,dc,nb'
-    ];
-    $candidateNotify = trim((string)($body['notifyUrl'] ?? $creds['notifyUrl']));
-    if ($candidateNotify === '' && $scheme === 'https' && !str_contains($host, 'localhost')) {
-        $candidateNotify = 'https://' . $host . '/api/payments/cashfree/webhook';
-    }
-    if ($candidateNotify !== '' && preg_match('#^https://#i', $candidateNotify)) {
-        $orderMeta['notify_url'] = $candidateNotify;
+    [$urlOk, $returnUrl, $urlErr] = cfResolveValidatedReturnUrl(isset($body['returnUrl']) ? (string)$body['returnUrl'] : null, $isLiveHost);
+    if (!$urlOk || $returnUrl === null) {
+        vdhSendJson(400, ['success' => false, 'configured' => true, 'error' => $urlErr ?: 'Invalid returnUrl.']);
     }
 
-    $payload = [
-        'order_id' => $safeOrderId,
-        'order_amount' => $amount,
-        'order_currency' => 'INR',
-        'customer_details' => [
-            'customer_id' => 'cust_' . substr(preg_replace('/[^a-zA-Z0-9_-]/', '_', (string)($body['customerEmail'] ?? $cleanPhone)), 0, 40),
-            'customer_name' => substr(trim((string)($body['customerName'] ?? 'Valued Patron')), 0, 80),
-            'customer_email' => trim((string)($body['customerEmail'] ?? 'patron@vidhyaajewellery.com')),
-            'customer_phone' => $cleanPhone
-        ],
-        'order_meta' => $orderMeta,
-        'order_note' => substr((string)($body['orderNote'] ?? "VIDHYAA Order $rawOrderId"), 0, 200)
-    ];
-
-    $headers = [
-        'x-client-id: ' . $creds['appId'],
-        'x-client-secret: ' . $creds['secretKey'],
-        'x-api-version: ' . $creds['apiVersion'],
-        'Content-Type: application/json',
-        'Accept: application/json'
-    ];
-    [$status, $respData, $curlErr] = cfHttpRequest('POST', $creds['baseUrl'] . '/orders', $headers, json_encode($payload));
-
-    if ($status < 200 || $status >= 300 || empty($respData['payment_session_id'])) {
-        vdhSendJson(502, [
-            'success' => false,
-            'configured' => true,
-            'mode' => strtolower($creds['env']),
-            'error' => $respData['message'] ?? ($curlErr ?: "Cashfree API HTTP $status")
-        ]);
+    $admin = vdhAuthenticateAdmin();
+    $customer = vdhAuthenticateCustomer();
+    $resolvedUserId = null;
+    if ($admin) {
+        $resolvedUserId = isset($body['userId']) ? trim((string)$body['userId']) : ($admin['uid'] ?? null);
+    } elseif ($customer && !empty($customer['uid'])) {
+        $resolvedUserId = (string)$customer['uid'];
     }
 
-    $isSandbox = ($creds['env'] === 'SANDBOX');
-    $pendingOrder = vdhWithFileLock('orders', function () use ($dataOrdersFile, $apiOrdersFile, $body, $respData, $rawOrderId, $safeOrderId, $amount, $creds, $isSandbox) {
+    $inflightFile = vdhTempStateDir() . '/cf_inflight_' . md5($safeOrderId) . '.lock';
+    $preCheck = vdhWithFileLock('orders', function () use ($dataOrdersFile, $apiOrdersFile, $rawOrderId, $safeOrderId, $inflightFile) {
         $orders = cfReadOrders($dataOrdersFile, $apiOrdersFile);
-        [$existing, $existingIdx] = cfFindOrder($orders, $rawOrderId);
-        $now = gmdate('Y-m-d\TH:i:s.000\Z');
-        $orderRecord = array_merge($existing ?? [], [
-            'id' => $existing['id'] ?? 'order_' . $safeOrderId,
-            'orderNumber' => $existing['orderNumber'] ?? $rawOrderId,
-            'gatewayOrderId' => $respData['order_id'] ?? $safeOrderId,
-            'cfOrderId' => $respData['cf_order_id'] ?? ($existing['cfOrderId'] ?? null),
-            'userId' => $body['userId'] ?? ($existing['userId'] ?? null),
-            'customerName' => $body['customerName'] ?? ($existing['customerName'] ?? ''),
-            'customerEmail' => $body['customerEmail'] ?? ($existing['customerEmail'] ?? ''),
-            'customerPhone' => $body['customerPhone'] ?? ($existing['customerPhone'] ?? ''),
-            'shippingAddress' => $body['shippingAddress'] ?? ($existing['shippingAddress'] ?? []),
-            'items' => !empty($body['items']) ? $body['items'] : ($existing['items'] ?? []),
-            'subtotal' => $body['subtotal'] ?? ($existing['subtotal'] ?? $amount),
-            'discount' => $body['discount'] ?? ($existing['discount'] ?? 0),
-            'deliveryCharge' => $body['deliveryCharge'] ?? ($existing['deliveryCharge'] ?? 0),
-            'totalAmount' => $amount,
-            'total' => $amount,
-            'giftItem' => $body['giftItem'] ?? ($existing['giftItem'] ?? null),
-            'paymentMethod' => $body['paymentMethod'] ?? ($existing['paymentMethod'] ?? 'Cashfree Online Payment'),
-            'paymentStatus' => (($existing['paymentStatus'] ?? '') === 'paid') ? 'paid' : 'pending',
-            'isPaid' => (($existing['paymentStatus'] ?? '') === 'paid'),
-            'orderStatus' => (($existing['paymentStatus'] ?? '') === 'paid') ? ($existing['orderStatus'] ?? 'Confirmed') : 'Pending',
-            'paymentEnv' => $creds['env'],
-            'isTestOrder' => $isSandbox,
-            'currency' => 'INR',
-            'createdAt' => $existing['createdAt'] ?? $now,
-            'updatedAt' => $now
-        ]);
-        if ($existingIdx >= 0) $orders[$existingIdx] = $orderRecord;
-        else array_unshift($orders, $orderRecord);
-        cfWriteOrders($orders, $dataOrdersFile, $apiOrdersFile);
-        return $orderRecord;
+        [$existingByRaw] = cfFindOrder($orders, $rawOrderId);
+        [$existingBySafe] = cfFindOrder($orders, $safeOrderId);
+        if ($existingByRaw || $existingBySafe) {
+            return ['conflict' => true, 'reason' => 'existing'];
+        }
+        if (is_file($inflightFile)) {
+            $age = time() - (int)@filemtime($inflightFile);
+            if ($age >= 0 && $age < 120) {
+                return ['conflict' => true, 'reason' => 'inflight'];
+            }
+            @unlink($inflightFile);
+        }
+        @file_put_contents($inflightFile, (string)time(), LOCK_EX);
+        return ['conflict' => false];
     });
 
-    vdhSendJson(200, [
-        'success' => true,
-        'configured' => true,
-        'orderId' => $respData['order_id'] ?? $safeOrderId,
-        'order_id' => $respData['order_id'] ?? $safeOrderId,
-        'cfOrderId' => $respData['cf_order_id'] ?? null,
-        'paymentSessionId' => $respData['payment_session_id'],
-        'payment_session_id' => $respData['payment_session_id'],
-        'orderStatus' => $respData['order_status'] ?? 'ACTIVE',
-        'mode' => strtolower($creds['env']),
-        'receiptToken' => vdhOrderReceiptToken($pendingOrder),
-        'order' => $pendingOrder
-    ]);
+    if (!empty($preCheck['conflict'])) {
+        $msg = ($preCheck['reason'] ?? '') === 'inflight'
+            ? 'Payment session creation is already in progress for this order number. Please retry with a fresh order number.'
+            : 'Order ID already exists and cannot be overwritten. Please initiate checkout with a fresh order number.';
+        vdhSendJson(409, [
+            'success' => false,
+            'code' => 'ORDER_ALREADY_EXISTS',
+            'error' => $msg
+        ]);
+    }
+
+    try {
+        $rawPhone = preg_replace('/\D+/', '', (string)($body['customerPhone'] ?? ''));
+        $cleanPhone = strlen($rawPhone) >= 10 ? substr($rawPhone, -10) : '9758350524';
+        $canonicalHost = $isLiveHost ? cfCanonicalLiveHost() : vdhNormalizeHostname((string)($_SERVER['HTTP_HOST'] ?? 'localhost'));
+
+        $orderMeta = [
+            'return_url' => $returnUrl,
+            'payment_methods' => $body['paymentMethods'] ?? 'upi,cc,dc,nb'
+        ];
+        $candidateNotify = trim((string)($body['notifyUrl'] ?? $creds['notifyUrl']));
+        if ($candidateNotify === '' && $isLiveHost) {
+            $candidateNotify = 'https://' . $canonicalHost . '/api/payments/cashfree/webhook';
+        }
+        if ($candidateNotify !== '' && preg_match('#^https://#i', $candidateNotify)) {
+            if ($isLiveHost) {
+                $nHost = strtolower((string)(@parse_url($candidateNotify, PHP_URL_HOST) ?? ''));
+                if (preg_match('/^(?:www\.)?vidhyaajewellerystudio\.com$/i', $nHost)) {
+                    $orderMeta['notify_url'] = $candidateNotify;
+                } else {
+                    $orderMeta['notify_url'] = 'https://' . $canonicalHost . '/api/payments/cashfree/webhook';
+                }
+            } else {
+                $orderMeta['notify_url'] = $candidateNotify;
+            }
+        }
+
+        $payload = [
+            'order_id' => $safeOrderId,
+            'order_amount' => $amount,
+            'order_currency' => 'INR',
+            'customer_details' => [
+                'customer_id' => 'cust_' . substr(preg_replace('/[^a-zA-Z0-9_-]/', '_', (string)($body['customerEmail'] ?? $cleanPhone)), 0, 40),
+                'customer_name' => substr(trim((string)($body['customerName'] ?? 'Valued Patron')), 0, 80),
+                'customer_email' => trim((string)($body['customerEmail'] ?? 'patron@vidhyaajewellery.com')),
+                'customer_phone' => $cleanPhone
+            ],
+            'order_meta' => $orderMeta,
+            'order_note' => substr((string)($body['orderNote'] ?? "VIDHYAA Order $rawOrderId"), 0, 200)
+        ];
+
+        $headers = [
+            'x-client-id: ' . $creds['appId'],
+            'x-client-secret: ' . $creds['secretKey'],
+            'x-api-version: ' . $creds['apiVersion'],
+            'Content-Type: application/json',
+            'Accept: application/json'
+        ];
+        [$status, $respData, $curlErr] = cfHttpRequest('POST', $creds['baseUrl'] . '/orders', $headers, json_encode($payload));
+
+        if ($status < 200 || $status >= 300 || empty($respData['payment_session_id'])) {
+            vdhSendJson(502, [
+                'success' => false,
+                'configured' => true,
+                'mode' => strtolower($creds['env']),
+                'env' => $creds['env'],
+                'error' => $respData['message'] ?? ($curlErr ?: "Cashfree API HTTP $status")
+            ]);
+        }
+
+        $isSandbox = ($creds['env'] === 'SANDBOX');
+        $saveResult = vdhWithFileLock('orders', function () use ($dataOrdersFile, $apiOrdersFile, $body, $respData, $rawOrderId, $safeOrderId, $amount, $creds, $isSandbox, $resolvedUserId) {
+            $orders = cfReadOrders($dataOrdersFile, $apiOrdersFile);
+            [$existingByRaw] = cfFindOrder($orders, $rawOrderId);
+            [$existingBySafe] = cfFindOrder($orders, $safeOrderId);
+            if ($existingByRaw || $existingBySafe) {
+                return ['conflict' => true];
+            }
+            $now = gmdate('Y-m-d\TH:i:s.000\Z');
+            $orderRecord = [
+                'id' => 'order_' . $safeOrderId,
+                'orderNumber' => $rawOrderId,
+                'gatewayOrderId' => $respData['order_id'] ?? $safeOrderId,
+                'cfOrderId' => $respData['cf_order_id'] ?? null,
+                'userId' => $resolvedUserId,
+                'customerName' => (string)($body['customerName'] ?? ''),
+                'customerEmail' => (string)($body['customerEmail'] ?? ''),
+                'customerPhone' => (string)($body['customerPhone'] ?? ''),
+                'shippingAddress' => is_array($body['shippingAddress'] ?? null) ? $body['shippingAddress'] : [],
+                'items' => is_array($body['items'] ?? null) ? $body['items'] : [],
+                'subtotal' => (float)($body['subtotal'] ?? $amount),
+                'discount' => (float)($body['discount'] ?? 0),
+                'deliveryCharge' => (float)($body['deliveryCharge'] ?? 0),
+                'totalAmount' => $amount,
+                'total' => $amount,
+                'giftItem' => $body['giftItem'] ?? null,
+                'paymentMethod' => (string)($body['paymentMethod'] ?? 'Cashfree Online Payment'),
+                'paymentStatus' => 'pending',
+                'isPaid' => false,
+                'orderStatus' => 'Pending',
+                'paymentEnv' => $creds['env'],
+                'isTestOrder' => $isSandbox,
+                'currency' => 'INR',
+                'createdAt' => $now,
+                'updatedAt' => $now
+            ];
+            array_unshift($orders, $orderRecord);
+            cfWriteOrders($orders, $dataOrdersFile, $apiOrdersFile);
+            return ['conflict' => false, 'order' => $orderRecord];
+        });
+
+        if (!empty($saveResult['conflict'])) {
+            vdhSendJson(409, [
+                'success' => false,
+                'code' => 'ORDER_ALREADY_EXISTS',
+                'error' => 'Order ID already exists and cannot be overwritten. Please retry with a fresh order number.'
+            ]);
+        }
+
+        $pendingOrder = $saveResult['order'];
+        vdhSendJson(200, [
+            'success' => true,
+            'configured' => true,
+            'orderId' => $respData['order_id'] ?? $safeOrderId,
+            'order_id' => $respData['order_id'] ?? $safeOrderId,
+            'cfOrderId' => $respData['cf_order_id'] ?? null,
+            'paymentSessionId' => $respData['payment_session_id'],
+            'payment_session_id' => $respData['payment_session_id'],
+            'orderStatus' => $respData['order_status'] ?? 'ACTIVE',
+            'env' => $creds['env'],
+            'mode' => strtolower($creds['env']),
+            'isTestOrder' => $isSandbox,
+            'receiptToken' => vdhOrderReceiptToken($pendingOrder),
+            'order' => $pendingOrder
+        ]);
+    } finally {
+        if (is_file($inflightFile)) {
+            @unlink($inflightFile);
+        }
+    }
 }
 
 if ($action === 'verify-order' && $method === 'POST') {
@@ -365,7 +520,9 @@ if ($action === 'verify-order' && $method === 'POST') {
         vdhSendJson(403, [
             'success' => false,
             'isPaid' => false,
+            'blockedOnLiveDomain' => true,
             'mode' => 'sandbox',
+            'env' => 'SANDBOX',
             'error' => 'Sandbox verification is disabled on live production domain vidhyaajewellerystudio.com.'
         ]);
     }
@@ -384,6 +541,7 @@ if ($action === 'verify-order' && $method === 'POST') {
         $canViewFull = (bool)$admin
             || ($customer && vdhCustomerOwnsOrder($customer, $initialTarget))
             || vdhHasValidOrderReceiptToken($initialTarget, $receiptTok);
+        $envStr = (string)($initialTarget['paymentEnv'] ?? $creds['env']);
 
         vdhSendJson(200, array_merge([
             'success' => true,
@@ -392,6 +550,23 @@ if ($action === 'verify-order' && $method === 'POST') {
             'orderId' => $initialTarget['gatewayOrderId'] ?? $initialTarget['orderNumber'],
             'orderStatus' => 'PAID',
             'orderAmount' => $initialTarget['verifiedAmount'] ?? $initialTarget['totalAmount'],
+            'cfOrderId' => $initialTarget['cfOrderId'] ?? null,
+            'paymentMethod' => $initialTarget['paymentMethod'] ?? 'Cashfree Online Payment',
+            'cardNetwork' => $initialTarget['cardNetwork'] ?? null,
+            'cardType' => $initialTarget['cardType'] ?? null,
+            'env' => $envStr,
+            'mode' => strtolower($envStr),
+            'isTestOrder' => (bool)($initialTarget['isTestOrder'] ?? ($envStr === 'SANDBOX')),
+            'paymentDetails' => [
+                'cfPaymentId' => $initialTarget['paymentId'] ?? null,
+                'paymentStatus' => 'SUCCESS',
+                'paymentAmount' => $initialTarget['verifiedAmount'] ?? $initialTarget['totalAmount'],
+                'paymentCurrency' => $initialTarget['currency'] ?? 'INR',
+                'paymentMethod' => $initialTarget['paymentMethod'] ?? 'Cashfree Online Payment',
+                'cardNetwork' => $initialTarget['cardNetwork'] ?? null,
+                'cardType' => $initialTarget['cardType'] ?? null,
+                'paymentTime' => $initialTarget['paidAt'] ?? ($initialTarget['paymentVerifiedAt'] ?? null)
+            ],
             'order' => $canViewFull ? $initialTarget : vdhSanitizePublicOrderTracking($initialTarget)
         ], $canViewFull ? ['receiptToken' => vdhOrderReceiptToken($initialTarget)] : []));
     }
@@ -432,10 +607,26 @@ if ($action === 'verify-order' && $method === 'POST') {
     $hasPaidStatus = ($rawStatus === 'PAID' && (empty($payments) || $successPay !== null));
     $isSandbox = ($creds['env'] === 'SANDBOX');
 
+    $paymentDetails = null;
+    if (is_array($latestPay)) {
+        $methodObj = is_array($latestPay['payment_method'] ?? null) ? $latestPay['payment_method'] : [];
+        $paymentDetails = [
+            'cfPaymentId' => $latestPay['cf_payment_id'] ?? null,
+            'paymentStatus' => $latestPayStatus,
+            'paymentAmount' => $paidAmount,
+            'paymentCurrency' => $paidCurrency,
+            'paymentMethod' => cfFormatPaymentMethodLabel($methodObj),
+            'cardNetwork' => $methodObj['card']['card_network'] ?? null,
+            'cardType' => $methodObj['card']['card_type'] ?? null,
+            'paymentTime' => $latestPay['payment_completion_time'] ?? ($latestPay['payment_time'] ?? null),
+            'paymentMessage' => $latestPay['payment_message'] ?? null
+        ];
+    }
+
     $outcome = vdhWithFileLock('orders', function () use (
         $dataOrdersFile, $apiOrdersFile, $orderId, $safeOrderId, $body, $ordData, $rawStatus,
         $latestPay, $latestPayStatus, $paidAmount, $paidCurrency, $hasPaidStatus, $creds, $isSandbox,
-        $admin, $customer, $receiptTok
+        $paymentDetails, $admin, $customer, $receiptTok
     ) {
         $orders = cfReadOrders($dataOrdersFile, $apiOrdersFile);
         [$target, $idx] = cfFindOrder($orders, $orderId);
@@ -444,6 +635,7 @@ if ($action === 'verify-order' && $method === 'POST') {
             $canViewFull = (bool)$admin
                 || ($customer && vdhCustomerOwnsOrder($customer, $target))
                 || vdhHasValidOrderReceiptToken($target, $receiptTok);
+            $envStr = (string)($target['paymentEnv'] ?? $creds['env']);
             return [200, array_merge([
                 'success' => true,
                 'isPaid' => true,
@@ -451,6 +643,23 @@ if ($action === 'verify-order' && $method === 'POST') {
                 'orderId' => $target['gatewayOrderId'] ?? $target['orderNumber'],
                 'orderStatus' => 'PAID',
                 'orderAmount' => $target['verifiedAmount'] ?? $target['totalAmount'],
+                'cfOrderId' => $target['cfOrderId'] ?? null,
+                'paymentMethod' => $target['paymentMethod'] ?? 'Cashfree Online Payment',
+                'cardNetwork' => $target['cardNetwork'] ?? null,
+                'cardType' => $target['cardType'] ?? null,
+                'env' => $envStr,
+                'mode' => strtolower($envStr),
+                'isTestOrder' => (bool)($target['isTestOrder'] ?? ($envStr === 'SANDBOX')),
+                'paymentDetails' => [
+                    'cfPaymentId' => $target['paymentId'] ?? null,
+                    'paymentStatus' => 'SUCCESS',
+                    'paymentAmount' => $target['verifiedAmount'] ?? $target['totalAmount'],
+                    'paymentCurrency' => $target['currency'] ?? 'INR',
+                    'paymentMethod' => $target['paymentMethod'] ?? 'Cashfree Online Payment',
+                    'cardNetwork' => $target['cardNetwork'] ?? null,
+                    'cardType' => $target['cardType'] ?? null,
+                    'paymentTime' => $target['paidAt'] ?? ($target['paymentVerifiedAt'] ?? null)
+                ],
                 'order' => $canViewFull ? $target : vdhSanitizePublicOrderTracking($target)
             ], $canViewFull ? ['receiptToken' => vdhOrderReceiptToken($target)] : [])];
         }
@@ -461,8 +670,15 @@ if ($action === 'verify-order' && $method === 'POST') {
         if ($hasPaidStatus && $paidCurrency === 'INR' && ($expectedAmount <= 0 || $paidAmount + 0.01 >= $expectedAmount)) {
             $safeClientMeta = [];
             if (!$target && is_array($body['orderData'] ?? null)) {
-                foreach (['orderNumber', 'userId', 'customerName', 'customerEmail', 'customerPhone', 'shippingAddress', 'items', 'subtotal', 'discount', 'deliveryCharge', 'giftItem', 'notes'] as $k) {
+                $allowedFields = ['orderNumber', 'customerName', 'customerEmail', 'customerPhone', 'shippingAddress', 'items', 'subtotal', 'discount', 'deliveryCharge', 'giftItem', 'notes'];
+                if ($admin) {
+                    $allowedFields[] = 'userId';
+                }
+                foreach ($allowedFields as $k) {
                     if (isset($body['orderData'][$k])) $safeClientMeta[$k] = $body['orderData'][$k];
+                }
+                if (!$admin && $customer && !empty($customer['uid'])) {
+                    $safeClientMeta['userId'] = (string)$customer['uid'];
                 }
             }
             $base = $target ?? array_merge($safeClientMeta, [
@@ -472,15 +688,19 @@ if ($action === 'verify-order' && $method === 'POST') {
                 'subtotal' => $paidAmount,
                 'createdAt' => $now
             ]);
+            $resolvedMethodLabel = $paymentDetails['paymentMethod'] ?? ($base['paymentMethod'] ?? 'Cashfree Online Payment');
             $paidOrder = array_merge($base, [
                 'paymentStatus' => 'paid',
                 'isPaid' => true,
                 'orderStatus' => in_array($base['orderStatus'] ?? '', ['Processing', 'Shipped', 'Delivered'], true) ? $base['orderStatus'] : 'Confirmed',
+                'paymentMethod' => $resolvedMethodLabel,
                 'paymentId' => (string)($latestPay['cf_payment_id'] ?? ($ordData['cf_order_id'] ?? $safeOrderId)),
                 'cfOrderId' => $ordData['cf_order_id'] ?? ($base['cfOrderId'] ?? null),
+                'cardNetwork' => $paymentDetails['cardNetwork'] ?? ($base['cardNetwork'] ?? null),
+                'cardType' => $paymentDetails['cardType'] ?? ($base['cardType'] ?? null),
                 'verifiedAmount' => $paidAmount,
                 'currency' => $paidCurrency,
-                'paidAt' => $latestPay['payment_completion_time'] ?? ($base['paidAt'] ?? $now),
+                'paidAt' => $latestPay['payment_completion_time'] ?? ($latestPay['payment_time'] ?? ($base['paidAt'] ?? $now)),
                 'paymentVerifiedAt' => $now,
                 'confirmedAt' => $base['confirmedAt'] ?? $now,
                 'verifiedVia' => 'cashfree_api',
@@ -495,16 +715,26 @@ if ($action === 'verify-order' && $method === 'POST') {
             else array_unshift($orders, $paidOrder);
             cfWriteOrders($orders, $dataOrdersFile, $apiOrdersFile);
 
-            return [200, [
+            $canViewFull = (bool)$admin
+                || ($customer && vdhCustomerOwnsOrder($customer, $paidOrder))
+                || vdhHasValidOrderReceiptToken($paidOrder, $receiptTok);
+
+            return [200, array_merge([
                 'success' => true,
                 'isPaid' => true,
                 'orderId' => $safeOrderId,
                 'orderStatus' => $rawStatus,
                 'orderAmount' => $paidAmount,
                 'cfOrderId' => $ordData['cf_order_id'] ?? null,
-                'receiptToken' => vdhOrderReceiptToken($paidOrder),
-                'order' => $paidOrder
-            ]];
+                'paymentMethod' => $paidOrder['paymentMethod'],
+                'cardNetwork' => $paidOrder['cardNetwork'],
+                'cardType' => $paidOrder['cardType'],
+                'env' => $creds['env'],
+                'mode' => strtolower($creds['env']),
+                'isTestOrder' => $isSandbox,
+                'paymentDetails' => $paymentDetails,
+                'order' => $canViewFull ? $paidOrder : vdhSanitizePublicOrderTracking($paidOrder)
+            ], $canViewFull ? ['receiptToken' => vdhOrderReceiptToken($paidOrder)] : [])];
         }
 
         $isFailed = $hasPaidStatus || in_array($rawStatus, ['FAILED', 'CANCELLED', 'TERMINATED', 'EXPIRED', 'VOID'], true) || in_array($latestPayStatus, ['FAILED', 'CANCELLED', 'VOID'], true);
@@ -530,6 +760,14 @@ if ($action === 'verify-order' && $method === 'POST') {
             'isFailed' => $isFailed,
             'orderId' => $safeOrderId,
             'orderStatus' => $hasPaidStatus ? 'AMOUNT_OR_CURRENCY_MISMATCH' : ($latestPayStatus ?: $rawStatus),
+            'cfOrderId' => $ordData['cf_order_id'] ?? null,
+            'paymentMethod' => $paymentDetails['paymentMethod'] ?? ($target['paymentMethod'] ?? 'Cashfree Online Payment'),
+            'cardNetwork' => $paymentDetails['cardNetwork'] ?? ($target['cardNetwork'] ?? null),
+            'cardType' => $paymentDetails['cardType'] ?? ($target['cardType'] ?? null),
+            'env' => $creds['env'],
+            'mode' => strtolower($creds['env']),
+            'isTestOrder' => $isSandbox,
+            'paymentDetails' => $paymentDetails,
             'order' => $target ? ($canViewTarget ? $target : vdhSanitizePublicOrderTracking($target)) : null
         ]];
     });
@@ -539,8 +777,9 @@ if ($action === 'verify-order' && $method === 'POST') {
 
 if ($action === 'webhook' && $method === 'POST') {
     $rawBody = (string)file_get_contents('php://input');
-    $sig = trim((string)($_SERVER['HTTP_X_WEBHOOK_SIGNATURE'] ?? ''));
-    $ts = trim((string)($_SERVER['HTTP_X_WEBHOOK_TIMESTAMP'] ?? ''));
+    $hdrs = vdhGetAllHeadersLower();
+    $sig = trim((string)($_SERVER['HTTP_X_WEBHOOK_SIGNATURE'] ?? ($hdrs['x-webhook-signature'] ?? '')));
+    $ts = trim((string)($_SERVER['HTTP_X_WEBHOOK_TIMESTAMP'] ?? ($hdrs['x-webhook-timestamp'] ?? '')));
 
     if ($creds['secretKey'] === '' || $sig === '' || $ts === '') {
         vdhSendJson(401, ['success' => false, 'error' => 'Missing webhook signature headers.']);
@@ -597,6 +836,15 @@ if ($action === 'webhook' && $method === 'POST') {
                 $orders[$idx] = $target;
                 cfWriteOrders($orders, $dataOrdersFile, $apiOrdersFile);
                 return [200, ['success' => false, 'rejected' => true, 'isPaid' => false, 'order' => $target]];
+            }
+            if (!empty($payObj['payment_method']) && is_array($payObj['payment_method'])) {
+                $target['paymentMethod'] = cfFormatPaymentMethodLabel($payObj['payment_method']);
+                if (!empty($payObj['payment_method']['card'])) {
+                    $target['cardNetwork'] = $payObj['payment_method']['card']['card_network'] ?? ($target['cardNetwork'] ?? null);
+                    $target['cardType'] = $payObj['payment_method']['card']['card_type'] ?? ($target['cardType'] ?? null);
+                }
+            } elseif (!empty($payObj['payment_group'])) {
+                $target['paymentMethod'] = 'Cashfree (' . strtoupper((string)$payObj['payment_group']) . ')';
             }
             $target['paymentStatus'] = 'paid';
             $target['isPaid'] = true;

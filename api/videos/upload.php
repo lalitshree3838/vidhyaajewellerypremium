@@ -22,8 +22,47 @@ if (!is_dir($uploadDir) && !mkdir($uploadDir, 0755, true)) {
     vdhSendJson(500, ['success' => false, 'error' => 'Failed to initialize video storage directory.']);
 }
 
+function vdhParseIniBytes(string $raw): int {
+    $val = trim($raw);
+    if ($val === '' || $val === '0' || $val === '-1') return 0;
+    $unit = strtolower(substr($val, -1));
+    $num = (float)$val;
+    switch ($unit) {
+        case 'g':
+            $num *= 1024;
+            // fall through
+        case 'm':
+            $num *= 1024;
+            // fall through
+        case 'k':
+            $num *= 1024;
+            break;
+    }
+    return max(0, (int)round($num));
+}
+
 $allowedExts = ['mp4', 'mov', 'webm'];
-$maxBytes = 250 * 1024 * 1024; // 250 MB
+$appCapBytes = 250 * 1024 * 1024; // Application upper bound
+$iniUploadRaw = (string)(@ini_get('upload_max_filesize') ?: '');
+$iniPostRaw = (string)(@ini_get('post_max_size') ?: '');
+$iniUploadBytes = vdhParseIniBytes($iniUploadRaw);
+$iniPostBytes = vdhParseIniBytes($iniPostRaw);
+
+$effectiveMaxBytes = $appCapBytes;
+if ($iniUploadBytes > 0) $effectiveMaxBytes = min($effectiveMaxBytes, $iniUploadBytes);
+if ($iniPostBytes > 0) $effectiveMaxBytes = min($effectiveMaxBytes, $iniPostBytes);
+$effectiveMaxMb = max(1, (int)floor($effectiveMaxBytes / (1024 * 1024)));
+
+$contentLength = (int)($_SERVER['CONTENT_LENGTH'] ?? 0);
+if ($contentLength > $effectiveMaxBytes && empty($_FILES)) {
+    vdhSendJson(413, [
+        'success' => false,
+        'error' => "Video payload ({$contentLength} bytes) exceeds current PHP server upload limit (~{$effectiveMaxMb} MB; upload_max_filesize={$iniUploadRaw}, post_max_size={$iniPostRaw}).",
+        'serverMaxUploadBytes' => $effectiveMaxBytes,
+        'phpUploadMaxFilesize' => $iniUploadRaw,
+        'phpPostMaxSize' => $iniPostRaw
+    ]);
+}
 
 $originalName = '';
 $mimeType = 'video/mp4';
@@ -32,8 +71,22 @@ $rawData = null;
 
 if (!empty($_FILES)) {
     $fileField = $_FILES['video'] ?? $_FILES['file'] ?? reset($_FILES);
-    if (!$fileField || ($fileField['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
-        vdhSendJson(400, ['success' => false, 'error' => 'Video file upload failed or exceeded server upload limit.']);
+    $errCode = (int)($fileField['error'] ?? UPLOAD_ERR_NO_FILE);
+    if (!$fileField || $errCode !== UPLOAD_ERR_OK) {
+        if ($errCode === UPLOAD_ERR_INI_SIZE || $errCode === UPLOAD_ERR_FORM_SIZE) {
+            vdhSendJson(413, [
+                'success' => false,
+                'error' => "Uploaded video exceeds current PHP server limit (~{$effectiveMaxMb} MB; upload_max_filesize={$iniUploadRaw}, post_max_size={$iniPostRaw}).",
+                'serverMaxUploadBytes' => $effectiveMaxBytes,
+                'phpUploadMaxFilesize' => $iniUploadRaw,
+                'phpPostMaxSize' => $iniPostRaw
+            ]);
+        }
+        vdhSendJson(400, [
+            'success' => false,
+            'error' => "Video file upload failed (PHP upload error code {$errCode}). Current server cap: ~{$effectiveMaxMb} MB.",
+            'serverMaxUploadBytes' => $effectiveMaxBytes
+        ]);
     }
     $originalName = $fileField['name'] ?: ('vidhyaa_video_' . time() . '.mp4');
     $mimeType = $fileField['type'] ?: 'video/mp4';
@@ -41,7 +94,13 @@ if (!empty($_FILES)) {
 } else {
     $rawData = file_get_contents('php://input');
     if ($rawData === false || strlen($rawData) === 0) {
-        vdhSendJson(400, ['success' => false, 'error' => 'Empty video file received. Please select a valid MP4, MOV, or WebM video.']);
+        vdhSendJson(400, [
+            'success' => false,
+            'error' => "Empty video file received (or request exceeded PHP post_max_size={$iniPostRaw}). Please select a valid MP4, MOV, or WebM video under {$effectiveMaxMb} MB.",
+            'serverMaxUploadBytes' => $effectiveMaxBytes,
+            'phpUploadMaxFilesize' => $iniUploadRaw,
+            'phpPostMaxSize' => $iniPostRaw
+        ]);
     }
     $headerName = $_SERVER['HTTP_X_FILE_NAME'] ?? '';
     $originalName = $headerName ? urldecode($headerName) : ('vidhyaa_video_' . time() . '.mp4');
@@ -49,8 +108,14 @@ if (!empty($_FILES)) {
     $sizeBytes = strlen($rawData);
 }
 
-if ($sizeBytes <= 0 || $sizeBytes > $maxBytes) {
-    vdhSendJson(413, ['success' => false, 'error' => 'Video size must be between 1 byte and 250 MB.']);
+if ($sizeBytes <= 0 || $sizeBytes > $effectiveMaxBytes) {
+    vdhSendJson(413, [
+        'success' => false,
+        'error' => "Video size must be between 1 byte and {$effectiveMaxMb} MB (upload_max_filesize={$iniUploadRaw}, post_max_size={$iniPostRaw}).",
+        'serverMaxUploadBytes' => $effectiveMaxBytes,
+        'phpUploadMaxFilesize' => $iniUploadRaw,
+        'phpPostMaxSize' => $iniPostRaw
+    ]);
 }
 
 $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
@@ -88,5 +153,8 @@ vdhSendJson(200, [
     'originalName' => $originalName,
     'sizeBytes' => $sizeBytes,
     'mimeType' => $mimeType,
-    'storageType' => 'server'
+    'storageType' => 'server',
+    'serverMaxUploadBytes' => $effectiveMaxBytes,
+    'phpUploadMaxFilesize' => $iniUploadRaw,
+    'phpPostMaxSize' => $iniPostRaw
 ]);
