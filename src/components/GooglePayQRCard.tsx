@@ -40,6 +40,7 @@ export const GooglePayQRCard: React.FC<GooglePayQRCardProps> = ({
     return customQrImageUrl || localStorage.getItem(LOCAL_STORAGE_CUSTOM_QR_KEY) || null;
   });
   const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const qrRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -70,9 +71,10 @@ export const GooglePayQRCard: React.FC<GooglePayQRCardProps> = ({
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setUploadError(null);
 
     if (!file.type.startsWith('image/')) {
-      alert('Please select an image file (PNG, JPG, or WEBP)');
+      setUploadError('Please select a valid image file (PNG, JPG, or WEBP).');
       return;
     }
 
@@ -397,6 +399,11 @@ export const GooglePayQRCard: React.FC<GooglePayQRCardProps> = ({
               )}
             </div>
 
+            {uploadError && (
+              <span className="text-[11px] text-red-600 font-semibold block">
+                {uploadError}
+              </span>
+            )}
             {uploadSuccess && (
               <span className="text-[11px] text-emerald-700 font-semibold block">
                 ✓ Custom QR uploaded and active!

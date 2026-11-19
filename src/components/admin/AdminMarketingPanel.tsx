@@ -56,6 +56,7 @@ export const AdminMarketingPanel: React.FC = () => {
     setCoupons(list);
     try {
       localStorage.setItem('vidhyaa_coupons', JSON.stringify(list));
+      window.dispatchEvent(new Event('vidhyaa_coupons_updated'));
     } catch {}
   };
 

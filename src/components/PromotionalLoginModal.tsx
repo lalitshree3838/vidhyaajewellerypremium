@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Sparkles,
@@ -12,23 +12,9 @@ import {
   EyeOff,
   User as UserIcon,
   Phone,
-  RotateCcw,
-  CheckCircle,
-  Globe
+  CheckCircle
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { CountryCodeSelector } from './CountryCodeSelector';
-import {
-  CountryData,
-  DEFAULT_COUNTRY,
-  validateInternationalPhone,
-  maskPhoneNumber
-} from '../lib/countries';
-import {
-  sendMobileOtp,
-  verifyMobileOtp,
-  clearOtpSession
-} from '../lib/otpAuthService';
 
 interface PromotionalLoginModalProps {
   isOpen: boolean;
@@ -39,39 +25,32 @@ interface PromotionalLoginModalProps {
 export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
   isOpen,
   onClose,
-  onSuccess,
+  onSuccess
 }) => {
   const { signInWithEmail, signUpWithEmail, signInWithGoogle } = useAuth();
 
   // Primary Method: 'email' | 'mobile'
   const [authMethod, setAuthMethod] = useState<'email' | 'mobile'>('email');
 
-  // Email Mode: 'signup' (Default for promotional offer) | 'signin' | 'success'
+  // Mode: 'signup' (Default for promotional offer) | 'signin' | 'success'
   const [mode, setMode] = useState<'signup' | 'signin' | 'success'>('signup');
 
-  // Input fields for Email
+  // Input fields
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
-  // Mobile OTP States
-  const [mobileStep, setMobileStep] = useState<'enter_phone' | 'verify_otp'>('enter_phone');
-  const [selectedCountry, setSelectedCountry] = useState<CountryData>(DEFAULT_COUNTRY);
+  // Mobile + Password States (+91 India 10 digits)
   const [phoneNumber, setPhoneNumber] = useState('');
-  const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
-  const [activeSessionE164, setActiveSessionE164] = useState('');
-  const [maskedPhoneDisplay, setMaskedPhoneDisplay] = useState('');
-  const [resendCooldown, setResendCooldown] = useState(0);
 
   // Status & feedback
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
-
-  // Reset or initialize state when modal opens
+  // Reset state when modal opens
   useEffect(() => {
     if (isOpen) {
       setAuthMethod('email');
@@ -79,37 +58,38 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
       setDisplayName('');
       setEmail('');
       setPassword('');
+      setConfirmPassword('');
       setPhoneNumber('');
-      setOtpDigits(['', '', '', '', '', '']);
-      setMobileStep('enter_phone');
       setError(null);
       setSuccessMsg(null);
       setLoading(false);
       setShowPassword(false);
-      clearOtpSession();
     }
   }, [isOpen]);
 
-  // Resend countdown timer
-  useEffect(() => {
-    if (resendCooldown <= 0) return;
-    const interval = setInterval(() => {
-      setResendCooldown((prev) => Math.max(0, prev - 1));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [resendCooldown]);
-
   if (!isOpen) return null;
 
-  const phoneValidation = validateInternationalPhone(phoneNumber, selectedCountry.code);
+  const normalizeIndianMobile = (raw: string): string => {
+    let digits = raw.replace(/\D/g, '');
+    if (digits.length === 12 && digits.startsWith('91')) digits = digits.slice(2);
+    else if (digits.length === 11 && digits.startsWith('0')) digits = digits.slice(1);
+    else if (digits.length > 10 && /^[6-9]\d{9}$/.test(digits.slice(-10))) digits = digits.slice(-10);
+    return digits;
+  };
 
-  // Translate Firebase errors into helpful messages
+  const mobileDigits = normalizeIndianMobile(phoneNumber);
+  const isValidIndianMobile = mobileDigits.length === 10 && /^[6-9]\d{9}$/.test(mobileDigits);
+
   const parseError = (err: unknown): string => {
     const raw = err instanceof Error ? err.message : String(err);
     if (raw.includes('auth/email-already-in-use')) {
-      return 'An account already exists with this email address. Please sign in below.';
+      return 'An account already exists with this email address. Please sign in instead.';
     }
-    if (raw.includes('auth/invalid-credential') || raw.includes('auth/wrong-password') || raw.includes('auth/user-not-found')) {
+    if (
+      raw.includes('auth/invalid-credential') ||
+      raw.includes('auth/wrong-password') ||
+      raw.includes('auth/user-not-found')
+    ) {
       return 'Incorrect email address or password. Please verify your credentials.';
     }
     if (raw.includes('auth/weak-password')) {
@@ -118,22 +98,17 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
     if (raw.includes('auth/invalid-email')) {
       return 'Please enter a valid email address.';
     }
-    if (raw.includes('auth/invalid-verification-code')) {
-      return 'Invalid 6-digit verification code. Please check your SMS and try again.';
-    }
-    if (raw.includes('auth/code-expired')) {
-      return 'This verification code has expired. Please tap Resend OTP to receive a new code.';
-    }
     if (raw.includes('auth/too-many-requests')) {
-      return 'Too many SMS requests. Please wait a few moments before trying again.';
+      return 'Too many attempts. Please wait a few moments before trying again.';
     }
     return raw || 'Authentication failed. Please try again.';
   };
 
-  // Submit Handler (Email Sign Up or Sign In)
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Email Sign Up or Sign In
+  const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSuccessMsg(null);
 
     const cleanEmail = email.trim();
     if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
@@ -166,6 +141,86 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
     }
   };
 
+  // +91 Mobile + Password Sign Up or Sign In
+  const handleMobilePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccessMsg(null);
+
+    if (!isValidIndianMobile) {
+      setError('Please enter a valid 10-digit Indian mobile number (starting with 6-9).');
+      return;
+    }
+    if (!password || password.length < 6) {
+      setError('Password must be at least 6 characters long.');
+      return;
+    }
+
+    if (mode === 'signup') {
+      const cleanName = displayName.trim();
+      if (!cleanName) {
+        setError('Please enter your full name.');
+        return;
+      }
+      if (confirmPassword && password !== confirmPassword) {
+        setError('Passwords do not match. Please verify your confirm password.');
+        return;
+      }
+    }
+
+    setLoading(true);
+    try {
+      const endpoint = mode === 'signup' ? '/api/auth/mobile-register' : '/api/auth/mobile-login';
+      const payload =
+        mode === 'signup'
+          ? {
+              phone: `+91${mobileDigits}`,
+              mobile: mobileDigits,
+              name: displayName.trim(),
+              password,
+              confirmPassword: confirmPassword || password
+            }
+          : {
+              phone: `+91${mobileDigits}`,
+              mobile: mobileDigits,
+              password
+            };
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || data.message || 'Mobile authentication failed. Please verify your details.');
+      }
+
+      if (data.token) {
+        try {
+          localStorage.setItem('vidhyaa_patron_token', data.token);
+        } catch {}
+      }
+      if (data.user) {
+        try {
+          localStorage.setItem('vidhyaa_patron_session', JSON.stringify(data.user));
+          window.dispatchEvent(new Event('vidhyaa_patron_auth_changed'));
+        } catch {}
+      }
+
+      setSuccessMsg(data.message || 'Signed in successfully! Welcome to VIDHYAA Jewellery Studio.');
+      setMode('success');
+      setTimeout(() => {
+        onSuccess?.();
+        onClose();
+      }, 1500);
+    } catch (err) {
+      setError(parseError(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // 1-Click Google Sign-In
   const handleGoogleSignIn = async () => {
     setError(null);
@@ -181,125 +236,6 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
       setError(parseError(err));
     } finally {
       setLoading(false);
-    }
-  };
-
-  // Mobile: Send OTP
-  const handleSendOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-
-    if (!phoneNumber.trim()) {
-      setError('Please enter your mobile phone number.');
-      return;
-    }
-
-    if (!phoneValidation.isValid) {
-      setError(phoneValidation.error || `Please enter a valid phone number for ${selectedCountry.name}.`);
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const result = await sendMobileOtp(phoneNumber, selectedCountry.code, 'promo-recaptcha-container');
-      setActiveSessionE164(result.e164);
-      setMaskedPhoneDisplay(result.maskedNumber || maskPhoneNumber(result.e164));
-      setMobileStep('verify_otp');
-      setResendCooldown(30);
-      setOtpDigits(['', '', '', '', '', '']);
-      setSuccessMsg(result.message);
-      setTimeout(() => {
-        otpInputRefs.current[0]?.focus();
-      }, 150);
-    } catch (err: any) {
-      setError(parseError(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Mobile: Verify OTP
-  const handleVerifyOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-
-    const fullCode = otpDigits.join('').trim();
-    if (fullCode.length !== 6 || !/^\d{6}$/.test(fullCode)) {
-      setError('Please enter all 6 digits of the SMS verification code.');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const phoneToVerify = activeSessionE164 || phoneNumber;
-      await verifyMobileOtp(phoneToVerify, fullCode, selectedCountry.code);
-      setMode('success');
-      setTimeout(() => {
-        onSuccess?.();
-        onClose();
-      }, 1500);
-    } catch (err: any) {
-      setError(parseError(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Mobile: Resend OTP
-  const handleResendOtp = async () => {
-    if (resendCooldown > 0 || loading) return;
-    setError(null);
-    setLoading(true);
-    try {
-      const phoneToSend = activeSessionE164 || phoneNumber;
-      const result = await sendMobileOtp(phoneToSend, selectedCountry.code, 'promo-recaptcha-container');
-      setActiveSessionE164(result.e164);
-      setMaskedPhoneDisplay(result.maskedNumber || maskPhoneNumber(result.e164));
-      setResendCooldown(30);
-      setOtpDigits(['', '', '', '', '', '']);
-      setTimeout(() => {
-        otpInputRefs.current[0]?.focus();
-      }, 100);
-    } catch (err: any) {
-      setError(parseError(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // OTP digit input handlers
-  const handleOtpChange = (index: number, val: string) => {
-    const clean = val.replace(/\D/g, '');
-    if (!clean) {
-      const updated = [...otpDigits];
-      updated[index] = '';
-      setOtpDigits(updated);
-      return;
-    }
-
-    if (clean.length > 1) {
-      const chars = clean.slice(0, 6).split('');
-      const updated = [...otpDigits];
-      for (let i = 0; i < chars.length; i++) {
-        if (index + i < 6) updated[index + i] = chars[i];
-      }
-      setOtpDigits(updated);
-      const nextIdx = Math.min(index + chars.length, 5);
-      otpInputRefs.current[nextIdx]?.focus();
-      return;
-    }
-
-    const updated = [...otpDigits];
-    updated[index] = clean;
-    setOtpDigits(updated);
-    if (index < 5) {
-      otpInputRefs.current[index + 1]?.focus();
-    }
-  };
-
-  const handleOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Backspace' && !otpDigits[index] && index > 0) {
-      otpInputRefs.current[index - 1]?.focus();
     }
   };
 
@@ -339,7 +275,7 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
           </div>
         </div>
 
-        {/* Primary Method Switcher: Login with Mobile Number vs Login with Email */}
+        {/* Primary Method Switcher */}
         {mode !== 'success' && (
           <div className="grid grid-cols-2 border-b border-[#E8DCCF] text-xs font-semibold bg-[#FAF7F2]">
             <button
@@ -347,6 +283,7 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
               onClick={() => {
                 setAuthMethod('mobile');
                 setError(null);
+                setSuccessMsg(null);
               }}
               className={`py-3 px-2 text-center transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                 authMethod === 'mobile'
@@ -355,7 +292,7 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
               }`}
             >
               <Phone className="w-3.5 h-3.5 text-[#802336]" />
-              <span>Login with Mobile Number</span>
+              <span>+91 Mobile Login</span>
             </button>
 
             <button
@@ -363,6 +300,7 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
               onClick={() => {
                 setAuthMethod('email');
                 setError(null);
+                setSuccessMsg(null);
               }}
               className={`py-3 px-2 text-center transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                 authMethod === 'email'
@@ -371,7 +309,7 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
               }`}
             >
               <Mail className="w-3.5 h-3.5" />
-              <span>Login with Email</span>
+              <span>Email Login</span>
             </button>
           </div>
         )}
@@ -392,6 +330,40 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
             </div>
           ) : (
             <>
+              {/* Mode Toggle Tabs */}
+              <div className="flex border-b border-[#E8DCCF] text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('signup');
+                    setError(null);
+                    setSuccessMsg(null);
+                  }}
+                  className={`flex-1 py-2 text-center transition-colors cursor-pointer ${
+                    mode === 'signup'
+                      ? 'border-b-2 border-[#802336] text-[#802336] font-bold'
+                      : 'text-gray-500 hover:text-black'
+                  }`}
+                >
+                  Create Account
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('signin');
+                    setError(null);
+                    setSuccessMsg(null);
+                  }}
+                  className={`flex-1 py-2 text-center transition-colors cursor-pointer ${
+                    mode === 'signin'
+                      ? 'border-b-2 border-[#802336] text-[#802336] font-bold'
+                      : 'text-gray-500 hover:text-black'
+                  }`}
+                >
+                  Existing Member Sign In
+                </button>
+              </div>
+
               {/* Error Message */}
               {error && (
                 <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-start gap-2 animate-fadeIn font-medium">
@@ -408,288 +380,105 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
                 </div>
               )}
 
-              {/* ---------------------------------------------------- */}
-              {/* OPTION 1: LOGIN WITH MOBILE NUMBER (INTERNATIONAL SMS OTP) */}
-              {/* ---------------------------------------------------- */}
+              {/* OPTION 1: +91 MOBILE NUMBER & PASSWORD */}
               {authMethod === 'mobile' && (
-                <div>
-                  {mobileStep === 'enter_phone' ? (
-                    <form onSubmit={handleSendOtp} className="space-y-3.5">
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider">
-                            Mobile Phone Number *
-                          </label>
-                          <span className="text-[10px] text-gray-400 flex items-center gap-1">
-                            <Globe className="w-3 h-3 text-[#802336]" />
-                            <span>Worldwide SMS</span>
-                          </span>
-                        </div>
-
-                        <div className="flex gap-2 items-stretch">
-                          <CountryCodeSelector
-                            selectedCountry={selectedCountry}
-                            onSelectCountry={(c) => {
-                              setSelectedCountry(c);
-                              setError(null);
-                            }}
-                            disabled={loading}
-                          />
-
-                          <div className="relative flex-1 flex items-center">
-                            <Phone className="w-4 h-4 text-gray-400 absolute left-3 pointer-events-none" />
-                            <input
-                              type="tel"
-                              required
-                              autoFocus
-                              value={phoneNumber}
-                              onChange={(e) => {
-                                setPhoneNumber(e.target.value);
-                                setError(null);
-                              }}
-                              placeholder={selectedCountry.placeholder || 'Enter mobile number'}
-                              className="w-full pl-9 pr-3 py-2 bg-white border border-[#E8DCCF] focus:border-[#802336] focus:ring-1 focus:ring-[#802336] rounded-xl text-xs font-mono text-gray-900 placeholder:text-gray-400 outline-none transition-all"
-                            />
-                          </div>
-                        </div>
-
-                        {phoneNumber.trim() && (
-                          <div className="mt-1.5 text-[11px]">
-                            {phoneValidation.isValid ? (
-                              <span className="text-emerald-700 font-medium flex items-center gap-1">
-                                <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                                <span>Valid {selectedCountry.name} mobile ({phoneValidation.formattedInternational})</span>
-                              </span>
-                            ) : (
-                              <span className="text-amber-700">
-                                {phoneValidation.error || `Please enter a valid phone number for ${selectedCountry.name}.`}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Visible reCAPTCHA Container */}
-                      <div className="flex flex-col items-center justify-center my-1.5">
-                        <div id="promo-recaptcha-container" className="min-h-[78px] flex items-center justify-center"></div>
-                      </div>
-
-                      <button
-                        type="submit"
-                        disabled={loading || (phoneNumber.trim().length > 0 && !phoneValidation.isValid)}
-                        className="w-full bg-[#3B1E22] hover:bg-[#802336] disabled:bg-gray-300 disabled:cursor-not-allowed text-[#FAF7F2] py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition-colors shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-[0.99] mt-2"
-                      >
-                        {loading ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            <span>Sending OTP...</span>
-                          </>
-                        ) : (
-                          <>
-                            <span>Send OTP</span>
-                            <ArrowRight className="w-4 h-4" />
-                          </>
-                        )}
-                      </button>
-
-                      {/* Switch back to Email button */}
-                      <div className="text-center pt-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAuthMethod('email');
-                            setError(null);
-                          }}
-                          className="text-xs text-[#802336] hover:text-[#3B1E22] font-semibold hover:underline cursor-pointer"
-                        >
-                          ✉️ Switch back to Login with Email
-                        </button>
-                      </div>
-                    </form>
-                  ) : (
-                    /* Step 2: 6-Digit OTP Verification Field */
-                    <form onSubmit={handleVerifyOtp} className="space-y-4">
-                      <div className="bg-[#FAF7F2] border border-[#E8DCCF] rounded-2xl p-3 flex items-center justify-between text-xs">
-                        <div>
-                          <p className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
-                            Code sent to:
-                          </p>
-                          <p className="font-mono font-bold text-gray-900 mt-0.5">
-                            {maskedPhoneDisplay || maskPhoneNumber(phoneNumber)}
-                          </p>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setMobileStep('enter_phone');
-                            setError(null);
-                          }}
-                          className="text-[#802336] hover:underline text-xs font-semibold cursor-pointer"
-                        >
-                          Change Number
-                        </button>
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-2 text-center">
-                          Enter 6-Digit Verification Code (OTP) *
-                        </label>
-
-                        <div className="flex justify-center gap-2">
-                          {otpDigits.map((digit, idx) => (
-                            <input
-                              key={idx}
-                              ref={(el) => { otpInputRefs.current[idx] = el; }}
-                              type="text"
-                              inputMode="numeric"
-                              maxLength={6}
-                              value={digit}
-                              onChange={(e) => handleOtpChange(idx, e.target.value)}
-                              onKeyDown={(e) => handleOtpKeyDown(idx, e)}
-                              className={`w-10 h-11 text-center text-lg font-mono font-bold rounded-xl border transition-all outline-none ${
-                                digit
-                                  ? 'border-[#802336] bg-[#802336]/5 text-[#3B1E22] ring-1 ring-[#802336]'
-                                  : 'border-[#E8DCCF] bg-white text-gray-800 focus:border-[#802336] focus:ring-1 focus:ring-[#802336]'
-                              }`}
-                            />
-                          ))}
-                        </div>
-                      </div>
-
-                      <button
-                        type="submit"
-                        disabled={loading || otpDigits.join('').length !== 6}
-                        className="w-full bg-[#802336] hover:bg-[#631B2A] disabled:bg-gray-300 disabled:cursor-not-allowed text-white py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition-colors shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-[0.99]"
-                      >
-                        {loading ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            <span>Verifying OTP...</span>
-                          </>
-                        ) : (
-                          <>
-                            <span>Verify OTP & Sign In</span>
-                            <Check className="w-4 h-4" />
-                          </>
-                        )}
-                      </button>
-
-                      {/* Resend OTP */}
-                      <div className="flex items-center justify-between text-xs text-gray-500 pt-1">
-                        <span>Didn't receive OTP?</span>
-                        {resendCooldown > 0 ? (
-                          <span className="font-mono text-gray-400">
-                            Resend in <strong className="text-gray-700">{resendCooldown}s</strong>
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={handleResendOtp}
-                            disabled={loading}
-                            className="text-[#802336] hover:text-[#3B1E22] font-bold flex items-center gap-1 hover:underline cursor-pointer"
-                          >
-                            <RotateCcw className="w-3 h-3" />
-                            <span>Resend OTP</span>
-                          </button>
-                        )}
-                      </div>
-
-                      {/* Switch back to Email button */}
-                      <div className="text-center pt-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAuthMethod('email');
-                            setError(null);
-                          }}
-                          className="text-xs text-[#802336] hover:text-[#3B1E22] font-semibold hover:underline cursor-pointer"
-                        >
-                          ✉️ Switch back to Login with Email
-                        </button>
-                      </div>
-                    </form>
-                  )}
-                </div>
-              )}
-
-              {/* ---------------------------------------------------- */}
-              {/* OPTION 2: LOGIN WITH EMAIL & PASSWORD                */}
-              {/* ---------------------------------------------------- */}
-              {authMethod === 'email' && (
-                <>
-                  {/* Mode Toggle Tabs for Email (Create Account vs Sign In) */}
-                  <div className="flex border-b border-[#E8DCCF] text-xs font-semibold">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMode('signup');
-                        setError(null);
-                      }}
-                      className={`flex-1 py-2 text-center transition-colors cursor-pointer ${
-                        mode === 'signup'
-                          ? 'border-b-2 border-[#802336] text-[#802336] font-bold'
-                          : 'text-gray-500 hover:text-black'
-                      }`}
-                    >
-                      Create Account
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMode('signin');
-                        setError(null);
-                      }}
-                      className={`flex-1 py-2 text-center transition-colors cursor-pointer ${
-                        mode === 'signin'
-                          ? 'border-b-2 border-[#802336] text-[#802336] font-bold'
-                          : 'text-gray-500 hover:text-black'
-                      }`}
-                    >
-                      Existing Member Sign In
-                    </button>
-                  </div>
-
-                  {/* Email / Password Form */}
-                  <form onSubmit={handleSubmit} className="space-y-3 pt-1">
-                    {mode === 'signup' && (
-                      <div>
-                        <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1">
-                          Full Name
-                        </label>
-                        <div className="relative flex items-center">
-                          <UserIcon className="w-4 h-4 text-gray-400 absolute left-3 pointer-events-none" />
-                          <input
-                            type="text"
-                            value={displayName}
-                            onChange={(e) => setDisplayName(e.target.value)}
-                            placeholder="e.g. Radhika Sharma"
-                            className="w-full pl-9 pr-3 py-2 bg-white border border-[#E8DCCF] focus:border-[#802336] focus:ring-1 focus:ring-[#802336] rounded-xl text-xs text-gray-900 placeholder:text-gray-400 outline-none transition-all"
-                          />
-                        </div>
-                      </div>
-                    )}
-
+                <form onSubmit={handleMobilePasswordSubmit} className="space-y-3 pt-1">
+                  {mode === 'signup' && (
                     <div>
                       <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1">
-                        Email Address *
+                        Full Name *
                       </label>
                       <div className="relative flex items-center">
-                        <Mail className="w-4 h-4 text-gray-400 absolute left-3 pointer-events-none" />
+                        <UserIcon className="w-4 h-4 text-gray-400 absolute left-3 pointer-events-none" />
                         <input
-                          type="email"
+                          type="text"
                           required
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          placeholder="yourname@gmail.com"
+                          value={displayName}
+                          onChange={(e) => setDisplayName(e.target.value)}
+                          placeholder="e.g. Radhika Sharma"
                           className="w-full pl-9 pr-3 py-2 bg-white border border-[#E8DCCF] focus:border-[#802336] focus:ring-1 focus:ring-[#802336] rounded-xl text-xs text-gray-900 placeholder:text-gray-400 outline-none transition-all"
                         />
                       </div>
                     </div>
+                  )}
 
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider">
+                        Indian Mobile Number *
+                      </label>
+                      <span className="text-[10px] text-gray-500">+91 India (10 digits)</span>
+                    </div>
+
+                    <div className="flex gap-2 items-stretch">
+                      <div className="px-3 py-2 bg-[#FAF7F2] border border-[#E8DCCF] rounded-xl flex items-center gap-1.5 text-xs font-bold text-gray-800 select-none">
+                        <span>+91</span>
+                      </div>
+                      <div className="relative flex-1 flex items-center">
+                        <Phone className="w-4 h-4 text-gray-400 absolute left-3 pointer-events-none" />
+                        <input
+                          type="tel"
+                          inputMode="numeric"
+                          maxLength={10}
+                          required
+                          autoFocus
+                          value={phoneNumber}
+                          onChange={(e) => {
+                            setPhoneNumber(e.target.value.replace(/\D/g, '').slice(0, 10));
+                            setError(null);
+                          }}
+                          placeholder="9876543210"
+                          className="w-full pl-9 pr-3 py-2 bg-white border border-[#E8DCCF] focus:border-[#802336] focus:ring-1 focus:ring-[#802336] rounded-xl text-xs font-mono text-gray-900 placeholder:text-gray-400 outline-none transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    {phoneNumber.trim() && (
+                      <div className="mt-1 text-[11px]">
+                        {isValidIndianMobile ? (
+                          <span className="text-emerald-700 font-medium flex items-center gap-1">
+                            <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Valid 10-digit Indian mobile (+91 {mobileDigits})</span>
+                          </span>
+                        ) : (
+                          <span className="text-amber-700">
+                            Please enter a valid 10-digit Indian mobile starting with 6-9.
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1">
+                      Password *
+                    </label>
+                    <div className="relative flex items-center">
+                      <Lock className="w-4 h-4 text-gray-400 absolute left-3 pointer-events-none" />
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        minLength={6}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="At least 6 characters"
+                        className="w-full pl-9 pr-10 py-2 bg-white border border-[#E8DCCF] focus:border-[#802336] focus:ring-1 focus:ring-[#802336] rounded-xl text-xs text-gray-900 placeholder:text-gray-400 outline-none transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 p-1 text-gray-400 hover:text-gray-700 cursor-pointer"
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {mode === 'signup' && (
                     <div>
                       <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1">
-                        Password *
+                        Confirm Password *
                       </label>
                       <div className="relative flex items-center">
                         <Lock className="w-4 h-4 text-gray-400 absolute left-3 pointer-events-none" />
@@ -697,55 +486,117 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
                           type={showPassword ? 'text' : 'password'}
                           required
                           minLength={6}
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          placeholder="At least 6 characters"
-                          className="w-full pl-9 pr-10 py-2 bg-white border border-[#E8DCCF] focus:border-[#802336] focus:ring-1 focus:ring-[#802336] rounded-xl text-xs text-gray-900 placeholder:text-gray-400 outline-none transition-all"
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          placeholder="Re-enter password"
+                          className="w-full pl-9 pr-3 py-2 bg-white border border-[#E8DCCF] focus:border-[#802336] focus:ring-1 focus:ring-[#802336] rounded-xl text-xs text-gray-900 placeholder:text-gray-400 outline-none transition-all"
                         />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-3 p-1 text-gray-400 hover:text-gray-700 cursor-pointer"
-                          aria-label={showPassword ? 'Hide password' : 'Show password'}
-                        >
-                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
                       </div>
                     </div>
+                  )}
 
-                    <button
-                      type="submit"
-                      disabled={loading}
-                      className="w-full bg-[#3B1E22] hover:bg-[#802336] disabled:bg-gray-400 text-[#FAF7F2] py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition-colors shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-[0.99] mt-2"
-                    >
-                      {loading ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          <span>{mode === 'signup' ? 'Creating Account...' : 'Signing In...'}</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>{mode === 'signup' ? 'Claim 10% Off & Register' : 'Sign In'}</span>
-                          <ArrowRight className="w-4 h-4" />
-                        </>
-                      )}
-                    </button>
-                  </form>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full bg-[#3B1E22] hover:bg-[#802336] disabled:bg-gray-400 text-[#FAF7F2] py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition-colors shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-[0.99] mt-2"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>{mode === 'signup' ? 'Creating Account...' : 'Signing In...'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>{mode === 'signup' ? 'Claim 10% Off & Register' : 'Sign In with Mobile'}</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+                </form>
+              )}
 
-                  {/* Switch to Mobile Number Option */}
-                  <div className="text-center pt-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAuthMethod('mobile');
-                        setError(null);
-                      }}
-                      className="text-xs text-[#802336] hover:text-[#3B1E22] font-semibold hover:underline cursor-pointer"
-                    >
-                      📱 Or Login with Mobile Number (Worldwide SMS OTP)
-                    </button>
+              {/* OPTION 2: EMAIL & PASSWORD */}
+              {authMethod === 'email' && (
+                <form onSubmit={handleEmailSubmit} className="space-y-3 pt-1">
+                  {mode === 'signup' && (
+                    <div>
+                      <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1">
+                        Full Name
+                      </label>
+                      <div className="relative flex items-center">
+                        <UserIcon className="w-4 h-4 text-gray-400 absolute left-3 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={displayName}
+                          onChange={(e) => setDisplayName(e.target.value)}
+                          placeholder="e.g. Radhika Sharma"
+                          className="w-full pl-9 pr-3 py-2 bg-white border border-[#E8DCCF] focus:border-[#802336] focus:ring-1 focus:ring-[#802336] rounded-xl text-xs text-gray-900 placeholder:text-gray-400 outline-none transition-all"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1">
+                      Email Address *
+                    </label>
+                    <div className="relative flex items-center">
+                      <Mail className="w-4 h-4 text-gray-400 absolute left-3 pointer-events-none" />
+                      <input
+                        type="email"
+                        required
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="yourname@gmail.com"
+                        className="w-full pl-9 pr-3 py-2 bg-white border border-[#E8DCCF] focus:border-[#802336] focus:ring-1 focus:ring-[#802336] rounded-xl text-xs text-gray-900 placeholder:text-gray-400 outline-none transition-all"
+                      />
+                    </div>
                   </div>
-                </>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1">
+                      Password *
+                    </label>
+                    <div className="relative flex items-center">
+                      <Lock className="w-4 h-4 text-gray-400 absolute left-3 pointer-events-none" />
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        minLength={6}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="At least 6 characters"
+                        className="w-full pl-9 pr-10 py-2 bg-white border border-[#E8DCCF] focus:border-[#802336] focus:ring-1 focus:ring-[#802336] rounded-xl text-xs text-gray-900 placeholder:text-gray-400 outline-none transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 p-1 text-gray-400 hover:text-gray-700 cursor-pointer"
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full bg-[#3B1E22] hover:bg-[#802336] disabled:bg-gray-400 text-[#FAF7F2] py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition-colors shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-[0.99] mt-2"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>{mode === 'signup' ? 'Creating Account...' : 'Signing In...'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>{mode === 'signup' ? 'Claim 10% Off & Register' : 'Sign In'}</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+                </form>
               )}
 
               {/* 1-Click Google Sign-In */}
@@ -788,7 +639,7 @@ export const PromotionalLoginModal: React.FC<PromotionalLoginModalProps> = ({
               {/* Trust Footer */}
               <div className="pt-2 text-center text-[10px] text-gray-400 flex items-center justify-center gap-1">
                 <ShieldCheck className="w-3.5 h-3.5 text-[#0F5B46]" />
-                <span>100% Secure Firebase Authentication • No Spam</span>
+                <span>100% Secure Patron Authentication • No Spam</span>
               </div>
             </>
           )}

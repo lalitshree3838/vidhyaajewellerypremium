@@ -2,9 +2,7 @@
 // VIDHYAA Jewellery Studio - India +91 Mobile Number + Password Auth Endpoint (Hostinger Production)
 require_once dirname(__DIR__) . '/admin/_auth.php';
 
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, x-customer-token, x-admin-token');
+vdhApplyCorsHeaders('POST, OPTIONS', 'Content-Type, Authorization, x-customer-token, x-admin-token');
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
     http_response_code(204);

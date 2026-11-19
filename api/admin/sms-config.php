@@ -2,9 +2,7 @@
 // VIDHYAA Jewellery Studio - Admin SMS Configuration & Diagnostic Endpoint (Hostinger Production)
 require_once __DIR__ . '/_auth.php';
 
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, x-admin-token');
+vdhApplyCorsHeaders('GET, POST, OPTIONS', 'Content-Type, Authorization, x-admin-token');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 header('Expires: 0');

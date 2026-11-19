@@ -2,9 +2,7 @@
 // VIDHYAA Jewellery Studio - Persistent Orders API (Hostinger Production)
 require_once __DIR__ . '/admin/_auth.php';
 
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, x-admin-token, x-customer-token, x-order-token');
+vdhApplyCorsHeaders('GET, POST, PUT, OPTIONS', 'Content-Type, Authorization, x-admin-token, x-customer-token, x-order-token');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 header('Expires: 0');
@@ -17,6 +15,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
 header('Content-Type: application/json; charset=UTF-8');
 
 $rootDir = dirname(__DIR__);
+$dataProductsFile = $rootDir . '/data/products.json';
 $dataOrdersFile = $rootDir . '/data/orders.json';
 $apiOrdersFile = __DIR__ . '/orders';
 $whatsappLogsFile = $rootDir . '/data/whatsapp_logs.json';
@@ -184,6 +183,9 @@ function vdhSanitizeOrder($raw, $existing = null) {
     $src['isPaid'] = ($paymentStatus === 'paid');
     $src['currency'] = strtoupper((string)($src['currency'] ?? 'INR'));
     $src['orderStatus'] = $orderStatus;
+    if (!empty($src['appliedPromo'])) {
+        $src['appliedPromo'] = strtoupper(trim((string)$src['appliedPromo']));
+    }
     $src['upiReference'] = (string)($src['upiReference'] ?? '');
     $src['trackingNumber'] = (string)($src['trackingNumber'] ?? '');
     $src['courierName'] = (string)($src['courierName'] ?? '');
@@ -447,7 +449,7 @@ if ($method === 'POST') {
     $receiptTok = vdhExtractOrderReceiptToken();
     $lookupKey = (string)($payload['id'] ?? $payload['orderNumber']);
 
-    $res = vdhWithFileLock('orders', function () use ($dataOrdersFile, $apiOrdersFile, $payload, $lookupKey, $admin, $customer, $receiptTok) {
+    $res = vdhWithFileLock('orders', function () use ($dataOrdersFile, $apiOrdersFile, $dataProductsFile, $payload, $lookupKey, $admin, $customer, $receiptTok) {
         $orders = vdhReadOrders($dataOrdersFile, $apiOrdersFile);
         [$existing, $existingIdx] = vdhFindOrder($orders, $lookupKey);
 
@@ -455,6 +457,25 @@ if ($method === 'POST') {
             $canUpdateExisting = ($customer && vdhCustomerOwnsOrder($customer, $existing)) || vdhHasValidOrderReceiptToken($existing, $receiptTok);
             if (!$canUpdateExisting) {
                 return ['status' => 403, 'body' => ['success' => false, 'error' => 'Order ID already exists. Cannot overwrite existing order without authorization.']];
+            }
+        }
+
+        if (!$existing || (!empty($payload['items']) && is_array($payload['items']))) {
+            $pricing = vdhValidateAndComputeOrderPricing($payload, $dataProductsFile, (bool)$admin);
+            if (empty($pricing['valid'])) {
+                return ['status' => 400, 'body' => [
+                    'success' => false,
+                    'code' => $pricing['code'] ?? 'INVALID_ORDER_PRICING',
+                    'error' => $pricing['error'] ?? 'Order pricing verification failed.'
+                ]];
+            }
+            $payload['subtotal'] = $pricing['subtotal'];
+            $payload['discount'] = $pricing['discount'];
+            $payload['deliveryCharge'] = $pricing['deliveryCharge'];
+            $payload['total'] = $pricing['totalAmount'];
+            $payload['totalAmount'] = $pricing['totalAmount'];
+            if (!empty($pricing['appliedPromo'])) {
+                $payload['appliedPromo'] = $pricing['appliedPromo'];
             }
         }
 
@@ -471,6 +492,13 @@ if ($method === 'POST') {
                 $payload['paymentEnv'],
                 $payload['isTestOrder']
             );
+            if ($customer && !empty($customer['uid'])) {
+                $payload['userId'] = (string)$customer['uid'];
+            } elseif (!empty($existing['userId'])) {
+                $payload['userId'] = (string)$existing['userId'];
+            } else {
+                unset($payload['userId']);
+            }
             if (($existing['paymentStatus'] ?? '') === 'paid') {
                 $payload['paymentStatus'] = 'paid';
                 $payload['isPaid'] = true;

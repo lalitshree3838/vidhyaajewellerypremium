@@ -21,7 +21,8 @@ import {
   INITIAL_PRODUCTS,
   INITIAL_STORE_SETTINGS,
   isGenuineImageUrl,
-  isGenuineProduct
+  isGenuineProduct,
+  resolveCategoryCoverImage
 } from './sampleData';
 
 const PRODUCTS_COL = 'products';
@@ -1057,12 +1058,15 @@ export async function fetchCategories(): Promise<Category[]> {
     // Retain all dynamic categories, filtering out only deleted or legacy sample ids
     const merged = Array.from(map.values())
       .filter((c) => !LEGACY_CATEGORY_IDS.has(c.id) && !deletedCatIds.has(c.id))
+      .map((c) => ({ ...c, image: resolveCategoryCoverImage(c.id, c.slug, c.image) }))
       .sort((a, b) => (a.order || 0) - (b.order || 0));
     saveCachedCategories(merged);
     return merged.length > 0 ? merged : INITIAL_CATEGORIES;
   } catch (error) {
     console.warn('Error fetching categories from Firestore, using cached or initial:', error);
-    const validCached = cached.filter((c) => !LEGACY_CATEGORY_IDS.has(c.id) && !deletedCatIds.has(c.id));
+    const validCached = cached
+      .filter((c) => !LEGACY_CATEGORY_IDS.has(c.id) && !deletedCatIds.has(c.id))
+      .map((c) => ({ ...c, image: resolveCategoryCoverImage(c.id, c.slug, c.image) }));
     return validCached.length > 0 ? validCached : INITIAL_CATEGORIES.filter((c) => !deletedCatIds.has(c.id));
   }
 }
@@ -1349,6 +1353,7 @@ export function $sanitizeOrder(raw: any): Order | null {
   };
 
   if (raw.userId) sanitized.userId = String(raw.userId);
+  if (raw.appliedPromo) sanitized.appliedPromo = String(raw.appliedPromo).trim().toUpperCase();
   if (raw.paymentId || raw.cf_payment_id) sanitized.paymentId = String(raw.paymentId || raw.cf_payment_id);
   if (raw.cfOrderId !== undefined || raw.cf_order_id !== undefined) sanitized.cfOrderId = raw.cfOrderId ?? raw.cf_order_id;
   if (raw.gatewayOrderId) sanitized.gatewayOrderId = String(raw.gatewayOrderId);

@@ -37,23 +37,15 @@ export const AdminSecurityDashboard: React.FC = () => {
   // Security Sub-tabs
   const [activeTab, setActiveTab] = useState<'overview' | 'audit_logs' | 'sessions' | 'change_password' | '2fa'>('overview');
 
-  // Change Password state
-  const [currentPassword, setCurrentPassword] = useState('');
+  // Password Strength Estimator state
   const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [showNewPassword, setShowNewPassword] = useState(false);
-  const [savingPassword, setSavingPassword] = useState(false);
-  const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
-  const [passwordError, setPasswordError] = useState<string | null>(null);
 
-  // 2FA state
-  const [twoFactorActive, setTwoFactorActive] = useState(true);
-  const [twoFactorEnforced, setTwoFactorEnforced] = useState(true);
+  // TOTP Secret Helper state
   const [totpSecret, setTotpSecret] = useState('JBSWY3DPEHPK3PXP');
   const [backupCodes, setBackupCodes] = useState<string[]>([
     'VDH8-94A2', 'K92F-88BC', 'EM91-34DF', 'QP77-21KL', 'ZZ89-10MK'
   ]);
-  const [showSecretModal, setShowSecretModal] = useState(false);
 
   // Audit Logs
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
@@ -78,49 +70,6 @@ export const AdminSecurityDashboard: React.FC = () => {
       setAuditLogs(logs);
     } finally {
       setLoadingLogs(false);
-    }
-  };
-
-  const handleChangePassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setPasswordError(null);
-    setPasswordSuccess(null);
-
-    if (newPassword !== confirmPassword) {
-      setPasswordError('New password and confirmation do not match.');
-      return;
-    }
-
-    if (!passwordAnalysis.isStrong) {
-      setPasswordError('The new password does not satisfy executive password security standards. Please review requirements.');
-      return;
-    }
-
-    setSavingPassword(true);
-    try {
-      // Simulate cryptographic hash and update
-      await new Promise((r) => setTimeout(r, 1000));
-
-      await logAuditEvent({
-        adminId: user?.uid || 'super_admin',
-        adminEmail,
-        action: 'ADMIN_PASSWORD_CHANGED',
-        category: 'security',
-        ipAddress: '103.212.144.20',
-        userAgent: navigator.userAgent,
-        result: 'success',
-        details: 'Admin password updated with Argon2id cryptographic hashing.'
-      });
-
-      setPasswordSuccess('Password successfully updated and securely hashed.');
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-      loadLogs();
-    } catch (e: any) {
-      setPasswordError('Failed to change password: ' + (e.message || 'Unknown error'));
-    } finally {
-      setSavingPassword(false);
     }
   };
 
@@ -165,7 +114,6 @@ export const AdminSecurityDashboard: React.FC = () => {
     const generated = generateTOTPSecret();
     setTotpSecret(generated.secret);
     setBackupCodes(generated.backupCodes);
-    setShowSecretModal(true);
   };
 
   // Filtered Logs
@@ -185,13 +133,13 @@ export const AdminSecurityDashboard: React.FC = () => {
         <div className="space-y-2 text-center md:text-left">
           <div className="inline-flex items-center gap-2 bg-[#0F4C4A] text-white text-[11px] font-bold uppercase px-3 py-1 rounded-full">
             <ShieldCheck className="w-3.5 h-3.5 text-[#DFB982]" />
-            <span>High-Security Enterprise Vault</span>
+            <span>Server-Verified Admin Access</span>
           </div>
           <h2 className="font-serif text-2xl sm:text-3xl font-bold text-white tracking-wide">
             Administrator Security & Audit Center
           </h2>
           <p className="text-xs sm:text-sm text-gray-300 max-w-xl">
-            OWASP Top 10 compliance, TOTP Two-Factor Authentication, live intrusion detection, and tamper-resistant audit event streaming.
+            Signed backend token verification, server-side credential vault protection, session auto-lock, and studio audit logging.
           </p>
         </div>
 
@@ -200,7 +148,7 @@ export const AdminSecurityDashboard: React.FC = () => {
             <span className="text-[10px] text-gray-400 block uppercase">Security Status</span>
             <span className="text-xs font-bold text-emerald-400 flex items-center gap-1 justify-end">
               <CheckCircle className="w-3.5 h-3.5" />
-              100% Hardened
+              Active Session Guard
             </span>
           </div>
         </div>
@@ -212,8 +160,8 @@ export const AdminSecurityDashboard: React.FC = () => {
           { id: 'overview', label: 'Security Health', icon: ShieldCheck },
           { id: 'audit_logs', label: 'Audit Telemetry Logs', icon: History },
           { id: 'sessions', label: 'Active Sessions', icon: Monitor },
-          { id: 'change_password', label: 'Password Policy', icon: KeyRound },
-          { id: '2fa', label: 'Two-Factor (TOTP)', icon: Smartphone }
+          { id: 'change_password', label: 'Credential Policy', icon: KeyRound },
+          { id: '2fa', label: 'Auth & Recovery Keys', icon: Smartphone }
         ].map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -246,45 +194,45 @@ export const AdminSecurityDashboard: React.FC = () => {
               Super Admin Session
             </h3>
             <p className="text-xs text-gray-400">
-              Authenticated via secure token: <strong className="text-white">{adminEmail}</strong>
+              Authenticated via backend HMAC token & Google Workspace owner check: <strong className="text-white">{adminEmail}</strong>
             </p>
             <div className="pt-2 flex items-center gap-2 text-[11px] text-gray-500">
               <Clock className="w-3.5 h-3.5 text-[#DFB982]" />
-              <span>Last verified: Just now</span>
+              <span>15-minute inactivity auto-lock enabled</span>
             </div>
           </div>
 
           <div className="bg-[#1C1215] border border-gray-800 p-6 rounded-2xl space-y-3">
             <div className="flex items-center justify-between text-xs text-gray-400">
-              <span>2FA Enforcement</span>
-              <span className="text-emerald-400 font-bold">Enabled</span>
+              <span>Workspace & Backend Auth</span>
+              <span className="text-emerald-400 font-bold">Configured</span>
             </div>
             <h3 className="font-serif text-lg font-bold text-white">
-              TOTP Authenticator Active
+              Google SSO + Vault Credentials
             </h3>
             <p className="text-xs text-gray-400">
-              Requires 6-digit cryptographic verification code on all new administrative logins.
+              Supports Google Workspace Sign-In for the verified store owner and server-verified admin credentials.
             </p>
             <div className="pt-2 flex items-center gap-2 text-[11px] text-[#DFB982]">
               <Smartphone className="w-3.5 h-3.5" />
-              <span>5 Recovery keys generated</span>
+              <span>Server token validated via /api/admin/verify-session</span>
             </div>
           </div>
 
           <div className="bg-[#1C1215] border border-gray-800 p-6 rounded-2xl space-y-3">
             <div className="flex items-center justify-between text-xs text-gray-400">
-              <span>Brute Force Mitigation</span>
+              <span>Credential Storage</span>
               <span className="text-emerald-400 font-bold">Protected</span>
             </div>
             <h3 className="font-serif text-lg font-bold text-white">
-              Automated Lockout
+              Protected Server Vault
             </h3>
             <p className="text-xs text-gray-400">
-              Accounts lock for 15 minutes upon 5 failed attempts. Zero plain-text credentials stored.
+              Admin credentials reside outside the public bundle in <span className="font-mono text-gray-300">.admin-secrets/admin-credentials.json</span> with direct HTTP access blocked.
             </p>
             <div className="pt-2 flex items-center gap-2 text-[11px] text-gray-500">
               <Lock className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Argon2id Hashing Standard</span>
+              <span>scrypt / PHP password_verify + HMAC-SHA256</span>
             </div>
           </div>
         </div>
@@ -464,51 +412,30 @@ export const AdminSecurityDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 4: CHANGE PASSWORD */}
+      {/* TAB 4: CREDENTIAL POLICY & PASSWORD STRENGTH CHECK */}
       {activeTab === 'change_password' && (
         <div className="max-w-2xl bg-[#1C1215] border border-gray-800 rounded-3xl p-6 sm:p-8 space-y-6">
           <div>
             <h3 className="font-serif text-xl font-bold text-white">
-              Update Administrator Password
+              Administrator Credential Policy
             </h3>
-            <p className="text-xs text-gray-400">
-              Enforces NIST SP 800-63B standard: minimum 12 characters, complex character set, and automated checks against known breached passwords.
+            <p className="text-xs text-gray-400 mt-1">
+              For security, primary administrator password hashes are stored server-side in <span className="font-mono text-gray-300">.admin-secrets/admin-credentials.json</span> (never editable from browser storage). Owner Google Workspace SSO for <strong className="text-white">{adminEmail}</strong> is verified via signed Firebase ID tokens on the server.
             </p>
           </div>
 
-          {passwordSuccess && (
-            <div className="p-4 rounded-xl bg-emerald-950/80 border border-emerald-600 flex items-center gap-2 text-xs text-emerald-200">
-              <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-              <span>{passwordSuccess}</span>
-            </div>
-          )}
+          <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-800/50 text-xs text-amber-200 flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+            <span>
+              To rotate server administrator credentials on Hostinger or Node, update the hashed entry in <span className="font-mono">.admin-secrets/admin-credentials.json</span> via SSH/server provisioning rather than client forms.
+            </span>
+          </div>
 
-          {passwordError && (
-            <div className="p-4 rounded-xl bg-red-950/80 border border-red-700 flex items-center gap-2 text-xs text-red-200">
-              <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
-              <span>{passwordError}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleChangePassword} className="space-y-5">
-            <div>
-              <label className="block text-xs font-semibold text-[#DFB982] uppercase mb-1.5">
-                Current Password
-              </label>
-              <input
-                type="password"
-                required
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                placeholder="Enter current password"
-                className="w-full bg-[#120B0D] border border-gray-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#DFB982]"
-              />
-            </div>
-
+          <div className="space-y-4">
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label className="block text-xs font-semibold text-[#DFB982] uppercase">
-                  New High-Entropy Password
+                  Offline Password Strength Checker
                 </label>
                 <button
                   type="button"
@@ -520,14 +447,12 @@ export const AdminSecurityDashboard: React.FC = () => {
               </div>
               <input
                 type={showNewPassword ? 'text' : 'password'}
-                required
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Min 12 chars (Upper, Lower, Number, Symbol)"
+                placeholder="Test candidate password against complexity rules (local only)"
                 className="w-full bg-[#120B0D] border border-gray-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#DFB982]"
               />
 
-              {/* Real-time Strength & Breach Feedback */}
               {newPassword.length > 0 && (
                 <div className="mt-3 p-3.5 rounded-xl bg-[#120B0D] border border-gray-800 space-y-2 text-xs">
                   <div className="flex items-center justify-between">
@@ -588,53 +513,31 @@ export const AdminSecurityDashboard: React.FC = () => {
                 </div>
               )}
             </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-[#DFB982] uppercase mb-1.5">
-                Confirm New Password
-              </label>
-              <input
-                type="password"
-                required
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Re-enter new password"
-                className="w-full bg-[#120B0D] border border-gray-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#DFB982]"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={savingPassword || !passwordAnalysis.isStrong}
-              className="bg-[#0F4C4A] hover:bg-[#0A3635] text-white py-3.5 px-8 rounded-xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shadow-md disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {savingPassword ? 'Hashing & Updating...' : 'Update Password Securely'}
-            </button>
-          </form>
+          </div>
         </div>
       )}
 
-      {/* TAB 5: TWO-FACTOR TOTP MANAGEMENT */}
+      {/* TAB 5: AUTHENTICATION & SECRET KEY HELPER */}
       {activeTab === '2fa' && (
         <div className="max-w-2xl bg-[#1C1215] border border-gray-800 rounded-3xl p-6 sm:p-8 space-y-6">
           <div className="flex items-center justify-between pb-4 border-b border-gray-800">
             <div>
               <h3 className="font-serif text-xl font-bold text-white">
-                Two-Factor Authentication (TOTP)
+                Authentication & Key Reference
               </h3>
               <p className="text-xs text-gray-400">
-                Protect administrative access with Google Authenticator, Authy, or hardware tokens.
+                Owner login is protected via Google Workspace SSO and backend signed tokens. TOTP helper keys below are for optional server-side provisioning.
               </p>
             </div>
-            <span className="bg-emerald-950 text-emerald-400 border border-emerald-800 text-xs font-bold px-3 py-1 rounded-full uppercase">
-              Active
+            <span className="bg-[#0F4C4A]/40 text-[#DFB982] border border-[#0F4C4A] text-xs font-bold px-3 py-1 rounded-full uppercase">
+              SSO + Token
             </span>
           </div>
 
           <div className="space-y-4">
             <div className="p-4 bg-[#120B0D] rounded-2xl border border-gray-800 space-y-2">
               <span className="text-xs text-gray-400 uppercase tracking-wider block">
-                Current Secret Key (Base32)
+                Generated Base32 Key Preview (Helper Only)
               </span>
               <div className="flex items-center justify-between">
                 <span className="font-mono text-sm text-[#DFB982] tracking-widest">
@@ -645,17 +548,17 @@ export const AdminSecurityDashboard: React.FC = () => {
                   onClick={handleGenerateNew2FA}
                   className="text-xs text-[#DFB982] hover:text-white underline cursor-pointer"
                 >
-                  Regenerate Secret
+                  Generate New Preview
                 </button>
               </div>
             </div>
 
             <div>
               <h4 className="font-serif text-sm font-bold text-white mb-2">
-                Emergency One-Time Recovery Codes
+                Sample Reference Recovery Codes
               </h4>
               <p className="text-xs text-gray-400 mb-3">
-                Store these backup keys in a secure offline vault. Each key can be used once to regain access if your mobile authenticator is lost.
+                If you enable server-side TOTP in <span className="font-mono">.admin-secrets/admin-credentials.json</span>, store offline recovery codes safely outside the web root.
               </p>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {backupCodes.map((code, idx) => (
@@ -667,18 +570,6 @@ export const AdminSecurityDashboard: React.FC = () => {
                   </div>
                 ))}
               </div>
-            </div>
-
-            <div className="pt-2 flex items-center gap-3">
-              <label className="flex items-center gap-2 cursor-pointer text-xs text-gray-300">
-                <input
-                  type="checkbox"
-                  checked={twoFactorEnforced}
-                  onChange={(e) => setTwoFactorEnforced(e.target.checked)}
-                  className="rounded bg-[#120B0D] border-[#DFB982] text-[#DFB982]"
-                />
-                <span>Enforce 2FA for all store managers and administrative staff</span>
-              </label>
             </div>
           </div>
         </div>

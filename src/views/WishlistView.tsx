@@ -4,7 +4,11 @@ import { Product, ProductVariation } from '../types';
 import { useWishlist } from '../context/WishlistContext';
 import { useCart } from '../context/CartContext';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
-import { isGenuineImageUrl } from '../lib/sampleData';
+import {
+  JEWELLERY_PLACEHOLDER_IMAGE,
+  resolveSafeProductImageUrl,
+  useAvailableMediaInventory
+} from '../lib/storageService';
 
 interface WishlistViewProps {
   products: Product[];
@@ -19,6 +23,7 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
 }) => {
   const { wishlistIds, toggleWishlist } = useWishlist();
   const { addToCart } = useCart();
+  const mediaInventory = useAvailableMediaInventory();
 
   const wishlistedProducts = products.filter((p) => wishlistIds.includes(p.id));
 
@@ -82,16 +87,17 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
               className="relative aspect-[4/5] bg-[#FAF7F2] cursor-pointer flex items-center justify-center"
               onClick={() => onSelectProduct(prod)}
             >
-              {Boolean(prod.images?.[0] && isGenuineImageUrl(prod.images[0])) && (
-                <img
-                  src={prod.images[0]}
-                  alt={prod.name}
-                  className="w-full h-full object-contain p-2"
-                  onError={(e) => {
-                    (e.target as HTMLElement).style.display = 'none';
-                  }}
-                />
-              )}
+              <img
+                src={resolveSafeProductImageUrl(prod.images?.[0], mediaInventory)}
+                alt={prod.name}
+                className="w-full h-full object-contain p-2"
+                onError={(e) => {
+                  const img = e.currentTarget;
+                  if (img.src !== JEWELLERY_PLACEHOLDER_IMAGE) {
+                    img.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                  }
+                }}
+              />
               <button
                 onClick={(e) => {
                   e.stopPropagation();

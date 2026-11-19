@@ -28,8 +28,12 @@ import { Product, ProductVariation, LiveChatMessage, LiveProductShowcase } from 
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { MetadataManager } from '../components/MetadataManager';
-import { JEWELLERY_PLACEHOLDER_IMAGE } from '../lib/storageService';
-import { isGenuineProduct, isGenuineImageUrl } from '../lib/sampleData';
+import {
+  JEWELLERY_PLACEHOLDER_IMAGE,
+  resolveSafeProductImageUrl,
+  useAvailableMediaInventory
+} from '../lib/storageService';
+import { isGenuineProduct } from '../lib/sampleData';
 
 interface GoLiveViewProps {
   products: Product[];
@@ -76,6 +80,7 @@ export const GoLiveView: React.FC<GoLiveViewProps> = ({
 }) => {
   const { addToCart, openCart } = useCart();
   const { user, isAdmin } = useAuth();
+  const mediaInventory = useAvailableMediaInventory();
 
   // Mode: Host or Viewer
   const [isHostMode, setIsHostMode] = useState<boolean>(isAdmin);
@@ -93,12 +98,12 @@ export const GoLiveView: React.FC<GoLiveViewProps> = ({
   const [streamDuration, setStreamDuration] = useState<number>(412); // seconds
 
   const verifiedProducts = useMemo(() => {
-    return products.filter((p) => isGenuineProduct(p) && p.images && p.images.some(isGenuineImageUrl));
+    return products.filter((p) => isGenuineProduct(p));
   }, [products]);
 
   // Pinned Product for Live Shopping
   const [pinnedProduct, setPinnedProduct] = useState<Product>(() => {
-    return products.find((p) => isGenuineProduct(p) && p.images && p.images.some(isGenuineImageUrl)) || products[0];
+    return products.find((p) => isGenuineProduct(p)) || products[0];
   });
   const [selectedVariation, setSelectedVariation] = useState<ProductVariation | undefined>(
     pinnedProduct?.variations?.[0]
@@ -405,7 +410,10 @@ export const GoLiveView: React.FC<GoLiveViewProps> = ({
                 /* High-Definition Studio Showcase Feed */
                 <div className="relative w-full h-full">
                   <img
-                    src={pinnedProduct?.images[0] || products.find(p => p.images && p.images.length > 0)?.images[0] || JEWELLERY_PLACEHOLDER_IMAGE}
+                    src={resolveSafeProductImageUrl(
+                      pinnedProduct?.images?.[0] || products.find((p) => p.images && p.images.length > 0)?.images?.[0],
+                      mediaInventory
+                    )}
                     alt="Live Studio Stream"
                     className="w-full h-full object-cover transition-all duration-700 filter brightness-95"
                   />
@@ -530,17 +538,11 @@ export const GoLiveView: React.FC<GoLiveViewProps> = ({
               <div className="bg-[#241C1A] rounded-2xl border border-[#3B1E22] p-5 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-5 animate-fadeIn">
                 <div className="flex items-center gap-4 w-full sm:w-auto">
                   <div className="relative w-20 h-20 rounded-xl overflow-hidden border border-[#DFB982]/40 flex-shrink-0">
-                    {(selectedVariation?.image || pinnedProduct.images?.[0]) ? (
-                      <img
-                        src={selectedVariation?.image || pinnedProduct.images[0]}
-                        alt={pinnedProduct.name}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className="w-full h-full bg-[#181113] flex items-center justify-center text-[#DFB982]">
-                        <Sparkles className="w-6 h-6 text-[#DFB982]" />
-                      </div>
-                    )}
+                    <img
+                      src={resolveSafeProductImageUrl(selectedVariation?.image || pinnedProduct.images?.[0], mediaInventory)}
+                      alt={pinnedProduct.name}
+                      className="w-full h-full object-cover"
+                    />
                     <span className="absolute top-1 left-1 bg-[#802336] text-[9px] font-bold text-white px-1.5 py-0.2 rounded uppercase">
                       ON AIR
                     </span>
@@ -748,17 +750,11 @@ export const GoLiveView: React.FC<GoLiveViewProps> = ({
                   className="py-3 flex items-center justify-between gap-4 hover:bg-[#2F2422] p-2 rounded-xl transition-colors"
                 >
                   <div className="flex items-center gap-3">
-                    {prod.images?.[0] ? (
-                      <img
-                        src={prod.images[0]}
-                        alt=""
-                        className="w-12 h-12 object-cover rounded-lg border border-[#3B1E22]"
-                      />
-                    ) : (
-                      <div className="w-12 h-12 rounded-lg bg-[#181113] border border-[#3B1E22] flex items-center justify-center text-[#DFB982] flex-shrink-0">
-                        <Sparkles className="w-5 h-5 text-[#DFB982]" />
-                      </div>
-                    )}
+                    <img
+                      src={resolveSafeProductImageUrl(prod.images?.[0], mediaInventory)}
+                      alt=""
+                      className="w-12 h-12 object-cover rounded-lg border border-[#3B1E22]"
+                    />
                     <div>
                       <h4 className="font-bold text-white text-xs">{prod.name}</h4>
                       <span className="text-[11px] text-gray-400">

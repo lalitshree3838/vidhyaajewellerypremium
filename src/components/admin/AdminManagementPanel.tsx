@@ -59,6 +59,7 @@ export const AdminManagementPanel: React.FC = () => {
   const [newEmail, setNewEmail] = useState('');
   const [newName, setNewName] = useState('');
   const [newRole, setNewRole] = useState<AdminRole>('admin');
+  const [adminNotice, setAdminNotice] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
 
   const saveAdmins = (list: AdminUser[]) => {
     setAdmins(list);
@@ -97,6 +98,10 @@ export const AdminManagementPanel: React.FC = () => {
       details: `Invited new administrator ${newAdmin.name} (${newAdmin.email}) with role ${newAdmin.role}`
     });
 
+    setAdminNotice({
+      type: 'success',
+      text: `Administrator ${newAdmin.name} (${newAdmin.email}) added to local studio roster.`
+    });
     setNewEmail('');
     setNewName('');
     setModalOpen(false);
@@ -104,9 +109,13 @@ export const AdminManagementPanel: React.FC = () => {
 
   const handleToggleStatus = async (admin: AdminUser) => {
     if (admin.role === 'super_admin') {
-      alert('Cannot disable the primary Super Administrator account.');
+      setAdminNotice({
+        type: 'error',
+        text: 'Cannot disable the primary Super Administrator account.'
+      });
       return;
     }
+    setAdminNotice(null);
 
     const nextStatus: 'active' | 'disabled' = admin.status === 'active' ? 'disabled' : 'active';
     const updated = admins.map((a) => (a.id === admin.id ? { ...a, status: nextStatus } : a));
@@ -138,13 +147,43 @@ export const AdminManagementPanel: React.FC = () => {
         </div>
 
         <button
-          onClick={() => setModalOpen(true)}
+          onClick={() => {
+            setAdminNotice(null);
+            setModalOpen(true);
+          }}
           className="bg-[#0F4C4A] hover:bg-[#0A3635] text-white px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-2 cursor-pointer shadow-md transition-all"
         >
           <UserPlus className="w-4 h-4 text-[#DFB982]" />
           <span>Invite New Administrator</span>
         </button>
       </div>
+
+      {adminNotice && (
+        <div
+          className={`p-3.5 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 ${
+            adminNotice.type === 'error'
+              ? 'bg-red-950/70 border border-red-700 text-red-200'
+              : 'bg-emerald-950/70 border border-emerald-700 text-emerald-200'
+          }`}
+        >
+          <span className="flex items-center gap-2">
+            {adminNotice.type === 'error' ? (
+              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+            ) : (
+              <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+            )}
+            <span>{adminNotice.text}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setAdminNotice(null)}
+            className="text-gray-400 hover:text-white cursor-pointer"
+            aria-label="Dismiss notice"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">

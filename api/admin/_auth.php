@@ -196,6 +196,211 @@ function vdhGetSessionSecret(): string {
     return $secret;
 }
 
+function vdhAllowedCorsOrigin(): string {
+    $origin = trim((string)($_SERVER['HTTP_ORIGIN'] ?? ''));
+    if ($origin === '') return '';
+
+    if (preg_match('#^https://(?:www\.)?vidhyaajewellerystudio\.com$#i', $origin)) {
+        return $origin;
+    }
+    if (preg_match('#^https?://(?:localhost|127\.0\.0\.1)(?::\d+)?$#i', $origin)) {
+        return $origin;
+    }
+    if (preg_match('#^https://[a-z0-9-]+\.run\.app$#i', $origin)) {
+        return $origin;
+    }
+
+    $extraRaw = vdhEnv('ALLOWED_ORIGINS');
+    if ($extraRaw !== '') {
+        foreach (explode(',', $extraRaw) as $cand) {
+            if (trim($cand) === $origin) {
+                return $origin;
+            }
+        }
+    }
+    return '';
+}
+
+function vdhApplyCorsHeaders(string $methods = 'GET, POST, PUT, DELETE, OPTIONS', string $headers = 'Content-Type, Authorization, x-admin-token, x-customer-token, x-order-token'): void {
+    header('Vary: Origin');
+    $allowed = vdhAllowedCorsOrigin();
+    if ($allowed !== '') {
+        header('Access-Control-Allow-Origin: ' . $allowed);
+    }
+    header('Access-Control-Allow-Methods: ' . $methods);
+    header('Access-Control-Allow-Headers: ' . $headers);
+}
+
+function vdhComputePromoDiscount(float $subtotal, string $rawPromo): float {
+    $code = strtoupper(trim($rawPromo));
+    if ($code === '' || $subtotal <= 0) return 0.0;
+    $discount = 0.0;
+    if ($code === 'VIDHYAA10' || $code === 'ROYAL10') {
+        $discount = round($subtotal * 0.10);
+    } elseif ($code === 'LIVESTUDIO15') {
+        $discount = round($subtotal * 0.15);
+    } elseif ($code === 'FESTIVE500') {
+        $discount = $subtotal >= 2500 ? 500.0 : 0.0;
+    } elseif ($code === 'BRIDALVIP') {
+        $discount = $subtotal >= 5000 ? round($subtotal * 0.15) : 0.0;
+    }
+    return max(0.0, min($subtotal, $discount));
+}
+
+function vdhValidateAndComputeOrderPricing(array $body, string $productsFile, bool $allowAdminBypass = false): array {
+    $toMoney = static function ($val, float $fallback = 0.0): float {
+        if (is_int($val) || is_float($val)) return (float)$val;
+        if (is_string($val)) {
+            $cleaned = str_replace(['₹', ',', ' '], '', $val);
+            if (is_numeric($cleaned)) return (float)$cleaned;
+        }
+        return $fallback;
+    };
+
+    $rawItems = is_array($body['items'] ?? null) ? $body['items'] : [];
+    if (empty($rawItems)) {
+        if ($allowAdminBypass) {
+            $amt = max(0.0, $toMoney($body['orderAmount'] ?? ($body['totalAmount'] ?? ($body['total'] ?? 0)), 0.0));
+            return [
+                'valid' => true,
+                'subtotal' => max(0.0, $toMoney($body['subtotal'] ?? $amt, $amt)),
+                'discount' => max(0.0, $toMoney($body['discount'] ?? 0, 0.0)),
+                'deliveryCharge' => max(0.0, $toMoney($body['deliveryCharge'] ?? 0, 0.0)),
+                'totalAmount' => $amt,
+                'appliedPromo' => strtoupper(trim((string)($body['appliedPromo'] ?? ($body['promoCode'] ?? '')))),
+            ];
+        }
+        return [
+            'valid' => false,
+            'code' => 'EMPTY_ITEMS',
+            'error' => 'Order must contain at least one catalog item for price verification.',
+        ];
+    }
+
+    $products = [];
+    if (is_file($productsFile) && is_readable($productsFile)) {
+        $decoded = json_decode((string)@file_get_contents($productsFile), true);
+        if (is_array($decoded)) {
+            foreach ($decoded as $p) {
+                if (is_array($p) && !empty($p['id'])) {
+                    $products[(string)$p['id']] = $p;
+                }
+            }
+        }
+    }
+
+    $computedSubtotal = 0.0;
+    foreach ($rawItems as $it) {
+        if (!is_array($it)) continue;
+        $qty = (int)round($toMoney($it['quantity'] ?? 0, 0.0));
+        if ($qty < 1 || $qty > 50) {
+            return [
+                'valid' => false,
+                'code' => 'INVALID_QUANTITY',
+                'error' => 'Each item quantity must be between 1 and 50.',
+            ];
+        }
+        $prodId = trim((string)($it['productId'] ?? ''));
+        $prod = $products[$prodId] ?? null;
+        if (!$prod) {
+            if ($allowAdminBypass) {
+                $computedSubtotal += max(0.0, $toMoney($it['price'] ?? 0, 0.0)) * $qty;
+                continue;
+            }
+            return [
+                'valid' => false,
+                'code' => 'UNKNOWN_PRODUCT',
+                'error' => "Catalog item '{$prodId}' could not be verified.",
+            ];
+        }
+
+        $catalogPrice = max(0.0, $toMoney($prod['price'] ?? 0, 0.0));
+        if ($catalogPrice <= 0 && !$allowAdminBypass) {
+            return [
+                'valid' => false,
+                'code' => 'INVALID_CATALOG_PRICE',
+                'error' => 'Catalog pricing unavailable for product.',
+            ];
+        }
+        if (isset($it['price'])) {
+            $clientUnit = $toMoney($it['price'], -1.0);
+            if (!$allowAdminBypass && abs($clientUnit - $catalogPrice) > 1.0) {
+                return [
+                    'valid' => false,
+                    'code' => 'PRICE_TAMPER_DETECTED',
+                    'error' => "Unit price mismatch for '{$prodId}'. Please refresh your bag and retry.",
+                ];
+            }
+        }
+        $computedSubtotal += $catalogPrice * $qty;
+    }
+
+    $promoCode = strtoupper(trim((string)($body['appliedPromo'] ?? ($body['promoCode'] ?? ''))));
+    $clientDiscount = max(0.0, $toMoney($body['discount'] ?? 0, 0.0));
+    $expectedDiscount = $promoCode !== '' ? vdhComputePromoDiscount($computedSubtotal, $promoCode) : 0.0;
+
+    if (!$allowAdminBypass) {
+        if ($promoCode !== '' && $expectedDiscount == 0.0 && $clientDiscount > 0.0) {
+            return [
+                'valid' => false,
+                'code' => 'INVALID_PROMO_DISCOUNT',
+                'error' => "Promo code '{$promoCode}' is invalid or minimum cart value is not met.",
+            ];
+        }
+        if ($promoCode === '' && $clientDiscount > 0.0) {
+            return [
+                'valid' => false,
+                'code' => 'PRICE_OR_DISCOUNT_MISMATCH',
+                'error' => 'Unrecognized discount applied without a valid promotional code.',
+            ];
+        }
+        if (abs($clientDiscount - $expectedDiscount) > 2.0) {
+            return [
+                'valid' => false,
+                'code' => 'PRICE_OR_DISCOUNT_MISMATCH',
+                'error' => 'Promotional discount amount does not match server calculation.',
+            ];
+        }
+    }
+
+    $finalDiscount = $allowAdminBypass ? $clientDiscount : $expectedDiscount;
+    $expectedDelivery = $computedSubtotal > 0.0 ? 100.0 : 0.0;
+    $deliveryCharge = ($allowAdminBypass && array_key_exists('deliveryCharge', $body))
+        ? max(0.0, $toMoney($body['deliveryCharge'], $expectedDelivery))
+        : $expectedDelivery;
+
+    if (!$allowAdminBypass && array_key_exists('deliveryCharge', $body)) {
+        $clientDelivery = $toMoney($body['deliveryCharge'], -1.0);
+        if (abs($clientDelivery - $expectedDelivery) > 2.0) {
+            return [
+                'valid' => false,
+                'code' => 'DELIVERY_CHARGE_MISMATCH',
+                'error' => 'Shipping charge does not match standard ₹100 flat delivery.',
+            ];
+        }
+    }
+
+    $expectedTotal = max(1.0, round($computedSubtotal - $finalDiscount + $deliveryCharge, 2));
+    $clientTotal = $toMoney($body['orderAmount'] ?? ($body['totalAmount'] ?? ($body['total'] ?? 0)), 0.0);
+
+    if (!$allowAdminBypass && $clientTotal > 0.0 && abs($clientTotal - $expectedTotal) > 2.0) {
+        return [
+            'valid' => false,
+            'code' => 'TOTAL_AMOUNT_MISMATCH',
+            'error' => "Submitted order total (₹{$clientTotal}) does not match verified server total (₹{$expectedTotal}).",
+        ];
+    }
+
+    return [
+        'valid' => true,
+        'subtotal' => $computedSubtotal,
+        'discount' => $finalDiscount,
+        'deliveryCharge' => $deliveryCharge,
+        'totalAmount' => ($allowAdminBypass && $clientTotal > 0.0) ? $clientTotal : $expectedTotal,
+        'appliedPromo' => $promoCode,
+    ];
+}
+
 function vdhSendJson(int $status, array $payload): void {
     http_response_code($status);
     header('Content-Type: application/json; charset=UTF-8');

@@ -2,9 +2,7 @@
 // VIDHYAA Jewellery Studio - Cashfree PG API & Signed Webhook Endpoint (Hostinger Production)
 require_once dirname(__DIR__) . '/admin/_auth.php';
 
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, x-admin-token, x-customer-token, x-order-token, x-webhook-signature, x-webhook-timestamp');
+vdhApplyCorsHeaders('GET, POST, OPTIONS', 'Content-Type, Authorization, x-admin-token, x-customer-token, x-order-token, x-webhook-signature, x-webhook-timestamp');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 header('Expires: 0');
@@ -19,6 +17,7 @@ header('Content-Type: application/json; charset=UTF-8');
 $rootDir = dirname(__DIR__, 2);
 $outsideSecretsFile = vdhOutsideSecretsFilePath('cashfree-config.json') ?? (dirname($rootDir) . '/.admin-secrets/cashfree-config.json');
 $envFile = $rootDir . '/.env';
+$dataProductsFile = $rootDir . '/data/products.json';
 $dataOrdersFile = $rootDir . '/data/orders.json';
 $apiOrdersFile = dirname(__DIR__) . '/orders';
 
@@ -324,12 +323,25 @@ if ($action === 'create-order' && $method === 'POST') {
         ]);
     }
 
+    $admin = vdhAuthenticateAdmin();
+    $customer = vdhAuthenticateCustomer();
+
     $rawOrderId = trim((string)($body['orderNumber'] ?? ($body['orderId'] ?? 'VDH-' . substr((string)time(), -6))));
     $safeOrderId = cfSanitizeOrderId($rawOrderId);
     if ($safeOrderId === '') {
         vdhSendJson(400, ['success' => false, 'configured' => true, 'error' => 'Valid orderNumber is required.']);
     }
-    $amount = round((float)($body['orderAmount'] ?? ($body['totalAmount'] ?? 0)), 2);
+
+    $pricing = vdhValidateAndComputeOrderPricing($body, $dataProductsFile, (bool)$admin);
+    if (empty($pricing['valid'])) {
+        vdhSendJson(400, [
+            'success' => false,
+            'configured' => true,
+            'code' => $pricing['code'] ?? 'INVALID_ORDER_PRICING',
+            'error' => $pricing['error'] ?? 'Order pricing verification failed.'
+        ]);
+    }
+    $amount = round((float)$pricing['totalAmount'], 2);
     if ($amount <= 0) {
         vdhSendJson(400, ['success' => false, 'configured' => true, 'error' => 'Order amount must exceed ₹0.']);
     }
@@ -339,8 +351,6 @@ if ($action === 'create-order' && $method === 'POST') {
         vdhSendJson(400, ['success' => false, 'configured' => true, 'error' => $urlErr ?: 'Invalid returnUrl.']);
     }
 
-    $admin = vdhAuthenticateAdmin();
-    $customer = vdhAuthenticateCustomer();
     $resolvedUserId = null;
     if ($admin) {
         $resolvedUserId = isset($body['userId']) ? trim((string)$body['userId']) : ($admin['uid'] ?? null);
@@ -377,6 +387,12 @@ if ($action === 'create-order' && $method === 'POST') {
             'error' => $msg
         ]);
     }
+
+    $cleanupInflight = static function () use ($inflightFile): void {
+        if (is_file($inflightFile)) {
+            @unlink($inflightFile);
+        }
+    };
 
     try {
         $rawPhone = preg_replace('/\D+/', '', (string)($body['customerPhone'] ?? ''));
@@ -428,6 +444,7 @@ if ($action === 'create-order' && $method === 'POST') {
         [$status, $respData, $curlErr] = cfHttpRequest('POST', $creds['baseUrl'] . '/orders', $headers, json_encode($payload));
 
         if ($status < 200 || $status >= 300 || empty($respData['payment_session_id'])) {
+            $cleanupInflight();
             vdhSendJson(502, [
                 'success' => false,
                 'configured' => true,
@@ -438,7 +455,7 @@ if ($action === 'create-order' && $method === 'POST') {
         }
 
         $isSandbox = ($creds['env'] === 'SANDBOX');
-        $saveResult = vdhWithFileLock('orders', function () use ($dataOrdersFile, $apiOrdersFile, $body, $respData, $rawOrderId, $safeOrderId, $amount, $creds, $isSandbox, $resolvedUserId) {
+        $saveResult = vdhWithFileLock('orders', function () use ($dataOrdersFile, $apiOrdersFile, $body, $respData, $rawOrderId, $safeOrderId, $amount, $pricing, $creds, $isSandbox, $resolvedUserId) {
             $orders = cfReadOrders($dataOrdersFile, $apiOrdersFile);
             [$existingByRaw] = cfFindOrder($orders, $rawOrderId);
             [$existingBySafe] = cfFindOrder($orders, $safeOrderId);
@@ -457,9 +474,9 @@ if ($action === 'create-order' && $method === 'POST') {
                 'customerPhone' => (string)($body['customerPhone'] ?? ''),
                 'shippingAddress' => is_array($body['shippingAddress'] ?? null) ? $body['shippingAddress'] : [],
                 'items' => is_array($body['items'] ?? null) ? $body['items'] : [],
-                'subtotal' => (float)($body['subtotal'] ?? $amount),
-                'discount' => (float)($body['discount'] ?? 0),
-                'deliveryCharge' => (float)($body['deliveryCharge'] ?? 0),
+                'subtotal' => (float)$pricing['subtotal'],
+                'discount' => (float)$pricing['discount'],
+                'deliveryCharge' => (float)$pricing['deliveryCharge'],
                 'totalAmount' => $amount,
                 'total' => $amount,
                 'giftItem' => $body['giftItem'] ?? null,
@@ -473,12 +490,16 @@ if ($action === 'create-order' && $method === 'POST') {
                 'createdAt' => $now,
                 'updatedAt' => $now
             ];
+            if (!empty($pricing['appliedPromo'])) {
+                $orderRecord['appliedPromo'] = $pricing['appliedPromo'];
+            }
             array_unshift($orders, $orderRecord);
             cfWriteOrders($orders, $dataOrdersFile, $apiOrdersFile);
             return ['conflict' => false, 'order' => $orderRecord];
         });
 
         if (!empty($saveResult['conflict'])) {
+            $cleanupInflight();
             vdhSendJson(409, [
                 'success' => false,
                 'code' => 'ORDER_ALREADY_EXISTS',
@@ -487,6 +508,7 @@ if ($action === 'create-order' && $method === 'POST') {
         }
 
         $pendingOrder = $saveResult['order'];
+        $cleanupInflight();
         vdhSendJson(200, [
             'success' => true,
             'configured' => true,
@@ -503,9 +525,7 @@ if ($action === 'create-order' && $method === 'POST') {
             'order' => $pendingOrder
         ]);
     } finally {
-        if (is_file($inflightFile)) {
-            @unlink($inflightFile);
-        }
+        $cleanupInflight();
     }
 }
 
@@ -624,7 +644,7 @@ if ($action === 'verify-order' && $method === 'POST') {
     }
 
     $outcome = vdhWithFileLock('orders', function () use (
-        $dataOrdersFile, $apiOrdersFile, $orderId, $safeOrderId, $body, $ordData, $rawStatus,
+        $dataOrdersFile, $apiOrdersFile, $dataProductsFile, $orderId, $safeOrderId, $body, $ordData, $rawStatus,
         $latestPay, $latestPayStatus, $paidAmount, $paidCurrency, $hasPaidStatus, $creds, $isSandbox,
         $paymentDetails, $admin, $customer, $receiptTok
     ) {
@@ -670,12 +690,29 @@ if ($action === 'verify-order' && $method === 'POST') {
         if ($hasPaidStatus && $paidCurrency === 'INR' && ($expectedAmount <= 0 || $paidAmount + 0.01 >= $expectedAmount)) {
             $safeClientMeta = [];
             if (!$target && is_array($body['orderData'] ?? null)) {
-                $allowedFields = ['orderNumber', 'customerName', 'customerEmail', 'customerPhone', 'shippingAddress', 'items', 'subtotal', 'discount', 'deliveryCharge', 'giftItem', 'notes'];
+                $allowedFields = ['orderNumber', 'customerName', 'customerEmail', 'customerPhone', 'shippingAddress', 'items', 'subtotal', 'discount', 'deliveryCharge', 'appliedPromo', 'giftItem', 'notes'];
                 if ($admin) {
                     $allowedFields[] = 'userId';
                 }
                 foreach ($allowedFields as $k) {
                     if (isset($body['orderData'][$k])) $safeClientMeta[$k] = $body['orderData'][$k];
+                }
+                if (!empty($body['orderData']['items']) && is_array($body['orderData']['items'])) {
+                    $ordPricing = vdhValidateAndComputeOrderPricing($body['orderData'], $dataProductsFile, (bool)$admin);
+                    if (empty($ordPricing['valid'])) {
+                        return [400, [
+                            'success' => false,
+                            'isPaid' => false,
+                            'code' => $ordPricing['code'] ?? 'INVALID_ORDER_PRICING',
+                            'error' => $ordPricing['error'] ?? 'Order pricing verification failed.'
+                        ]];
+                    }
+                    $safeClientMeta['subtotal'] = $ordPricing['subtotal'];
+                    $safeClientMeta['discount'] = $ordPricing['discount'];
+                    $safeClientMeta['deliveryCharge'] = $ordPricing['deliveryCharge'];
+                    if (!empty($ordPricing['appliedPromo'])) {
+                        $safeClientMeta['appliedPromo'] = $ordPricing['appliedPromo'];
+                    }
                 }
                 if (!$admin && $customer && !empty($customer['uid'])) {
                     $safeClientMeta['userId'] = (string)$customer['uid'];

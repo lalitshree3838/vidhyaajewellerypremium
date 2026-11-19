@@ -16,7 +16,11 @@ import {
 import { Order, OrderStatus } from '../types';
 import { fetchOrderById, isOrderPaid, formatFullAddress } from '../lib/dbService';
 import { MetadataManager } from '../components/MetadataManager';
-import { isGenuineImageUrl } from '../lib/sampleData';
+import {
+  JEWELLERY_PLACEHOLDER_IMAGE,
+  resolveSafeProductImageUrl,
+  useAvailableMediaInventory
+} from '../lib/storageService';
 
 interface TrackOrderViewProps {
   initialOrderNumber?: string;
@@ -27,6 +31,7 @@ export const TrackOrderView: React.FC<TrackOrderViewProps> = ({
   initialOrderNumber = '',
   onNavigateShop
 }) => {
+  const mediaInventory = useAvailableMediaInventory();
   const [searchQuery, setSearchQuery] = useState(initialOrderNumber);
   const [loading, setLoading] = useState(false);
   const [order, setOrder] = useState<Order | null>(null);
@@ -161,7 +166,8 @@ export const TrackOrderView: React.FC<TrackOrderViewProps> = ({
             <div className="text-left sm:text-right">
               <span className="text-xs text-gray-500 block">Courier Partner:</span>
               <span className="text-xs font-bold text-[#3B1E22]">
-                {order.courierName || 'BlueDart Express'} (AWB: {order.trackingNumber || 'BD98214IN'})
+                {order.courierName || 'Atelier Express Dispatch'}{' '}
+                {order.trackingNumber ? `(AWB: ${order.trackingNumber})` : '(Awaiting AWB Assignment)'}
               </span>
             </div>
           </div>
@@ -224,20 +230,17 @@ export const TrackOrderView: React.FC<TrackOrderViewProps> = ({
                   key={idx}
                   className="flex items-center gap-3 p-3 rounded-xl border border-gray-100 bg-[#FAF7F2]/50"
                 >
-                  {Boolean(item.image && isGenuineImageUrl(item.image)) ? (
-                    <img
-                      src={item.image}
-                      alt={item.productName}
-                      className="w-14 h-14 object-contain rounded-lg border border-[#E8DCCF] bg-white"
-                      onError={(e) => {
-                        (e.target as HTMLElement).style.display = 'none';
-                      }}
-                    />
-                  ) : (
-                    <div className="w-14 h-14 rounded-lg border border-[#E8DCCF] bg-[#FAF7F2] flex items-center justify-center text-[#802336]">
-                      <ShoppingBag className="w-5 h-5 opacity-70" />
-                    </div>
-                  )}
+                  <img
+                    src={resolveSafeProductImageUrl(item.image, mediaInventory)}
+                    alt={item.productName}
+                    className="w-14 h-14 object-contain rounded-lg border border-[#E8DCCF] bg-white"
+                    onError={(e) => {
+                      const img = e.currentTarget;
+                      if (img.src !== JEWELLERY_PLACEHOLDER_IMAGE) {
+                        img.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                      }
+                    }}
+                  />
                   <div>
                     <h5 className="font-serif text-xs font-semibold text-[#241C1A] line-clamp-1">
                       {item.productName}

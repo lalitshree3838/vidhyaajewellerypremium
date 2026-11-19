@@ -2,9 +2,7 @@
 // VIDHYAA Jewellery Studio - Persistent Product Catalog API (Hostinger Production)
 require_once __DIR__ . '/admin/_auth.php';
 
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, x-admin-token');
+vdhApplyCorsHeaders('GET, POST, PUT, DELETE, OPTIONS', 'Content-Type, Authorization, x-admin-token');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 header('Expires: 0');

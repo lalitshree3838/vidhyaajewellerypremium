@@ -40,7 +40,11 @@ import {
 } from '../lib/dbService';
 import { auth } from '../lib/firebase';
 import { GooglePayQRCard } from '../components/GooglePayQRCard';
-import { isGenuineImageUrl } from '../lib/sampleData';
+import {
+  JEWELLERY_PLACEHOLDER_IMAGE,
+  resolveSafeProductImageUrl,
+  useAvailableMediaInventory
+} from '../lib/storageService';
 import { formatPrice, OrderSavingsSummaryCard } from '../lib/priceUtils';
 
 const INDIAN_STATES_AND_UTS = [
@@ -170,6 +174,7 @@ const VerifiedPaymentSuccessView: React.FC<VerifiedPaymentSuccessViewProps> = ({
   onTrackOrder,
   onContinueShopping
 }) => {
+  const mediaInventory = useAvailableMediaInventory();
   const orderId = order.orderNumber || order.id;
   const orderDateTime = formatOrderDateIST(order.paidAt || order.createdAt);
   const customerName = order.customerName || order.shippingAddress?.name || 'Valued Patron';
@@ -313,17 +318,11 @@ const VerifiedPaymentSuccessView: React.FC<VerifiedPaymentSuccessViewProps> = ({
               {items.map((item, idx) => (
                 <div key={idx} className="flex items-center justify-between gap-3 py-2.5">
                   <div className="flex items-center gap-3 min-w-0">
-                    {Boolean(item.image && isGenuineImageUrl(item.image)) ? (
-                      <img
-                        src={item.image}
-                        alt={item.productName}
-                        className="w-11 h-11 rounded-lg object-contain border border-[#E8DCCF] bg-white shrink-0"
-                      />
-                    ) : (
-                      <div className="w-11 h-11 rounded-lg bg-[#FAF7F2] border border-[#E8DCCF] flex items-center justify-center text-[#802336] shrink-0">
-                        <ShoppingBag className="w-4 h-4" />
-                      </div>
-                    )}
+                    <img
+                      src={resolveSafeProductImageUrl(item.image, mediaInventory)}
+                      alt={item.productName}
+                      className="w-11 h-11 rounded-lg object-contain border border-[#E8DCCF] bg-white shrink-0"
+                    />
                     <div className="min-w-0">
                       <p className="font-serif font-semibold text-[#3B1E22] truncate">
                         {item.productName}
@@ -657,10 +656,12 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     totalSavings,
     deliveryCharge,
     finalTotal,
+    appliedPromo,
     clearCart
   } = useCart();
 
   const { user, userProfile, patronSession, saveAddress } = useAuth();
+  const mediaInventory = useAvailableMediaInventory();
   const effectiveUserId = user?.uid || patronSession?.uid || undefined;
 
   // Multi-step states: 1: Address, 2: Review, 3: Payment, 4: Confirmed / Submitted
@@ -826,6 +827,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                     totalSavings,
                     subtotal,
                     discount,
+                    appliedPromo: appliedPromo || undefined,
                     deliveryCharge,
                     totalAmount: finalTotal
                   }
@@ -893,7 +895,8 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       productSavings,
       state,
       subtotal,
-      totalSavings
+      totalSavings,
+      appliedPromo
     ]
   );
 
@@ -1008,7 +1011,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     const formattedPhone = formatIndianPhone(phoneDigits);
     setPhone(formattedPhone);
 
-    if (saveToAccount && user) {
+    if (saveToAccount && (user || patronSession)) {
       saveAddress({
         id: `addr_${Date.now()}`,
         name: cleanName,
@@ -1099,6 +1102,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         totalSavings,
         subtotal,
         discount,
+        appliedPromo: appliedPromo || undefined,
         deliveryCharge,
         totalAmount: finalTotal,
         paymentMethod: methodLabel,
@@ -1108,7 +1112,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         upiReference: cleanUtr,
         orderStatus: 'Pending',
         trackingNumber: '',
-        courierName: 'BlueDart Express',
+        courierName: 'Atelier Express Dispatch',
         giftItem: subtotal >= 2000 ? 'Gold Imitation Bangles' : subtotal >= 1500 ? 'Gold Imitation Jhoomki' : undefined,
         notes:
           upiMethod === 'phone'
@@ -1190,6 +1194,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
             items: orderItems,
             subtotal,
             discount,
+            appliedPromo: appliedPromo || undefined,
             deliveryCharge,
             userId: effectiveUserId,
             giftItem: subtotal >= 2000 ? 'Gold Imitation Bangles' : subtotal >= 1500 ? 'Gold Imitation Jhoomki' : undefined,
@@ -1636,20 +1641,17 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                   className="flex items-center justify-between p-3 rounded-xl border border-gray-100 bg-[#FAF7F2]/50"
                 >
                   <div className="flex items-center gap-3">
-                    {Boolean(item.image && isGenuineImageUrl(item.image)) ? (
-                      <img
-                        src={item.image}
-                        alt={item.productName}
-                        className="w-14 h-14 object-contain rounded-lg border border-[#E8DCCF] bg-white"
-                        onError={(e) => {
-                          (e.target as HTMLElement).style.display = 'none';
-                        }}
-                      />
-                    ) : (
-                      <div className="w-14 h-14 rounded-lg border border-[#E8DCCF] bg-[#FAF7F2] flex items-center justify-center text-[#802336]">
-                        <ShoppingBag className="w-5 h-5 opacity-70" />
-                      </div>
-                    )}
+                    <img
+                      src={resolveSafeProductImageUrl(item.image, mediaInventory)}
+                      alt={item.productName}
+                      className="w-14 h-14 object-contain rounded-lg border border-[#E8DCCF] bg-white"
+                      onError={(e) => {
+                        const img = e.currentTarget;
+                        if (img.src !== JEWELLERY_PLACEHOLDER_IMAGE) {
+                          img.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                        }
+                      }}
+                    />
                     <div>
                       <h4 className="font-serif text-sm font-semibold text-[#241C1A]">
                         {item.productName}

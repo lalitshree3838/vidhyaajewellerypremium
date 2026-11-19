@@ -53,7 +53,6 @@ import { AdminSecurityDashboard } from '../components/admin/AdminSecurityDashboa
 import { AdminManagementPanel } from '../components/admin/AdminManagementPanel';
 import { AdminMarketingPanel } from '../components/admin/AdminMarketingPanel';
 import { AdminJewelleryPanel } from '../components/admin/AdminJewelleryPanel';
-import { AdminSmsSettingsPanel } from '../components/admin/AdminSmsSettingsPanel';
 import { AdminCashfreeSettingsPanel } from '../components/admin/AdminCashfreeSettingsPanel';
 import { AdminSensitiveActionModal } from '../components/admin/AdminSensitiveActionModal';
 import { logAuditEvent } from '../lib/securityService';
@@ -76,7 +75,12 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { isGenuineImageUrl } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice, validatePrices } from '../lib/priceUtils';
-import { uploadProductImageToStorage } from '../lib/storageService';
+import {
+  JEWELLERY_PLACEHOLDER_IMAGE,
+  resolveSafeProductImageUrl,
+  uploadProductImageToStorage,
+  useAvailableMediaInventory
+} from '../lib/storageService';
 
 interface AdminViewProps {
   products: Product[];
@@ -98,6 +102,8 @@ export const AdminView: React.FC<AdminViewProps> = ({
   onNavigateCategory
 }) => {
   const { user, isAdmin, adminSessionActive, adminUser, logoutAdminSession, signOut } = useAuth();
+  const mediaInventory = useAvailableMediaInventory();
+  const [adminNotice, setAdminNotice] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
 
   // Authentication session state for dedicated /admin/login gate
   const [adminAuthSession, setAdminAuthSession] = useState<boolean>(() => {
@@ -377,21 +383,31 @@ export const AdminView: React.FC<AdminViewProps> = ({
   const lowStockProducts = localProducts.filter((p) => p.stock <= 5);
 
   // Reseed Catalog
-  const handleReseed = async () => {
-    if (!window.confirm('Reset/seed initial luxury jewellery catalog in Firebase Firestore? This will refresh all products and categories.')) return;
-    setIsSeeding(true);
-    try {
-      await forceReseedCatalog();
-      await onRefreshData();
-      await loadOrders();
-      await loadReviews();
-      setSeedSuccess(true);
-      setTimeout(() => setSeedSuccess(false), 3000);
-    } catch (e) {
-      alert('Error reseeding catalog: ' + String(e));
-    } finally {
-      setIsSeeding(false);
-    }
+  const handleReseed = () => {
+    setSensitiveModal({
+      isOpen: true,
+      title: 'Reseed Luxury Catalogue',
+      description: 'Synchronize initial jewellery catalogue products and categories cleanly? Existing product IDs will be refreshed.',
+      actionLabel: 'Reseed Catalogue',
+      isDestructive: true,
+      onConfirm: async () => {
+        setIsSeeding(true);
+        setAdminNotice(null);
+        try {
+          await forceReseedCatalog();
+          await onRefreshData();
+          await loadOrders();
+          await loadReviews();
+          setSeedSuccess(true);
+          setTimeout(() => setSeedSuccess(false), 3000);
+        } catch (e) {
+          setAdminNotice({ type: 'error', text: 'Error reseeding catalog: ' + String(e) });
+        } finally {
+          setIsSeeding(false);
+          setSensitiveModal((prev) => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
   };
 
   // -------------------------------------------------------------
@@ -970,6 +986,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
   const handleSaveCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingCategory) return;
+    setAdminNotice(null);
     try {
       const slug = editingCategory.slug || editingCategory.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
       const finalCat: Category = {
@@ -981,19 +998,32 @@ export const AdminView: React.FC<AdminViewProps> = ({
       await onRefreshData();
       setEditingCategory(null);
       setIsCreatingNewCategory(false);
+      setAdminNotice({ type: 'success', text: `Category "${finalCat.name}" saved successfully.` });
     } catch (e) {
-      alert('Failed to save category: ' + String(e));
+      setAdminNotice({ type: 'error', text: 'Failed to save category: ' + String(e) });
     }
   };
 
-  const handleDeleteCategory = async (catId: string) => {
-    if (!window.confirm('Delete this category? Products in this category will still remain.')) return;
-    try {
-      await deleteCategory(catId);
-      await onRefreshData();
-    } catch (e) {
-      alert('Failed to delete category: ' + String(e));
-    }
+  const handleDeleteCategory = (catId: string) => {
+    setSensitiveModal({
+      isOpen: true,
+      title: 'Delete Jewellery Category',
+      description: 'Delete this category? Products assigned to this category will remain preserved.',
+      actionLabel: 'Delete Category',
+      isDestructive: true,
+      onConfirm: async () => {
+        setAdminNotice(null);
+        try {
+          await deleteCategory(catId);
+          await onRefreshData();
+          setAdminNotice({ type: 'success', text: 'Category deleted successfully.' });
+        } catch (e) {
+          setAdminNotice({ type: 'error', text: 'Failed to delete category: ' + String(e) });
+        } finally {
+          setSensitiveModal((prev) => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
   };
 
   const handleAddSubcatToCategory = () => {
@@ -1017,14 +1047,26 @@ export const AdminView: React.FC<AdminViewProps> = ({
   // -------------------------------------------------------------
   // Review Moderation
   // -------------------------------------------------------------
-  const handleDeleteReview = async (revId: string) => {
-    if (!window.confirm('Remove this customer review?')) return;
-    try {
-      await deleteReview(revId);
-      await loadReviews();
-    } catch (e) {
-      alert('Error deleting review: ' + String(e));
-    }
+  const handleDeleteReview = (revId: string) => {
+    setSensitiveModal({
+      isOpen: true,
+      title: 'Remove Customer Review',
+      description: 'Permanently remove this customer review from product listings?',
+      actionLabel: 'Remove Review',
+      isDestructive: true,
+      onConfirm: async () => {
+        setAdminNotice(null);
+        try {
+          await deleteReview(revId);
+          await loadReviews();
+          setAdminNotice({ type: 'success', text: 'Customer review removed.' });
+        } catch (e) {
+          setAdminNotice({ type: 'error', text: 'Error deleting review: ' + String(e) });
+        } finally {
+          setSensitiveModal((prev) => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
   };
 
   // -------------------------------------------------------------
@@ -1032,13 +1074,14 @@ export const AdminView: React.FC<AdminViewProps> = ({
   // -------------------------------------------------------------
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAdminNotice(null);
     try {
       await updateStoreSettings(settingsForm);
       setSettingsSaved(true);
       await onRefreshData();
       setTimeout(() => setSettingsSaved(false), 2500);
     } catch (e) {
-      alert('Error updating settings: ' + String(e));
+      setAdminNotice({ type: 'error', text: 'Error updating settings: ' + String(e) });
     }
   };
 
@@ -1291,6 +1334,33 @@ export const AdminView: React.FC<AdminViewProps> = ({
       </div>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-8 py-8">
+        {adminNotice && (
+          <div
+            className={`mb-6 p-4 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 animate-fadeIn ${
+              adminNotice.type === 'error'
+                ? 'bg-red-50 border border-red-200 text-red-800'
+                : 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              {adminNotice.type === 'error' ? (
+                <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+              ) : (
+                <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+              )}
+              <span>{adminNotice.text}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setAdminNotice(null)}
+              className="text-gray-500 hover:text-black cursor-pointer"
+              aria-label="Dismiss notice"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {seedSuccess && (
           <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs font-semibold flex items-center gap-2 animate-fadeIn">
             <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
@@ -1439,11 +1509,14 @@ export const AdminView: React.FC<AdminViewProps> = ({
                         <div className="flex items-center gap-3">
                           {prod.images?.[0] ? (
                             <img
-                              src={prod.images[0]}
+                              src={resolveSafeProductImageUrl(prod.images[0], mediaInventory)}
                               alt=""
                               className="w-10 h-10 object-contain bg-white p-0.5 rounded-lg border border-[#E8DCCF]"
                               onError={(e) => {
-                                (e.target as HTMLElement).style.display = 'none';
+                                const imgEl = e.currentTarget;
+                                if (imgEl.dataset.fallbackApplied === '1') return;
+                                imgEl.dataset.fallbackApplied = '1';
+                                imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
                               }}
                             />
                           ) : (
@@ -1675,11 +1748,14 @@ export const AdminView: React.FC<AdminViewProps> = ({
                             <div className="flex items-center gap-3">
                               {prod.images?.[0] ? (
                                 <img
-                                  src={prod.images[0]}
+                                  src={resolveSafeProductImageUrl(prod.images[0], mediaInventory)}
                                   alt=""
                                   className="w-12 h-12 object-contain bg-white p-0.5 rounded-xl border border-[#E8DCCF] flex-shrink-0"
                                   onError={(e) => {
-                                    (e.target as HTMLElement).style.display = 'none';
+                                    const imgEl = e.currentTarget;
+                                    if (imgEl.dataset.fallbackApplied === '1') return;
+                                    imgEl.dataset.fallbackApplied = '1';
+                                    imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
                                   }}
                                 />
                               ) : (
@@ -1957,9 +2033,15 @@ export const AdminView: React.FC<AdminViewProps> = ({
                                   <div key={idx} className="flex items-center gap-2">
                                     {Boolean(it.image && isGenuineImageUrl(it.image)) && (
                                       <img
-                                        src={it.image}
+                                        src={resolveSafeProductImageUrl(it.image, mediaInventory)}
                                         alt=""
                                         className="w-7 h-7 rounded object-contain border border-[#E8DCCF] bg-white shrink-0"
+                                        onError={(e) => {
+                                          const imgEl = e.currentTarget;
+                                          if (imgEl.dataset.fallbackApplied === '1') return;
+                                          imgEl.dataset.fallbackApplied = '1';
+                                          imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                                        }}
                                       />
                                     )}
                                     <span className="font-semibold text-gray-800 truncate max-w-[130px]">
@@ -2447,8 +2529,43 @@ export const AdminView: React.FC<AdminViewProps> = ({
               </div>
             </form>
 
-            {/* SMS OTP Gateway & Mobile Login Configuration */}
-            <AdminSmsSettingsPanel />
+            {/* Customer Authentication Policy Card */}
+            <div className="bg-white rounded-3xl border border-[#E8DCCF] p-6 sm:p-8 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-[#E8DCCF]">
+                <div>
+                  <h3 className="font-serif text-lg font-bold text-[#3B1E22] flex items-center gap-2">
+                    <Smartphone className="w-5 h-5 text-[#802336]" />
+                    <span>Customer Authentication Policy</span>
+                  </h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Active storefront patron sign-in methods managed by the studio backend.
+                  </p>
+                </div>
+                <span className="inline-flex items-center px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-bold uppercase tracking-wider">
+                  SMS OTP Disabled
+                </span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                <div className="p-4 rounded-2xl bg-[#FAF7F2] border border-[#E8DCCF] space-y-1">
+                  <span className="font-bold text-[#3B1E22] block">+91 Mobile + Password</span>
+                  <p className="text-gray-600 leading-relaxed">
+                    Server-backed Indian 10-digit mobile registration and sign-in with scrypt / PHP password verification.
+                  </p>
+                </div>
+                <div className="p-4 rounded-2xl bg-[#FAF7F2] border border-[#E8DCCF] space-y-1">
+                  <span className="font-bold text-[#3B1E22] block">Email & Password</span>
+                  <p className="text-gray-600 leading-relaxed">
+                    Firebase patron email account creation, password login, and reset support.
+                  </p>
+                </div>
+                <div className="p-4 rounded-2xl bg-[#FAF7F2] border border-[#E8DCCF] space-y-1">
+                  <span className="font-bold text-[#3B1E22] block">Google Sign-In</span>
+                  <p className="text-gray-600 leading-relaxed">
+                    Instant one-click Google OAuth checkout and patron session sync.
+                  </p>
+                </div>
+              </div>
+            </div>
 
             {/* Cashfree Payments Gateway (Credit / Debit Cards) Configuration */}
             <AdminCashfreeSettingsPanel />
@@ -2557,9 +2674,15 @@ export const AdminView: React.FC<AdminViewProps> = ({
                       <div className="flex items-center gap-3">
                         {Boolean(item.image && isGenuineImageUrl(item.image)) ? (
                           <img
-                            src={item.image}
+                            src={resolveSafeProductImageUrl(item.image, mediaInventory)}
                             alt=""
                             className="w-12 h-12 object-contain rounded-lg border border-[#E8DCCF] bg-white"
+                            onError={(e) => {
+                              const imgEl = e.currentTarget;
+                              if (imgEl.dataset.fallbackApplied === '1') return;
+                              imgEl.dataset.fallbackApplied = '1';
+                              imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                            }}
                           />
                         ) : (
                           <div className="w-12 h-12 rounded-lg border border-[#E8DCCF] bg-[#FAF7F2] flex items-center justify-center text-[#802336]">
@@ -3284,11 +3407,14 @@ export const AdminView: React.FC<AdminViewProps> = ({
                           className="relative group aspect-square rounded-xl overflow-hidden border-2 border-[#E8DCCF] bg-white p-1.5 shadow-sm hover:border-[#0F5B46] transition-all flex items-center justify-center"
                         >
                           <img
-                            src={img}
+                            src={resolveSafeProductImageUrl(img, mediaInventory)}
                             alt={`Product photo ${idx + 1}`}
                             className="w-full h-full object-contain"
                             onError={(e) => {
-                              (e.target as HTMLElement).style.display = 'none';
+                              const imgEl = e.currentTarget;
+                              if (imgEl.dataset.fallbackApplied === '1') return;
+                              imgEl.dataset.fallbackApplied = '1';
+                              imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
                             }}
                           />
 
@@ -3519,9 +3645,15 @@ export const AdminView: React.FC<AdminViewProps> = ({
             <div className="bg-[#FAF7F2] p-3.5 rounded-2xl border border-[#E8DCCF] flex items-center gap-3">
               {productToDelete.images?.[0] ? (
                 <img
-                  src={productToDelete.images[0]}
+                  src={resolveSafeProductImageUrl(productToDelete.images[0], mediaInventory)}
                   alt={productToDelete.name}
-                  className="w-12 h-12 object-cover rounded-xl border border-[#E8DCCF]"
+                  className="w-12 h-12 object-cover rounded-xl border border-[#E8DCCF] bg-white"
+                  onError={(e) => {
+                    const imgEl = e.currentTarget;
+                    if (imgEl.dataset.fallbackApplied === '1') return;
+                    imgEl.dataset.fallbackApplied = '1';
+                    imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                  }}
                 />
               ) : (
                 <div className="w-12 h-12 rounded-xl bg-gray-200 flex items-center justify-center text-gray-400">
@@ -3750,7 +3882,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
               </div>
               <div>
                 <span className="text-[10px] font-bold text-gray-500 uppercase block">Logistics & Payment:</span>
-                <p className="font-semibold text-emerald-800">{printOrder.courierName || 'BlueDart Express'}</p>
+                <p className="font-semibold text-emerald-800">{printOrder.courierName || 'Atelier Express Dispatch'}</p>
                 <p className="font-mono">AWB: {printOrder.trackingNumber || 'Pending Generation'}</p>
                 <p className="mt-1">
                   Method: <strong>{printOrder.paymentMethod || 'Online Payment'}</strong>

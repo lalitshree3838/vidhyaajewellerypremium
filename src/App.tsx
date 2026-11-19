@@ -105,34 +105,91 @@ class AdminErrorBoundary extends React.Component<
   }
 }
 
+const POLICY_VIEWS = ['about', 'contact', 'shipping', 'returns', 'care-guide', 'privacy', 'terms'];
+
+const parseLocationRoute = () => {
+  if (typeof window === 'undefined') {
+    return { view: 'home', param: undefined as string | undefined, productId: null as string | null, trackingOrder: '' };
+  }
+  const pathname = window.location.pathname.replace(/\/+$/, '') || '/';
+  const hash = window.location.hash || '';
+  const params = new URLSearchParams(window.location.search);
+  const queryView = (params.get('view') || '').toLowerCase();
+
+  if (pathname.includes('/admin') || hash.includes('admin')) {
+    return { view: 'admin', param: undefined, productId: null, trackingOrder: '' };
+  }
+  if (params.has('cf_order_id') || queryView === 'checkout' || pathname.startsWith('/checkout')) {
+    return { view: 'checkout', param: undefined, productId: null, trackingOrder: '' };
+  }
+  if (queryView === 'orders' || pathname.startsWith('/orders')) {
+    return { view: 'orders', param: undefined, productId: null, trackingOrder: '' };
+  }
+  if (queryView === 'account' || pathname.startsWith('/account')) {
+    return { view: 'account', param: undefined, productId: null, trackingOrder: '' };
+  }
+  if (queryView === 'wishlist' || pathname.startsWith('/wishlist')) {
+    return { view: 'wishlist', param: undefined, productId: null, trackingOrder: '' };
+  }
+  if (queryView === 'go-live' || pathname.startsWith('/go-live')) {
+    return { view: 'go-live', param: undefined, productId: null, trackingOrder: '' };
+  }
+  if (queryView === 'track-order' || pathname.startsWith('/track-order')) {
+    return { view: 'track-order', param: undefined, productId: null, trackingOrder: params.get('order') || '' };
+  }
+
+  const productParam = params.get('product');
+  if (productParam) {
+    return { view: 'product-detail', param: undefined, productId: productParam, trackingOrder: '' };
+  }
+  if (pathname.startsWith('/product/')) {
+    const seg = decodeURIComponent(pathname.split('/').filter(Boolean)[1] || '');
+    if (seg) {
+      return { view: 'product-detail', param: undefined, productId: seg, trackingOrder: '' };
+    }
+  }
+
+  if (POLICY_VIEWS.includes(queryView)) {
+    return { view: queryView, param: undefined, productId: null, trackingOrder: '' };
+  }
+  const strippedPath = pathname.replace(/^\//, '').toLowerCase();
+  if (POLICY_VIEWS.includes(strippedPath)) {
+    return { view: strippedPath, param: undefined, productId: null, trackingOrder: '' };
+  }
+
+  if (pathname.startsWith('/category/')) {
+    const seg = decodeURIComponent(pathname.split('/').filter(Boolean)[1] || '');
+    if (seg) {
+      return { view: 'category', param: seg, productId: null, trackingOrder: '' };
+    }
+  }
+
+  if (pathname.startsWith('/collection/') || pathname.startsWith('/collections/')) {
+    const seg = decodeURIComponent(pathname.split('/').filter(Boolean)[1] || '');
+    return { view: 'shop', param: seg || 'all', productId: null, trackingOrder: '' };
+  }
+
+  const catParam = params.get('category') || params.get('collection') || params.get('filter');
+  if (pathname.startsWith('/shop') || catParam) {
+    return { view: 'shop', param: catParam || 'all', productId: null, trackingOrder: '' };
+  }
+
+  return { view: 'home', param: undefined, productId: null, trackingOrder: '' };
+};
+
 function MainApp() {
   const { user, patronSession, isAdmin } = useAuth();
   const { openCart } = useCart();
 
+  const initialRoute = parseLocationRoute();
+
   // Navigation State
-  const [currentView, setCurrentView] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      const path = window.location.pathname;
-      const params = new URLSearchParams(window.location.search);
-      if (path.includes('/admin') || window.location.hash.includes('admin')) {
-        return 'admin';
-      }
-      if (params.has('cf_order_id') || params.get('view') === 'checkout' || path.startsWith('/checkout')) {
-        return 'checkout';
-      }
-      if (params.get('view') === 'orders' || path.startsWith('/orders')) {
-        return 'orders';
-      }
-      if (params.get('view') === 'track-order' || path.startsWith('/track-order')) {
-        return 'track-order';
-      }
-    }
-    return 'home';
-  });
-  const [currentParam, setCurrentParam] = useState<string | undefined>(undefined);
+  const [currentView, setCurrentView] = useState<string>(initialRoute.view);
+  const [currentParam, setCurrentParam] = useState<string | undefined>(initialRoute.param);
+  const [pendingProductId, setPendingProductId] = useState<string | null>(initialRoute.productId);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [selectedInitialVariation, setSelectedInitialVariation] = useState<ProductVariation | undefined>(undefined);
-  const [trackingOrderNumber, setTrackingOrderNumber] = useState<string>('');
+  const [trackingOrderNumber, setTrackingOrderNumber] = useState<string>(initialRoute.trackingOrder);
 
   // Modals
   const [quickViewProduct, setQuickViewProduct] = useState<Product | null>(null);
@@ -279,53 +336,15 @@ function MainApp() {
   }, [isAdmin]);
 
   useEffect(() => {
-
-    // Direct URL detection for /admin, /shop, categories, or collections
     const checkDirectUrl = () => {
-      const pathname = window.location.pathname;
-      const hash = window.location.hash;
-      const search = window.location.search;
-      const urlParams = new URLSearchParams(search);
-
-      if (pathname.includes('/admin') || hash.includes('admin')) {
-        setCurrentView('admin');
-        return;
+      const route = parseLocationRoute();
+      setCurrentView(route.view);
+      setCurrentParam(route.param);
+      if (route.trackingOrder) {
+        setTrackingOrderNumber(route.trackingOrder);
       }
-
-      if (urlParams.has('cf_order_id') || urlParams.get('view') === 'checkout' || pathname.startsWith('/checkout')) {
-        setCurrentView('checkout');
-        return;
-      }
-
-      if (urlParams.get('view') === 'orders' || pathname.startsWith('/orders')) {
-        setCurrentView('orders');
-        return;
-      }
-
-      if (urlParams.get('view') === 'track-order' || pathname.startsWith('/track-order')) {
-        const orderParam = urlParams.get('order') || '';
-        if (orderParam) setTrackingOrderNumber(orderParam);
-        setCurrentView('track-order');
-        return;
-      }
-
-      const catParam = urlParams.get('category') || urlParams.get('collection') || urlParams.get('filter');
-      if (pathname.startsWith('/shop') || catParam) {
-        setCurrentView('shop');
-        if (catParam) {
-          setCurrentParam(catParam);
-        }
-        return;
-      }
-
-      if (pathname.startsWith('/category/') || pathname.startsWith('/collection/') || pathname.startsWith('/collections/')) {
-        const parts = pathname.split('/').filter(Boolean);
-        const segment = parts[1];
-        if (segment) {
-          setCurrentView('shop');
-          setCurrentParam(segment);
-          return;
-        }
+      if (route.productId) {
+        setPendingProductId(route.productId);
       }
     };
 
@@ -338,23 +357,44 @@ function MainApp() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
+  useEffect(() => {
+    if (!pendingProductId || products.length === 0) return;
+    const found = products.find((p) => p.id === pendingProductId || p.slug === pendingProductId);
+    if (found) {
+      setSelectedProduct(found);
+      setCurrentView('product-detail');
+      setPendingProductId(null);
+    } else if (!loadingInitial) {
+      setCurrentView('shop');
+      setPendingProductId(null);
+    }
+  }, [pendingProductId, products, loadingInitial]);
+
   const handleNavigate = (view: string, param?: string) => {
+    setPendingProductId(null);
     setCurrentView(view);
     setCurrentParam(param);
     if (view === 'admin') {
       window.history.pushState({}, '', '/admin/login');
     } else if (view === 'home' && (window.location.pathname !== '/' || window.location.search)) {
       window.history.pushState({}, '', '/');
-    } else if (view === 'orders' || view === 'account') {
+    } else if (view === 'orders' || view === 'account' || view === 'wishlist' || view === 'go-live') {
       window.history.pushState({}, '', `/?view=${view}`);
+    } else if (POLICY_VIEWS.includes(view)) {
+      window.history.pushState({}, '', `/?view=${view}`);
+    } else if (view === 'track-order') {
+      const url = param ? `/?view=track-order&order=${encodeURIComponent(param)}` : '/?view=track-order';
+      window.history.pushState({}, '', url);
     } else if (view === 'checkout') {
       if (!window.location.search.includes('cf_order_id=')) {
         window.history.pushState({}, '', '/?view=checkout');
       }
+    } else if (view === 'category') {
+      window.history.pushState({}, '', `/category/${encodeURIComponent(param || 'necklaces')}`);
     } else if (view === 'collections' || view === 'collection') {
       setCurrentView('shop');
       setCurrentParam(param || 'all');
-      window.history.pushState({}, '', `/collections/${param || 'all'}`);
+      window.history.pushState({}, '', `/collections/${encodeURIComponent(param || 'all')}`);
     } else if (view === 'shop') {
       if (param && param !== 'all') {
         const isCat = [
@@ -398,9 +438,11 @@ function MainApp() {
   };
 
   const handleSelectProduct = (product: Product, variation?: ProductVariation) => {
+    setPendingProductId(null);
     setSelectedProduct(product);
     setSelectedInitialVariation(variation);
     setCurrentView('product-detail');
+    window.history.pushState({}, '', `/?product=${encodeURIComponent(product.id)}`);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 

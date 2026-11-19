@@ -2,9 +2,7 @@
 // VIDHYAA Jewellery Studio - Executive Admin Session Verification Endpoint
 require_once __DIR__ . '/_auth.php';
 
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: POST, GET, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, x-file-name, x-file-type, x-admin-token, x-customer-token, x-order-token');
+vdhApplyCorsHeaders('POST, GET, OPTIONS', 'Content-Type, Authorization, x-file-name, x-file-type, x-admin-token, x-customer-token, x-order-token');
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
     http_response_code(204);

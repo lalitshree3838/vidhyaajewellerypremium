@@ -1,8 +1,6 @@
 <?php
-// VIDHYAA Jewellery Studio - Available Video Inventory Endpoint (Hostinger Production)
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type');
+require_once dirname(__DIR__) . '/admin/_auth.php';
+vdhApplyCorsHeaders('GET, OPTIONS', 'Content-Type');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Content-Type: application/json; charset=UTF-8');
 

@@ -2,6 +2,11 @@ import React, { useState } from 'react';
 import { Gem, Sparkles, Star, Plus, Edit, Eye, Filter } from 'lucide-react';
 import { Product, ProductVariation } from '../../types';
 import { calculateDiscountPercent, formatPrice } from '../../lib/priceUtils';
+import {
+  JEWELLERY_PLACEHOLDER_IMAGE,
+  resolveSafeProductImageUrl,
+  useAvailableMediaInventory
+} from '../../lib/storageService';
 
 interface AdminJewelleryPanelProps {
   products: Product[];
@@ -15,6 +20,7 @@ export const AdminJewelleryPanel: React.FC<AdminJewelleryPanelProps> = ({
   onOpenNewProduct
 }) => {
   const [selectedSubtype, setSelectedSubtype] = useState<string>('all');
+  const mediaInventory = useAvailableMediaInventory();
 
   const typesList = [
     { id: 'all', label: 'All Heirlooms' },
@@ -81,17 +87,17 @@ export const AdminJewelleryPanel: React.FC<AdminJewelleryPanelProps> = ({
             className="bg-[#120B0D] border border-gray-800 rounded-2xl overflow-hidden group hover:border-[#DFB982]/50 transition-all flex flex-col"
           >
             <div className="relative aspect-square overflow-hidden bg-black/40 flex items-center justify-center">
-              {prod.images?.[0] ? (
-                <img
-                  src={prod.images[0]}
-                  alt={prod.name}
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center bg-[#1A0E11] text-[#DFB982]">
-                  <Sparkles className="w-8 h-8 text-[#DFB982]/50" />
-                </div>
-              )}
+              <img
+                src={resolveSafeProductImageUrl(prod.images?.[0], mediaInventory)}
+                alt={prod.name}
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                onError={(e) => {
+                  const img = e.currentTarget;
+                  if (img.src !== JEWELLERY_PLACEHOLDER_IMAGE) {
+                    img.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                  }
+                }}
+              />
               <span className="absolute top-2.5 left-2.5 bg-black/80 backdrop-blur-md px-2 py-0.5 rounded text-[10px] font-bold text-[#DFB982] uppercase border border-[#DFB982]/30">
                 {prod.subcategory || prod.categoryName}
               </span>

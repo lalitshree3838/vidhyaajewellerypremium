@@ -1,9 +1,105 @@
+import { useEffect, useState } from 'react';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from './firebase';
+import { isGenuineImageUrl } from './sampleData';
 
 export const JEWELLERY_PLACEHOLDER_IMAGE = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 500" width="400" height="500" fill="none"><rect width="400" height="500" fill="%23FAF7F2"/><rect x="16" y="16" width="368" height="468" rx="12" fill="%23FFFFFF" stroke="%23E8DCCF" stroke-width="1.5"/><g transform="translate(140, 160)" stroke="%23DFB982" stroke-width="2" fill="none"><path d="M60 20 C30 55 30 95 60 130 C90 95 90 55 60 20 Z" fill="%23FAF7F2"/><circle cx="60" cy="75" r="14" fill="%23DFB982" opacity="0.3"/><polygon points="60,50 76,75 60,100 44,75" fill="%230F5B46" opacity="0.85"/><circle cx="60" cy="148" r="3" fill="%23B8860B"/><circle cx="60" cy="158" r="2" fill="%23B8860B"/></g><text x="200" y="340" font-family="serif" font-size="14" font-weight="600" fill="%233B1E22" text-anchor="middle" letter-spacing="2">VIDHYAA</text><text x="200" y="362" font-family="sans-serif" font-size="10" font-weight="600" fill="%23802336" text-anchor="middle" letter-spacing="1.5">JEWELLERY STUDIO</text><text x="200" y="382" font-family="sans-serif" font-size="9" fill="%239CA3AF" text-anchor="middle">Handcrafted Fine Jewellery</text></svg>`;
 
 export const LUXURY_FALLBACK_IMAGE = JEWELLERY_PLACEHOLDER_IMAGE;
+
+export interface MediaInventory {
+  ready: boolean;
+  productImages: Set<string>;
+  categoryImages: Set<string>;
+}
+
+let cachedMediaInventory: MediaInventory | null = null;
+let inflightMediaPromise: Promise<MediaInventory> | null = null;
+
+export async function fetchAvailableMediaInventory(): Promise<MediaInventory> {
+  if (cachedMediaInventory?.ready) {
+    return cachedMediaInventory;
+  }
+  if (inflightMediaPromise) {
+    return inflightMediaPromise;
+  }
+  inflightMediaPromise = (async () => {
+    try {
+      if (typeof fetch !== 'undefined') {
+        const res = await fetch('/api/media/available', { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          const inv: MediaInventory = {
+            ready: true,
+            productImages: new Set(Array.isArray(data?.productImages) ? data.productImages : []),
+            categoryImages: new Set(Array.isArray(data?.categoryImages) ? data.categoryImages : [])
+          };
+          cachedMediaInventory = inv;
+          return inv;
+        }
+      }
+    } catch {}
+    const fallback: MediaInventory = {
+      ready: true,
+      productImages: new Set<string>(),
+      categoryImages: new Set<string>()
+    };
+    cachedMediaInventory = fallback;
+    return fallback;
+  })();
+  return inflightMediaPromise;
+}
+
+if (typeof window !== 'undefined') {
+  fetchAvailableMediaInventory().catch(() => {});
+}
+
+export function useAvailableMediaInventory(): MediaInventory | null {
+  const [inv, setInv] = useState<MediaInventory | null>(cachedMediaInventory);
+  useEffect(() => {
+    if (cachedMediaInventory?.ready) {
+      setInv(cachedMediaInventory);
+      return;
+    }
+    let mounted = true;
+    fetchAvailableMediaInventory().then((res) => {
+      if (mounted) setInv(res);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+  return inv;
+}
+
+export function resolveSafeProductImageUrl(
+  url?: string | null,
+  inventory: MediaInventory | null = cachedMediaInventory
+): string {
+  if (!url || typeof url !== 'string') return JEWELLERY_PLACEHOLDER_IMAGE;
+  const trimmed = url.trim();
+  if (!trimmed || !isGenuineImageUrl(trimmed)) return JEWELLERY_PLACEHOLDER_IMAGE;
+
+  if (trimmed.startsWith('data:image/') || trimmed.startsWith('blob:')) {
+    return trimmed;
+  }
+
+  if (trimmed.startsWith('/products/')) {
+    if (!inventory?.ready) {
+      return JEWELLERY_PLACEHOLDER_IMAGE;
+    }
+    return inventory.productImages.has(trimmed) ? trimmed : JEWELLERY_PLACEHOLDER_IMAGE;
+  }
+
+  if (trimmed.startsWith('/categories/')) {
+    if (inventory?.ready && inventory.categoryImages.size > 0 && !inventory.categoryImages.has(trimmed)) {
+      return JEWELLERY_PLACEHOLDER_IMAGE;
+    }
+    return trimmed;
+  }
+
+  return trimmed;
+}
 
 export function isDataUrl(url?: string | null): boolean {
   return typeof url === 'string' && url.startsWith('data:image/');

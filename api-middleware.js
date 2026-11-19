@@ -59,7 +59,14 @@ const VIDEOS_UPLOAD_DIR = process.env.VIDHYAA_VIDEOS_DIR
   ? path.resolve(process.env.VIDHYAA_VIDEOS_DIR)
   : path.resolve(__dirname, 'videos', 'uploads');
 const DIST_VIDEOS_UPLOAD_DIR = path.resolve(__dirname, 'dist', 'videos', 'uploads');
+const PRODUCTS_MEDIA_DIR = path.resolve(__dirname, 'products');
+const PRODUCTS_UPLOAD_MEDIA_DIR = path.resolve(__dirname, 'products', 'uploads');
+const DIST_PRODUCTS_MEDIA_DIR = path.resolve(__dirname, 'dist', 'products');
+const CATEGORIES_MEDIA_DIR = path.resolve(__dirname, 'categories');
+const DIST_CATEGORIES_MEDIA_DIR = path.resolve(__dirname, 'dist', 'categories');
 const MAX_VIDEO_UPLOAD_BYTES = 250 * 1024 * 1024; // 250 MB
+const DEFAULT_JSON_BODY_LIMIT_BYTES = 2 * 1024 * 1024; // 2 MB
+const PRODUCT_JSON_BODY_LIMIT_BYTES = 8 * 1024 * 1024; // 8 MB (supports inline image uploads)
 
 const OWNER_WHATSAPP_NUMBER = '917302187770';
 const inflightCashfreeOrders = new Set();
@@ -139,21 +146,40 @@ function getOwnerWhatsAppClickToChatLink(order) {
   return `https://wa.me/${OWNER_WHATSAPP_NUMBER}?text=${encodeURIComponent(messageText)}`;
 }
 
-function parseBody(req) {
+function parseBody(req, maxBytes = DEFAULT_JSON_BODY_LIMIT_BYTES) {
   return new Promise((resolve) => {
-    let body = '';
+    const chunks = [];
+    let totalBytes = 0;
+    let settled = false;
+
     req.on('data', (chunk) => {
-      body += chunk;
+      if (settled) return;
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
+      totalBytes += buf.length;
+      if (totalBytes > maxBytes) {
+        settled = true;
+        chunks.length = 0;
+        resolve({ __tooLarge: true });
+        return;
+      }
+      chunks.push(buf);
     });
     req.on('end', () => {
-      if (!body) return resolve(null);
+      if (settled) return;
+      settled = true;
+      if (chunks.length === 0) return resolve(null);
       try {
-        resolve(JSON.parse(body));
+        resolve(JSON.parse(Buffer.concat(chunks, totalBytes).toString('utf8')));
       } catch {
         resolve(null);
       }
     });
-    req.on('error', () => resolve(null));
+    req.on('error', () => {
+      if (!settled) {
+        settled = true;
+        resolve(null);
+      }
+    });
   });
 }
 
@@ -229,17 +255,46 @@ function parseMultipartVideo(buffer, contentTypeHeader) {
   return null;
 }
 
-function sendJson(res, statusCode, data) {
+function getAllowedCorsOrigin(req) {
+  const origin = String(req?.headers?.origin || '').trim();
+  if (!origin) return '';
+
+  if (/^https:\/\/(?:www\.)?vidhyaajewellerystudio\.com$/i.test(origin)) {
+    return origin;
+  }
+  if (/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/i.test(origin)) {
+    return origin;
+  }
+  if (/^https:\/\/[a-z0-9-]+\.run\.app$/i.test(origin)) {
+    return origin;
+  }
+
+  const extra = String(process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (extra.includes(origin)) {
+    return origin;
+  }
+  return '';
+}
+
+function sendJson(res, statusCode, data, req = res?.__vdhReq || res?.req) {
   const jsonStr = JSON.stringify(data);
-  res.writeHead(statusCode, {
+  const allowedOrigin = getAllowedCorsOrigin(req);
+  const headers = {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(jsonStr),
     'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
     'Pragma': 'no-cache',
-    'Access-Control-Allow-Origin': '*',
+    'Vary': 'Origin',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-file-name, x-file-type, x-admin-token, x-customer-token, x-order-token'
-  });
+  };
+  if (allowedOrigin) {
+    headers['Access-Control-Allow-Origin'] = allowedOrigin;
+  }
+  res.writeHead(statusCode, headers);
   res.end(jsonStr);
 }
 
@@ -379,6 +434,7 @@ function sanitizeServerOrder(raw, existing = null) {
     isPaid: paymentStatus === 'paid',
     currency: String(src.currency || 'INR').toUpperCase(),
     orderStatus,
+    ...(src.appliedPromo ? { appliedPromo: String(src.appliedPromo).trim().toUpperCase() } : {}),
     upiReference: String(src.upiReference || ''),
     trackingNumber: String(src.trackingNumber || ''),
     courierName: String(src.courierName || ''),
@@ -387,6 +443,161 @@ function sanitizeServerOrder(raw, existing = null) {
   };
 
   return out;
+}
+
+function computePromoDiscountServer(subtotal, rawPromo) {
+  const code = String(rawPromo || '').trim().toUpperCase();
+  if (!code || subtotal <= 0) return 0;
+  let discount = 0;
+  if (code === 'VIDHYAA10' || code === 'ROYAL10') {
+    discount = Math.round(subtotal * 0.1);
+  } else if (code === 'LIVESTUDIO15') {
+    discount = Math.round(subtotal * 0.15);
+  } else if (code === 'FESTIVE500') {
+    discount = subtotal >= 2500 ? 500 : 0;
+  } else if (code === 'BRIDALVIP') {
+    discount = subtotal >= 5000 ? Math.round(subtotal * 0.15) : 0;
+  }
+  return Math.max(0, Math.min(subtotal, discount));
+}
+
+function validateAndComputeOrderPricing(body, allowAdminBypass = false) {
+  const rawItems = Array.isArray(body?.items) ? body.items : [];
+  if (rawItems.length === 0) {
+    if (allowAdminBypass) {
+      const amt = Math.max(0, toMoneyNumber(body?.orderAmount ?? body?.totalAmount ?? body?.total, 0));
+      return {
+        valid: true,
+        subtotal: Math.max(0, toMoneyNumber(body?.subtotal, amt)),
+        discount: Math.max(0, toMoneyNumber(body?.discount, 0)),
+        deliveryCharge: Math.max(0, toMoneyNumber(body?.deliveryCharge, 0)),
+        totalAmount: amt
+      };
+    }
+    return {
+      valid: false,
+      code: 'EMPTY_ITEMS',
+      error: 'Order must contain at least one catalog item for price verification.'
+    };
+  }
+
+  const products = readJsonFile(PRODUCTS_FILE, []);
+  const productMap = new Map();
+  for (const p of products) {
+    if (p && p.id) productMap.set(String(p.id), p);
+  }
+
+  let computedSubtotal = 0;
+  for (const it of rawItems) {
+    const qty = Math.round(toMoneyNumber(it?.quantity, 0));
+    if (qty < 1 || qty > 50) {
+      return {
+        valid: false,
+        code: 'INVALID_QUANTITY',
+        error: 'Each item quantity must be between 1 and 50.'
+      };
+    }
+    const prodId = String(it?.productId || '').trim();
+    const prod = productMap.get(prodId);
+    if (!prod) {
+      if (allowAdminBypass) {
+        computedSubtotal += Math.max(0, toMoneyNumber(it?.price, 0)) * qty;
+        continue;
+      }
+      return {
+        valid: false,
+        code: 'UNKNOWN_PRODUCT',
+        error: `Catalog item '${prodId || 'unknown'}' could not be verified.`
+      };
+    }
+
+    const catalogPrice = Math.max(0, toMoneyNumber(prod.price, 0));
+    if (catalogPrice <= 0 && !allowAdminBypass) {
+      return {
+        valid: false,
+        code: 'INVALID_CATALOG_PRICE',
+        error: `Catalog pricing unavailable for '${prod.name || prodId}'.`
+      };
+    }
+
+    if (it?.price !== undefined) {
+      const clientUnitPrice = toMoneyNumber(it.price, -1);
+      if (!allowAdminBypass && Math.abs(clientUnitPrice - catalogPrice) > 1) {
+        return {
+          valid: false,
+          code: 'PRICE_TAMPER_DETECTED',
+          error: `Unit price mismatch for '${prod.name || prodId}'. Please refresh your bag and retry.`
+        };
+      }
+    }
+
+    computedSubtotal += catalogPrice * qty;
+  }
+
+  const promoCode = String(body?.appliedPromo || body?.promoCode || '').trim().toUpperCase();
+  const clientDiscount = Math.max(0, toMoneyNumber(body?.discount, 0));
+  const expectedDiscount = promoCode ? computePromoDiscountServer(computedSubtotal, promoCode) : 0;
+
+  if (!allowAdminBypass) {
+    if (promoCode && expectedDiscount === 0 && clientDiscount > 0) {
+      return {
+        valid: false,
+        code: 'INVALID_PROMO_DISCOUNT',
+        error: `Promo code '${promoCode}' is invalid or minimum cart value is not met.`
+      };
+    }
+    if (!promoCode && clientDiscount > 0) {
+      return {
+        valid: false,
+        code: 'PRICE_OR_DISCOUNT_MISMATCH',
+        error: 'Unrecognized discount applied without a valid promotional code.'
+      };
+    }
+    if (Math.abs(clientDiscount - expectedDiscount) > 2) {
+      return {
+        valid: false,
+        code: 'PRICE_OR_DISCOUNT_MISMATCH',
+        error: 'Promotional discount amount does not match server calculation.'
+      };
+    }
+  }
+
+  const finalDiscount = allowAdminBypass ? clientDiscount : expectedDiscount;
+  const expectedDelivery = computedSubtotal > 0 ? 100 : 0;
+  const deliveryCharge = allowAdminBypass && body?.deliveryCharge !== undefined
+    ? Math.max(0, toMoneyNumber(body.deliveryCharge, expectedDelivery))
+    : expectedDelivery;
+
+  if (!allowAdminBypass && body?.deliveryCharge !== undefined) {
+    const clientDelivery = toMoneyNumber(body.deliveryCharge, -1);
+    if (Math.abs(clientDelivery - expectedDelivery) > 2) {
+      return {
+        valid: false,
+        code: 'DELIVERY_CHARGE_MISMATCH',
+        error: 'Shipping charge does not match standard ₹100 flat delivery.'
+      };
+    }
+  }
+
+  const expectedTotal = Math.max(1, Math.round((computedSubtotal - finalDiscount + deliveryCharge) * 100) / 100);
+  const clientTotal = toMoneyNumber(body?.orderAmount ?? body?.totalAmount ?? body?.total, 0);
+
+  if (!allowAdminBypass && clientTotal > 0 && Math.abs(clientTotal - expectedTotal) > 2) {
+    return {
+      valid: false,
+      code: 'TOTAL_AMOUNT_MISMATCH',
+      error: `Submitted order total (₹${clientTotal}) does not match verified server total (₹${expectedTotal}).`
+    };
+  }
+
+  return {
+    valid: true,
+    subtotal: computedSubtotal,
+    discount: finalDiscount,
+    deliveryCharge,
+    totalAmount: allowAdminBypass && clientTotal > 0 ? clientTotal : expectedTotal,
+    ...(promoCode ? { appliedPromo: promoCode } : {})
+  };
 }
 
 function readAllOrders() {
@@ -545,6 +756,7 @@ function readSmsConfigSafe() {
 }
 
 export function handleApiMiddleware(req, res, next) {
+  res.__vdhReq = req;
   const rawUrl = req.url || '';
   const parsedUrl = new URL(rawUrl, 'http://localhost');
   let decodedPathname = parsedUrl.pathname;
@@ -599,13 +811,18 @@ export function handleApiMiddleware(req, res, next) {
     return next();
   }
 
-  // Handle CORS preflight for all /api endpoints
+  // Handle CORS preflight for all /api endpoints using strict origin allowlist
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
+    const allowedOrigin = getAllowedCorsOrigin(req);
+    const optHeaders = {
+      'Vary': 'Origin',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-file-name, x-file-type, x-admin-token, x-customer-token, x-order-token'
-    });
+    };
+    if (allowedOrigin) {
+      optHeaders['Access-Control-Allow-Origin'] = allowedOrigin;
+    }
+    res.writeHead(204, optHeaders);
     res.end();
     return;
   }
@@ -628,6 +845,9 @@ export function handleApiMiddleware(req, res, next) {
       // 3. Admin Login: POST /api/admin/login or /api/admin/login.php
       if ((pathname === '/api/admin/login' || pathname === '/api/admin/login.php') && req.method === 'POST') {
         const body = await parseBody(req);
+        if (body?.__tooLarge) {
+          return sendJson(res, 413, { success: false, error: 'Request payload exceeds maximum allowed size.' });
+        }
         if (!body || typeof body !== 'object') {
           return sendJson(res, 400, {
             success: false,
@@ -833,6 +1053,9 @@ export function handleApiMiddleware(req, res, next) {
       // 6. Customer Mobile Registration: POST /api/auth/mobile-register
       if (pathname === '/api/auth/mobile-register' && req.method === 'POST') {
         const body = await parseBody(req);
+        if (body?.__tooLarge) {
+          return sendJson(res, 413, { code: 'PAYLOAD_TOO_LARGE', error: 'Request payload exceeds maximum allowed size.' });
+        }
         if (!body) {
           return sendJson(res, 400, { code: 'INVALID_PAYLOAD', error: 'Invalid JSON payload' });
         }
@@ -916,6 +1139,9 @@ export function handleApiMiddleware(req, res, next) {
       // 7. Customer Mobile Login: POST /api/auth/mobile-login
       if (pathname === '/api/auth/mobile-login' && req.method === 'POST') {
         const body = await parseBody(req);
+        if (body?.__tooLarge) {
+          return sendJson(res, 413, { code: 'PAYLOAD_TOO_LARGE', error: 'Request payload exceeds maximum allowed size.' });
+        }
         if (!body) {
           return sendJson(res, 400, { code: 'INVALID_PAYLOAD', error: 'Invalid JSON payload' });
         }
@@ -983,7 +1209,10 @@ export function handleApiMiddleware(req, res, next) {
         }
 
         if (req.method === 'POST' || req.method === 'PUT') {
-          const body = await parseBody(req);
+          const body = await parseBody(req, PRODUCT_JSON_BODY_LIMIT_BYTES);
+          if (body?.__tooLarge) {
+            return sendJson(res, 413, { success: false, error: 'Product payload exceeds maximum allowed size.' });
+          }
           const incoming = body?.product || body;
           if (!incoming || !incoming.id) {
             return sendJson(res, 400, { success: false, error: 'Product payload requires an id' });
@@ -1208,6 +1437,9 @@ export function handleApiMiddleware(req, res, next) {
 
         if (req.method === 'POST') {
           const incoming = await parseBody(req);
+          if (incoming?.__tooLarge) {
+            return sendJson(res, 413, { success: false, error: 'Order payload exceeds maximum allowed size.' });
+          }
           if (!incoming || (!incoming.id && !incoming.orderNumber)) {
             return sendJson(res, 400, { success: false, error: 'Order payload requires an id or orderNumber' });
           }
@@ -1232,7 +1464,35 @@ export function handleApiMiddleware(req, res, next) {
               }
             }
 
+            if (!existing || (Array.isArray(incoming.items) && incoming.items.length > 0)) {
+              const pricing = validateAndComputeOrderPricing(incoming, Boolean(admin));
+              if (!pricing.valid) {
+                return sendJson(res, 400, {
+                  success: false,
+                  code: pricing.code || 'INVALID_ORDER_PRICING',
+                  error: pricing.error || 'Order pricing verification failed.'
+                });
+              }
+              incoming.subtotal = pricing.subtotal;
+              incoming.discount = pricing.discount;
+              incoming.deliveryCharge = pricing.deliveryCharge;
+              incoming.total = pricing.totalAmount;
+              incoming.totalAmount = pricing.totalAmount;
+              if (pricing.appliedPromo) {
+                incoming.appliedPromo = pricing.appliedPromo;
+              }
+            }
+
             const payloadCopy = stripUntrustedOrderFields(incoming, Boolean(admin));
+            if (!admin) {
+              if (customer?.uid) {
+                payloadCopy.userId = customer.uid;
+              } else if (existing?.userId) {
+                payloadCopy.userId = existing.userId;
+              } else {
+                delete payloadCopy.userId;
+              }
+            }
             if (!admin && existing?.paymentStatus === 'paid') {
               payloadCopy.paymentStatus = 'paid';
               payloadCopy.isPaid = true;
@@ -1283,6 +1543,9 @@ export function handleApiMiddleware(req, res, next) {
 
           const id = decodeURIComponent(pathname.replace('/api/orders/', ''));
           const updates = await parseBody(req);
+          if (updates?.__tooLarge) {
+            return sendJson(res, 413, { success: false, error: 'Order update payload exceeds maximum allowed size.' });
+          }
           if (!updates || typeof updates !== 'object') {
             return sendJson(res, 400, { success: false, error: 'Invalid JSON update payload' });
           }
@@ -1337,6 +1600,9 @@ export function handleApiMiddleware(req, res, next) {
         }
         if (req.method === 'POST') {
           const body = await parseBody(req);
+          if (body?.__tooLarge) {
+            return sendJson(res, 413, { success: false, error: 'Configuration payload exceeds maximum allowed size.' });
+          }
           if (!body || typeof body !== 'object') {
             return sendJson(res, 400, { success: false, error: 'Invalid configuration payload.' });
           }
@@ -1359,17 +1625,32 @@ export function handleApiMiddleware(req, res, next) {
 
       if (pathname === '/api/payments/cashfree/create-order' && req.method === 'POST') {
         const body = await parseBody(req);
+        if (body?.__tooLarge) {
+          return sendJson(res, 413, { success: false, error: 'Payment payload exceeds maximum allowed size.' });
+        }
         if (!body || typeof body !== 'object') {
           return sendJson(res, 400, { success: false, error: 'Invalid payment order payload.' });
         }
 
+        const admin = await authenticateAdminRequest(req);
+        const customer = await authenticateCustomerRequest(req);
         const isLiveDomain = isLiveProductionRequest(req);
         const rawOrderId = String(body.orderNumber || body.orderId || `VDH-${Date.now().toString().slice(-6)}`).trim();
         const gatewayOrderId = sanitizeGatewayOrderId(rawOrderId);
         if (!gatewayOrderId) {
           return sendJson(res, 400, { success: false, configured: true, error: 'Valid orderNumber is required.' });
         }
-        const orderAmount = toMoneyNumber(body.orderAmount ?? body.totalAmount, 0);
+
+        const pricing = validateAndComputeOrderPricing(body, Boolean(admin));
+        if (!pricing.valid) {
+          return sendJson(res, 400, {
+            success: false,
+            configured: true,
+            code: pricing.code || 'INVALID_ORDER_PRICING',
+            error: pricing.error || 'Order pricing verification failed.'
+          });
+        }
+        const orderAmount = pricing.totalAmount;
 
         if (orderAmount <= 0) {
           return sendJson(res, 400, {
@@ -1447,9 +1728,8 @@ export function handleApiMiddleware(req, res, next) {
           }
         }
 
-        const customer = await authenticateCustomerRequest(req);
-        const resolvedUserId = customer?.isAdmin
-          ? (body.userId || customer.uid || undefined)
+        const resolvedUserId = admin
+          ? (body.userId || customer?.uid || undefined)
           : customer?.uid
           ? customer.uid
           : undefined;
@@ -1529,10 +1809,11 @@ export function handleApiMiddleware(req, res, next) {
               customerPhone: body.customerPhone,
               shippingAddress: body.shippingAddress,
               items: Array.isArray(body.items) ? body.items : [],
-              subtotal: body.subtotal ?? orderAmount,
-              discount: body.discount ?? 0,
-              deliveryCharge: body.deliveryCharge ?? 0,
+              subtotal: pricing.subtotal,
+              discount: pricing.discount,
+              deliveryCharge: pricing.deliveryCharge,
               totalAmount: orderAmount,
+              ...(pricing.appliedPromo ? { appliedPromo: pricing.appliedPromo } : {}),
               giftItem: body.giftItem,
               paymentMethod: body.paymentMethod || 'Cashfree Online Payment',
               paymentStatus: 'pending',
@@ -1569,6 +1850,9 @@ export function handleApiMiddleware(req, res, next) {
 
       if (pathname === '/api/payments/cashfree/verify-order' && req.method === 'POST') {
         const body = await parseBody(req);
+        if (body?.__tooLarge) {
+          return sendJson(res, 413, { success: false, isPaid: false, error: 'Verification payload exceeds maximum allowed size.' });
+        }
         const orderId = String(body?.orderId || body?.order_id || '').trim();
         if (!orderId) {
           return sendJson(res, 400, {
@@ -1688,9 +1972,24 @@ export function handleApiMiddleware(req, res, next) {
           const isTestOrder = paymentEnv === 'SANDBOX';
 
           if (verification.isPaid) {
-            const cleanOrderData = !target
+            let cleanOrderData = !target
               ? stripUntrustedOrderFields(body?.orderData, Boolean(customer?.isAdmin))
               : {};
+            if (!target && body?.orderData && Array.isArray(body.orderData.items) && body.orderData.items.length > 0) {
+              const ordPricing = validateAndComputeOrderPricing(body.orderData, Boolean(customer?.isAdmin));
+              if (!ordPricing.valid) {
+                return sendJson(res, 400, {
+                  success: false,
+                  isPaid: false,
+                  code: ordPricing.code || 'INVALID_ORDER_PRICING',
+                  error: ordPricing.error || 'Order pricing verification failed.'
+                });
+              }
+              cleanOrderData.subtotal = ordPricing.subtotal;
+              cleanOrderData.discount = ordPricing.discount;
+              cleanOrderData.deliveryCharge = ordPricing.deliveryCharge;
+              if (ordPricing.appliedPromo) cleanOrderData.appliedPromo = ordPricing.appliedPromo;
+            }
             if (!target && !customer?.isAdmin) {
               delete cleanOrderData.userId;
               if (customer?.uid) cleanOrderData.userId = customer.uid;
@@ -2167,6 +2466,47 @@ export function handleApiMiddleware(req, res, next) {
         return sendJson(res, 200, {
           success: true,
           urls: Array.from(urls).sort()
+        });
+      }
+
+      // 11c. Read-only inventory of existing image assets on disk in /products and /categories
+      if (pathname === '/api/media/available' && req.method === 'GET') {
+        const productImages = new Set();
+        const categoryImages = new Set();
+        const imgExtRe = /\.(?:jpg|jpeg|png|webp|gif|avif|svg)$/i;
+
+        for (const dir of [PRODUCTS_MEDIA_DIR, DIST_PRODUCTS_MEDIA_DIR]) {
+          if (fs.existsSync(dir)) {
+            for (const entry of fs.readdirSync(dir)) {
+              const full = path.join(dir, entry);
+              if (imgExtRe.test(entry) && fs.statSync(full).isFile()) {
+                productImages.add(`/products/${entry}`);
+              }
+            }
+          }
+        }
+        if (fs.existsSync(PRODUCTS_UPLOAD_MEDIA_DIR)) {
+          for (const entry of fs.readdirSync(PRODUCTS_UPLOAD_MEDIA_DIR)) {
+            const full = path.join(PRODUCTS_UPLOAD_MEDIA_DIR, entry);
+            if (imgExtRe.test(entry) && fs.statSync(full).isFile()) {
+              productImages.add(`/products/uploads/${entry}`);
+            }
+          }
+        }
+        for (const dir of [CATEGORIES_MEDIA_DIR, DIST_CATEGORIES_MEDIA_DIR]) {
+          if (fs.existsSync(dir)) {
+            for (const entry of fs.readdirSync(dir)) {
+              const full = path.join(dir, entry);
+              if (imgExtRe.test(entry) && fs.statSync(full).isFile()) {
+                categoryImages.add(`/categories/${entry}`);
+              }
+            }
+          }
+        }
+        return sendJson(res, 200, {
+          success: true,
+          productImages: Array.from(productImages).sort(),
+          categoryImages: Array.from(categoryImages).sort()
         });
       }
 

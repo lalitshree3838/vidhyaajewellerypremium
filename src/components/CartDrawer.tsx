@@ -12,8 +12,12 @@ import {
   Gift
 } from 'lucide-react';
 import { useCart } from '../context/CartContext';
-import { isGenuineImageUrl } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
+import {
+  JEWELLERY_PLACEHOLDER_IMAGE,
+  resolveSafeProductImageUrl,
+  useAvailableMediaInventory
+} from '../lib/storageService';
 
 interface CartDrawerProps {
   onCheckout: () => void;
@@ -44,6 +48,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onCheckout, onViewShop }
 
   const [promoInput, setPromoInput] = useState('');
   const [promoMessage, setPromoMessage] = useState<{ text: string; error?: boolean } | null>(null);
+  const mediaInventory = useAvailableMediaInventory();
 
   if (!isCartOpen) return null;
 
@@ -200,16 +205,17 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onCheckout, onViewShop }
                   key={item.id}
                   className="bg-white p-3.5 rounded-xl border border-[#E8DCCF] flex gap-3 shadow-xs"
                 >
-                  {Boolean(item.image && isGenuineImageUrl(item.image)) && (
-                    <img
-                      src={item.image}
-                      alt={item.productName}
-                      className="w-20 h-20 object-contain rounded-lg bg-[#FAF7F2] border border-[#E8DCCF]/50 flex-shrink-0"
-                      onError={(e) => {
-                        (e.target as HTMLElement).style.display = 'none';
-                      }}
-                    />
-                  )}
+                  <img
+                    src={resolveSafeProductImageUrl(item.image, mediaInventory)}
+                    alt={item.productName}
+                    className="w-20 h-20 object-contain rounded-lg bg-[#FAF7F2] border border-[#E8DCCF]/50 flex-shrink-0"
+                    onError={(e) => {
+                      const img = e.currentTarget;
+                      if (img.src !== JEWELLERY_PLACEHOLDER_IMAGE) {
+                        img.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                      }
+                    }}
+                  />
                   <div className="flex-1 flex flex-col justify-between">
                     <div>
                       <div className="flex justify-between items-start gap-1">

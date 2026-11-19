@@ -153,36 +153,36 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Main Luxury Navigation Bar */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-20">
+      <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between h-16 sm:h-20 gap-1">
           {/* Mobile menu button */}
-          <div className="flex items-center lg:hidden">
+          <div className="flex items-center lg:hidden shrink-0">
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-2 text-[#3B1E22] hover:text-[#802336] focus:outline-none cursor-pointer"
+              className="p-1.5 sm:p-2 text-[#3B1E22] hover:text-[#802336] focus:outline-none cursor-pointer"
               aria-label="Toggle navigation menu"
             >
-              {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+              {mobileMenuOpen ? <X className="w-5 h-5 sm:w-6 sm:h-6" /> : <Menu className="w-5 h-5 sm:w-6 sm:h-6" />}
             </button>
           </div>
 
           {/* Brand Mark & Monogram */}
           <div
             onClick={() => handleNav('home')}
-            className="flex flex-col items-center justify-center cursor-pointer select-none group"
+            className="flex flex-col items-center justify-center cursor-pointer select-none group min-w-0"
           >
-            <div className="flex items-center gap-2">
-              <span className="text-[#B8860B] group-hover:rotate-45 transition-transform duration-500 text-lg">
+            <div className="flex items-center gap-1 sm:gap-2">
+              <span className="text-[#B8860B] group-hover:rotate-45 transition-transform duration-500 text-sm sm:text-lg">
                 ✦
               </span>
-              <span className="text-2xl sm:text-3xl font-serif tracking-[0.2em] font-semibold text-[#3B1E22] group-hover:text-[#802336] transition-colors">
+              <span className="text-lg sm:text-3xl font-serif tracking-[0.14em] sm:tracking-[0.2em] font-semibold text-[#3B1E22] group-hover:text-[#802336] transition-colors">
                 VIDHYAA
               </span>
-              <span className="text-[#B8860B] group-hover:-rotate-45 transition-transform duration-500 text-lg">
+              <span className="text-[#B8860B] group-hover:-rotate-45 transition-transform duration-500 text-sm sm:text-lg">
                 ✦
               </span>
             </div>
-            <span className="text-[9px] sm:text-[10px] tracking-[0.35em] text-[#802336] uppercase font-medium -mt-1">
+            <span className="text-[8px] sm:text-[10px] tracking-[0.22em] sm:tracking-[0.35em] text-[#802336] uppercase font-medium -mt-0.5 sm:-mt-1">
               Jewellery Studio
             </span>
           </div>
@@ -472,27 +472,27 @@ export const Header: React.FC<HeaderProps> = ({
           </nav>
 
           {/* Action Icons (Search, Wishlist, Account, Cart) */}
-          <div className="flex items-center space-x-3 sm:space-x-5">
+          <div className="flex items-center space-x-1 sm:space-x-5 shrink-0">
             {/* Search Button */}
             <button
               onClick={onOpenSearch}
-              className="p-2 text-[#3B1E22] hover:text-[#802336] transition-colors cursor-pointer"
+              className="p-1.5 sm:p-2 text-[#3B1E22] hover:text-[#802336] transition-colors cursor-pointer"
               title="Search jewellery"
               aria-label="Search jewellery"
             >
-              <Search className="w-5 h-5" />
+              <Search className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
 
             {/* Wishlist */}
             <button
               onClick={() => handleNav('wishlist')}
-              className="p-2 text-[#3B1E22] hover:text-[#802336] transition-colors relative cursor-pointer"
+              className="p-1.5 sm:p-2 text-[#3B1E22] hover:text-[#802336] transition-colors relative cursor-pointer"
               title="Wishlist"
               aria-label="Wishlist"
             >
-              <Heart className="w-5 h-5" />
+              <Heart className="w-4 h-4 sm:w-5 sm:h-5" />
               {wishlistCount > 0 && (
-                <span className="absolute top-1 right-1 bg-[#802336] text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">
+                <span className="absolute top-0.5 right-0.5 sm:top-1 sm:right-1 bg-[#802336] text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">
                   {wishlistCount}
                 </span>
               )}
@@ -508,11 +508,11 @@ export const Header: React.FC<HeaderProps> = ({
                     setUserDropdownOpen(!userDropdownOpen);
                   }
                 }}
-                className="p-2 text-[#3B1E22] hover:text-[#802336] transition-colors flex items-center gap-1 cursor-pointer"
+                className="p-1.5 sm:p-2 text-[#3B1E22] hover:text-[#802336] transition-colors flex items-center gap-1 cursor-pointer"
                 title={activeCustomer ? activeCustomer.displayName || activeCustomer.email || patronSession?.phone || user?.phoneNumber || 'My Account' : 'Sign In'}
                 aria-label="Account"
               >
-                <UserIcon className="w-5 h-5" />
+                <UserIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                 <span className="hidden xl:inline text-xs font-medium tracking-normal">
                   {activeCustomer ? (activeCustomer.displayName?.split(' ')[0] || 'Patron') : 'Sign In'}
                 </span>
@@ -587,7 +587,7 @@ export const Header: React.FC<HeaderProps> = ({
             {/* Shopping Cart Trigger */}
             <button
               onClick={openCart}
-              className="bg-[#3B2F2A] hover:bg-[#4D3E37] active:bg-[#2E2420] text-[#FAF7F2] border border-[#3B2F2A] px-4 py-2 rounded-full transition-all flex items-center gap-2 cursor-pointer shadow-md"
+              className="bg-[#3B2F2A] hover:bg-[#4D3E37] active:bg-[#2E2420] text-[#FAF7F2] border border-[#3B2F2A] px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-full transition-all flex items-center gap-1.5 sm:gap-2 cursor-pointer shadow-md"
               title="View Cart"
               aria-label="View Cart"
             >
@@ -798,17 +798,44 @@ export const Header: React.FC<HeaderProps> = ({
               <span>Admin Studio Portal</span>
             </button>
 
-            <div className="pt-3 border-t border-[#E8DCCF]">
-              {user ? (
-                <div className="flex items-center justify-between py-2">
-                  <span className="text-xs text-gray-600 font-normal">{user.email}</span>
-                  <button
-                    onClick={() => signOut()}
-                    className="text-xs text-red-600 font-semibold cursor-pointer"
-                  >
-                    Sign Out
-                  </button>
-                </div>
+            <div className="pt-3 border-t border-[#E8DCCF] space-y-2">
+              {activeCustomer ? (
+                <>
+                  <div className="flex items-center justify-between py-1 px-1">
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-[#3B1E22] truncate">
+                        {activeCustomer.displayName || 'VIDHYAA Patron'}
+                      </p>
+                      <p className="text-[11px] text-gray-500 font-normal truncate">
+                        {activeCustomer.email || (activeCustomer as any).phone || ''}
+                      </p>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        await signOut();
+                        setMobileMenuOpen(false);
+                        handleNav('home');
+                      }}
+                      className="text-xs text-red-600 font-semibold cursor-pointer shrink-0 ml-2"
+                    >
+                      Sign Out
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => handleNav('account')}
+                      className="py-2 px-3 rounded-lg bg-white border border-[#E8DCCF] text-xs font-semibold text-[#3B1E22] hover:bg-[#F4EBE1] cursor-pointer"
+                    >
+                      My Account
+                    </button>
+                    <button
+                      onClick={() => handleNav('orders')}
+                      className="py-2 px-3 rounded-lg bg-white border border-[#E8DCCF] text-xs font-semibold text-[#3B1E22] hover:bg-[#F4EBE1] cursor-pointer"
+                    >
+                      My Orders
+                    </button>
+                  </div>
+                </>
               ) : (
                 <button
                   onClick={() => {

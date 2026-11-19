@@ -19,6 +19,11 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { Order, Address } from '../types';
 import { fetchOrdersByUserId, isOrderPaid, formatFullAddress } from '../lib/dbService';
+import {
+  JEWELLERY_PLACEHOLDER_IMAGE,
+  resolveSafeProductImageUrl,
+  useAvailableMediaInventory
+} from '../lib/storageService';
 
 interface AccountViewProps {
   onNavigateOrders: () => void;
@@ -36,6 +41,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
   onOpenAuth
 }) => {
   const { user, patronSession, userProfile, isAdmin, signOut, saveAddress, deleteAddress, updateUserProfileData } = useAuth();
+  const mediaInventory = useAvailableMediaInventory();
   const activeCustomer = user || patronSession;
   const activeUid = user?.uid || patronSession?.uid || '';
   const activeEmail = user?.email || patronSession?.email || '';
@@ -46,19 +52,37 @@ export const AccountView: React.FC<AccountViewProps> = ({
   const [loadingOrders, setLoadingOrders] = useState(false);
 
   // Profile Mobile Number State
-  const [profilePhone, setProfilePhone] = useState(userProfile?.phone || '');
+  const [profilePhone, setProfilePhone] = useState(activePhone || '');
   const [profileCountryCode, setProfileCountryCode] = useState(userProfile?.phoneCountryCode || '+91');
   const [savingPhone, setSavingPhone] = useState(false);
   const [phoneMessage, setPhoneMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // New address form
+  const [showAddAddress, setShowAddAddress] = useState(false);
+  const [addressError, setAddressError] = useState<string | null>(null);
+  const [addrName, setAddrName] = useState(activeCustomer?.displayName || '');
+  const [addrPhone, setAddrPhone] = useState(activePhone || '');
+  const [addrStreet, setAddrStreet] = useState('');
+  const [addrLandmark, setAddrLandmark] = useState('');
+  const [addrCity, setAddrCity] = useState('');
+  const [addrState, setAddrState] = useState('Rajasthan');
+  const [addrPincode, setAddrPincode] = useState('');
+
   useEffect(() => {
-    if (userProfile?.phone) {
-      setProfilePhone(userProfile.phone);
-    }
+    setProfilePhone(userProfile?.phone || activePhone || '');
     if (userProfile?.phoneCountryCode) {
       setProfileCountryCode(userProfile.phoneCountryCode);
     }
-  }, [userProfile]);
+  }, [userProfile, activePhone]);
+
+  useEffect(() => {
+    if (!addrName && activeCustomer?.displayName) {
+      setAddrName(activeCustomer.displayName);
+    }
+    if (!addrPhone && activePhone) {
+      setAddrPhone(activePhone);
+    }
+  }, [activeCustomer?.displayName, activePhone]);
 
   const handleSavePhone = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -73,7 +97,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
       await updateUserProfileData({
         phone: profilePhone.trim() || undefined,
         phoneCountryCode: profileCountryCode,
-        phone_verified: false
+        phone_verified: Boolean(patronSession && !user && cleanNumber.length >= 10)
       });
       setPhoneMessage({ type: 'success', text: 'Mobile number updated successfully!' });
       setTimeout(() => setPhoneMessage(null), 3500);
@@ -83,16 +107,6 @@ export const AccountView: React.FC<AccountViewProps> = ({
       setSavingPhone(false);
     }
   };
-
-  // New address form
-  const [showAddAddress, setShowAddAddress] = useState(false);
-  const [addrName, setAddrName] = useState(user?.displayName || '');
-  const [addrPhone, setAddrPhone] = useState('');
-  const [addrStreet, setAddrStreet] = useState('');
-  const [addrLandmark, setAddrLandmark] = useState('');
-  const [addrCity, setAddrCity] = useState('');
-  const [addrState, setAddrState] = useState('Rajasthan');
-  const [addrPincode, setAddrPincode] = useState('');
 
   useEffect(() => {
     if (activeCustomer) {
@@ -125,23 +139,24 @@ export const AccountView: React.FC<AccountViewProps> = ({
     );
   }
 
-  const handleCreateAddress = (e: React.FormEvent) => {
+  const handleCreateAddress = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!addrName || !addrPhone || !addrStreet || !addrCity || !addrPincode) {
-      alert('Please fill all mandatory address fields.');
+    if (!addrName.trim() || !addrPhone.trim() || !addrStreet.trim() || !addrCity.trim() || !addrPincode.trim()) {
+      setAddressError('Please fill all mandatory address fields (Name, Mobile, Street, City, and Pincode).');
       return;
     }
+    setAddressError(null);
     const newAddr: Address = {
       id: `addr_${Date.now()}`,
-      name: addrName,
-      phone: addrPhone,
-      street: addrStreet,
-      landmark: addrLandmark,
-      city: addrCity,
-      state: addrState,
-      pincode: addrPincode
+      name: addrName.trim(),
+      phone: addrPhone.trim(),
+      street: addrStreet.trim(),
+      landmark: addrLandmark.trim(),
+      city: addrCity.trim(),
+      state: addrState.trim(),
+      pincode: addrPincode.trim()
     };
-    saveAddress(newAddr);
+    await saveAddress(newAddr);
     setShowAddAddress(false);
     setAddrStreet('');
     setAddrLandmark('');
@@ -318,11 +333,14 @@ export const AccountView: React.FC<AccountViewProps> = ({
                       <div key={i} className="flex items-center gap-3 text-xs">
                         {it.image ? (
                           <img
-                            src={it.image}
+                            src={resolveSafeProductImageUrl(it.image, mediaInventory)}
                             alt={it.productName}
-                            className="w-12 h-12 rounded-lg object-cover border border-[#E8DCCF]"
+                            className="w-12 h-12 rounded-lg object-cover border border-[#E8DCCF] bg-[#FAF7F2]"
                             onError={(e) => {
-                              (e.target as HTMLElement).style.display = 'none';
+                              const imgEl = e.currentTarget;
+                              if (imgEl.dataset.fallbackApplied === '1') return;
+                              imgEl.dataset.fallbackApplied = '1';
+                              imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
                             }}
                           />
                         ) : (
@@ -375,7 +393,10 @@ export const AccountView: React.FC<AccountViewProps> = ({
               Delivery Addresses
             </h3>
             <button
-              onClick={() => setShowAddAddress(!showAddAddress)}
+              onClick={() => {
+                setAddressError(null);
+                setShowAddAddress(!showAddAddress);
+              }}
               className="bg-[#3B1E22] hover:bg-[#802336] text-[#FAF7F2] px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs"
             >
               <Plus className="w-4 h-4" />
@@ -385,12 +406,19 @@ export const AccountView: React.FC<AccountViewProps> = ({
 
           {showAddAddress && (
             <form
+              noValidate
               onSubmit={handleCreateAddress}
               className="p-6 bg-white rounded-2xl border border-[#E8DCCF] shadow-sm space-y-4"
             >
               <h4 className="font-bold text-xs uppercase tracking-wider text-[#802336]">
                 Enter New Address Details
               </h4>
+              {addressError && (
+                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs font-semibold flex items-center gap-2">
+                  <ShieldAlert className="w-4 h-4 text-red-600 shrink-0" />
+                  <span>{addressError}</span>
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <input
                   type="text"
@@ -517,19 +545,25 @@ export const AccountView: React.FC<AccountViewProps> = ({
           )}
 
           <div className="space-y-4 text-xs">
-            {/* Registered Email */}
+            {/* Registered Email or Account Identity */}
             <div>
               <label className="block font-bold uppercase tracking-wider text-gray-700 mb-1">
-                Account Email
+                Account Identity
               </label>
               <input
                 type="text"
                 disabled
-                value={activeEmail || 'Email patron'}
+                value={
+                  activeEmail && !activeEmail.includes('@phone.vidhyaajewellery.com')
+                    ? activeEmail
+                    : activePhone
+                    ? `Mobile Patron (${activePhone})`
+                    : 'Patron Account'
+                }
                 className="w-full px-3.5 py-2.5 border border-gray-200 bg-gray-50 rounded-xl text-gray-600 font-medium cursor-not-allowed"
               />
               <p className="text-[10px] text-gray-400 mt-1">
-                Used for email + password login and official order confirmations.
+                Used for sign-in verification and official order confirmations.
               </p>
             </div>
 
@@ -550,18 +584,17 @@ export const AccountView: React.FC<AccountViewProps> = ({
             <form onSubmit={handleSavePhone} className="space-y-3 pt-2 border-t border-gray-100">
               <div className="flex items-center justify-between">
                 <label className="block font-bold uppercase tracking-wider text-gray-700">
-                  Mobile Number (Optional)
+                  Mobile Number
                 </label>
-                {/* Verification Status Badge */}
-                {userProfile?.phone && (
+                {(activePhone || userProfile?.phone) && (
                   <span
                     className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                      userProfile.phone_verified
+                      userProfile?.phone_verified || Boolean(patronSession && !user)
                         ? 'bg-emerald-100 text-emerald-800'
                         : 'bg-amber-100 text-amber-800'
                     }`}
                   >
-                    {userProfile.phone_verified ? '✓ Verified' : 'Not verified'}
+                    {userProfile?.phone_verified || Boolean(patronSession && !user) ? '✓ Verified' : 'Saved'}
                   </span>
                 )}
               </div>

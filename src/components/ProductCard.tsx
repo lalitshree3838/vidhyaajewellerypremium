@@ -5,7 +5,11 @@ import { useCart } from '../context/CartContext';
 import { useWishlist } from '../context/WishlistContext';
 import { isGenuineImageUrl, isGenuineProduct, isGenuineVideoUrl } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
-import { JEWELLERY_PLACEHOLDER_IMAGE } from '../lib/storageService';
+import {
+  JEWELLERY_PLACEHOLDER_IMAGE,
+  resolveSafeProductImageUrl,
+  useAvailableMediaInventory
+} from '../lib/storageService';
 import { SeamlessLoopVideo } from './SeamlessLoopVideo';
 import { useResolvedProductVideo } from '../lib/videoFallback';
 
@@ -22,15 +26,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 }) => {
   const { addToCart, openCart } = useCart();
   const { isInWishlist, toggleWishlist } = useWishlist();
+  const mediaInventory = useAvailableMediaInventory();
 
-  // If the product is not genuine or has no genuine image, hide it from the storefront
-  if (!isGenuineProduct(product)) {
-    return null;
-  }
+  const isValidProduct = Boolean(product && isGenuineProduct(product));
 
   // Selected variation state (defaults to first variation if present)
   const [selectedVariation, setSelectedVariation] = useState<ProductVariation | undefined>(
-    product.variations && product.variations.length > 0 ? product.variations[0] : undefined
+    product?.variations && product.variations.length > 0 ? product.variations[0] : undefined
   );
 
   const [addedToast, setAddedToast] = useState(false);
@@ -39,46 +41,46 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
   // Synchronize variation when product changes
   useEffect(() => {
-    if (Array.isArray(product.variations) && product.variations.length > 0) {
+    if (Array.isArray(product?.variations) && product.variations.length > 0) {
       setSelectedVariation(
         (prev) => (prev && product.variations.find((v) => v && v.id === prev.id)) || product.variations[0]
       );
     } else {
       setSelectedVariation(undefined);
     }
-  }, [product.id, product.variations]);
+  }, [product?.id, product?.variations]);
 
   useEffect(() => {
     setImgIdx(0);
-  }, [product.id, selectedVariation?.id]);
+  }, [product?.id, selectedVariation?.id]);
 
-  // Build ordered deduplicated candidate list (excluding SVG placeholders)
+  // Build ordered deduplicated candidate list using verified media inventory
   const imgCandidates = useMemo(() => {
     const raw: string[] = [];
     if (selectedVariation?.image && typeof selectedVariation.image === 'string') {
       raw.push(selectedVariation.image.trim());
     }
-    if (Array.isArray(product.images)) {
+    if (Array.isArray(product?.images)) {
       product.images.forEach((img) => {
         if (typeof img === 'string' && img.trim()) raw.push(img.trim());
       });
     }
-    if (Array.isArray(product.variations)) {
+    if (Array.isArray(product?.variations)) {
       product.variations.forEach((v) => {
         if (v?.image && typeof v.image === 'string' && v.image.trim()) raw.push(v.image.trim());
       });
     }
     const seen = new Set<string>();
     const valid: string[] = [];
-    const fallback: string[] = [];
     raw.forEach((u) => {
-      if (!u || seen.has(u) || u.startsWith('data:image/svg+xml')) return;
-      seen.add(u);
-      if (isGenuineImageUrl(u)) valid.push(u);
-      else fallback.push(u);
+      if (!u || u.startsWith('data:image/svg+xml')) return;
+      const safeUrl = resolveSafeProductImageUrl(u, mediaInventory);
+      if (!safeUrl || safeUrl === JEWELLERY_PLACEHOLDER_IMAGE || seen.has(safeUrl)) return;
+      seen.add(safeUrl);
+      if (isGenuineImageUrl(safeUrl)) valid.push(safeUrl);
     });
-    return valid.length > 0 ? valid : fallback;
-  }, [product.images, product.variations, selectedVariation?.image]);
+    return valid;
+  }, [product?.images, product?.variations, selectedVariation?.image, mediaInventory]);
 
   const displayImage = imgCandidates[imgIdx] || '';
   const hasRealImg = imgCandidates.length > 0;
@@ -106,20 +108,41 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     setImageLoaded(false);
     const timer = setTimeout(() => setImageLoaded(true), 4500);
     return () => clearTimeout(timer);
-  }, [product.id, displayImage]);
+  }, [product?.id, displayImage]);
+
+  useEffect(() => {
+    if (imageLoaded || imageError || !hasRealImg) return;
+    const el = imgRef.current;
+    if (el && el.complete && el.naturalWidth > 0) {
+      setImageLoaded(true);
+    }
+  }, [imageLoaded, displayImage, imageError, hasRealImg]);
+
+  const hasVideo = Boolean(
+    product?.videoUrl &&
+      isGenuineVideoUrl(product.videoUrl) &&
+      (!resolvedVideo.ready || resolvedVideo.hasPlayableVideo)
+  );
+  const isDisplayingVideo = hasVideo && resolvedVideo.ready && resolvedVideo.hasPlayableVideo && showVideo && !videoError;
+
+  useEffect(() => {
+    if (!isDisplayingVideo) return;
+    if (hasRealImg) {
+      setImageLoaded(true);
+      return;
+    }
+    const timer = setTimeout(() => setImageLoaded(true), 2500);
+    return () => clearTimeout(timer);
+  }, [isDisplayingVideo, hasRealImg]);
+
+  if (!isValidProduct) {
+    return null;
+  }
 
   const currentPrice = product.price;
   const currentMrp = product.mrp > 0 ? product.mrp : product.price;
   const discountPercent = calculateDiscountPercent(currentMrp, currentPrice);
   const hasDiscount = currentMrp > currentPrice && discountPercent > 0;
-
-  // Video presence check with verified saved/catalog fallback URL
-  const hasVideo = Boolean(
-    product.videoUrl &&
-      isGenuineVideoUrl(product.videoUrl) &&
-      (!resolvedVideo.ready || resolvedVideo.hasPlayableVideo)
-  );
-  const isDisplayingVideo = hasVideo && resolvedVideo.ready && resolvedVideo.hasPlayableVideo && showVideo && !videoError;
 
   const effectiveImage = !imageError && displayImage ? displayImage : JEWELLERY_PLACEHOLDER_IMAGE;
 

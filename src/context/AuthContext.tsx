@@ -59,6 +59,45 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const ADMIN_EMAIL = 'anavneeraj2003@gmail.com';
 const ADMIN_SESSION_STORAGE_KEY = 'vidhyaa_admin_token';
+const PATRON_PROFILE_PREFIX = 'vidhyaa_patron_profile_';
+
+const loadPatronProfileFromStorage = (patron: PatronSessionUser): UserProfile => {
+  const now = new Date().toISOString();
+  const basePhone = patron.phone || patron.mobile || '';
+  try {
+    const raw = localStorage.getItem(`${PATRON_PROFILE_PREFIX}${patron.uid}`);
+    if (raw) {
+      const parsed = JSON.parse(raw) as UserProfile;
+      return {
+        ...parsed,
+        id: parsed.id || patron.uid,
+        displayName: parsed.displayName || patron.displayName || 'VIDHYAA Patron',
+        phone: parsed.phone || basePhone,
+        phoneCountryCode: parsed.phoneCountryCode || '+91',
+        role: 'customer',
+        savedAddresses: Array.isArray(parsed.savedAddresses) ? parsed.savedAddresses : []
+      };
+    }
+  } catch {}
+  return {
+    id: patron.uid,
+    email: patron.email || '',
+    displayName: patron.displayName || 'VIDHYAA Patron',
+    phone: basePhone,
+    phoneCountryCode: '+91',
+    phone_verified: Boolean(basePhone),
+    role: 'customer',
+    savedAddresses: [],
+    createdAt: now,
+    updatedAt: now
+  };
+};
+
+const savePatronProfileToStorage = (uid: string, profile: UserProfile) => {
+  try {
+    localStorage.setItem(`${PATRON_PROFILE_PREFIX}${uid}`, JSON.stringify(profile));
+  } catch {}
+};
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -209,14 +248,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
       } else {
-        setUserProfile(null);
         setIsAdminState(false);
+        if (!patronSession) {
+          setUserProfile(null);
+        }
       }
       setLoading(false);
     });
 
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (user) return;
+    if (patronSession) {
+      const loaded = loadPatronProfileFromStorage(patronSession);
+      savePatronProfileToStorage(patronSession.uid, loaded);
+      setUserProfile(loaded);
+    } else {
+      setUserProfile(null);
+    }
+  }, [patronSession, user]);
 
   const loginAdminBackend = async (
     email: string,
@@ -335,36 +387,94 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const saveAddress = async (address: Address) => {
-    if (!user || !userProfile) return;
-    const existing = userProfile.savedAddresses || [];
-    const index = existing.findIndex((a) => a.id === address.id);
-    let updated: Address[];
-    if (index >= 0) {
-      updated = [...existing];
-      updated[index] = address;
-    } else {
-      updated = [...existing, address];
+    if (user && userProfile) {
+      const existing = userProfile.savedAddresses || [];
+      const index = existing.findIndex((a) => a.id === address.id);
+      let updated: Address[];
+      if (index >= 0) {
+        updated = [...existing];
+        updated[index] = address;
+      } else {
+        updated = [...existing, address];
+      }
+      const updatedProfile = { ...userProfile, savedAddresses: updated, updatedAt: new Date().toISOString() };
+      setUserProfile(updatedProfile);
+      await saveUserProfile(user.uid, { savedAddresses: updated });
+      return;
     }
-    const updatedProfile = { ...userProfile, savedAddresses: updated };
-    setUserProfile(updatedProfile);
-    await saveUserProfile(user.uid, { savedAddresses: updated });
+
+    if (patronSession) {
+      const currentProfile = userProfile || loadPatronProfileFromStorage(patronSession);
+      const existing = currentProfile.savedAddresses || [];
+      const index = existing.findIndex((a) => a.id === address.id);
+      const updated = index >= 0
+        ? existing.map((a, idx) => (idx === index ? address : a))
+        : [...existing, address];
+      const updatedProfile: UserProfile = {
+        ...currentProfile,
+        savedAddresses: updated,
+        updatedAt: new Date().toISOString()
+      };
+      setUserProfile(updatedProfile);
+      savePatronProfileToStorage(patronSession.uid, updatedProfile);
+    }
   };
 
   const deleteAddress = async (addressId: string) => {
-    if (!user || !userProfile) return;
-    const updated = (userProfile.savedAddresses || []).filter((a) => a.id !== addressId);
-    const updatedProfile = { ...userProfile, savedAddresses: updated };
-    setUserProfile(updatedProfile);
-    await saveUserProfile(user.uid, { savedAddresses: updated });
+    if (user && userProfile) {
+      const updated = (userProfile.savedAddresses || []).filter((a) => a.id !== addressId);
+      const updatedProfile = { ...userProfile, savedAddresses: updated, updatedAt: new Date().toISOString() };
+      setUserProfile(updatedProfile);
+      await saveUserProfile(user.uid, { savedAddresses: updated });
+      return;
+    }
+
+    if (patronSession) {
+      const currentProfile = userProfile || loadPatronProfileFromStorage(patronSession);
+      const updated = (currentProfile.savedAddresses || []).filter((a) => a.id !== addressId);
+      const updatedProfile: UserProfile = {
+        ...currentProfile,
+        savedAddresses: updated,
+        updatedAt: new Date().toISOString()
+      };
+      setUserProfile(updatedProfile);
+      savePatronProfileToStorage(patronSession.uid, updatedProfile);
+    }
   };
 
   const updateUserProfileData = async (data: Partial<UserProfile>) => {
-    if (!user) return;
-    if (userProfile) {
-      const updatedProfile = { ...userProfile, ...data };
-      setUserProfile(updatedProfile);
+    if (user) {
+      if (userProfile) {
+        const updatedProfile = { ...userProfile, ...data, updatedAt: new Date().toISOString() };
+        setUserProfile(updatedProfile);
+      }
+      await saveUserProfile(user.uid, data);
+      return;
     }
-    await saveUserProfile(user.uid, data);
+
+    if (patronSession) {
+      const currentProfile = userProfile || loadPatronProfileFromStorage(patronSession);
+      const updatedProfile: UserProfile = {
+        ...currentProfile,
+        ...data,
+        updatedAt: new Date().toISOString()
+      };
+      setUserProfile(updatedProfile);
+      savePatronProfileToStorage(patronSession.uid, updatedProfile);
+
+      if (data.displayName !== undefined || data.phone !== undefined) {
+        const updatedSession: PatronSessionUser = {
+          ...patronSession,
+          ...(data.displayName ? { displayName: data.displayName } : {}),
+          ...(data.phone !== undefined ? { phone: data.phone, mobile: data.phone } : {})
+        };
+        setPatronSession(updatedSession);
+        try {
+          localStorage.setItem('vidhyaa_patron_session', JSON.stringify(updatedSession));
+          window.dispatchEvent(new Event('vidhyaa_patron_auth_changed'));
+        } catch {}
+      }
+    }
   };
 
   return (

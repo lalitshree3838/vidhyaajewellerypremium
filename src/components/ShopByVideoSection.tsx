@@ -31,6 +31,11 @@ import {
   VideoInventoryState
 } from '../lib/videoFallback';
 import { SeamlessLoopVideo, SeamlessLoopVideoHandle } from './SeamlessLoopVideo';
+import {
+  JEWELLERY_PLACEHOLDER_IMAGE,
+  resolveSafeProductImageUrl,
+  useAvailableMediaInventory
+} from '../lib/storageService';
 
 interface VideoReelItem {
   id: string;
@@ -560,6 +565,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
   onSelectProduct
 }) => {
   const { addToCart, openCart } = useCart();
+  const mediaInventory = useAvailableMediaInventory();
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [inventory, setInventory] = useState<VideoInventoryState>({
     checked: false,
@@ -617,12 +623,13 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
       if (seenCanonicalReels.has(dedupeKey)) continue;
       seenCanonicalReels.add(dedupeKey);
 
-      const thumb =
+      const rawThumb =
         (p.images || []).find(isGenuineImageUrl) ||
         (p.variations || [])
           .map((v) => v?.image)
           .find((img): img is string => Boolean(img && isGenuineImageUrl(img))) ||
         '';
+      const thumb = resolveSafeProductImageUrl(rawThumb, mediaInventory);
 
       reels.push({
         id: `reel-${p.id}`,
@@ -643,7 +650,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
     }
 
     return reels;
-  }, [products, inventory]);
+  }, [products, inventory, mediaInventory]);
 
   const [activeSlide, setActiveSlide] = useState<number>(0);
   const [unmutedReelId, setUnmutedReelId] = useState<string | null>(null);
@@ -943,10 +950,16 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
                 >
                   {reel.posterImage && (
                     <img
-                      src={reel.posterImage}
+                      src={resolveSafeProductImageUrl(reel.posterImage, mediaInventory)}
                       alt={reel.title}
                       className="w-12 h-12 rounded-xl object-cover border border-[#E8DCCF] flex-shrink-0 bg-white"
                       loading="lazy"
+                      onError={(e) => {
+                        const img = e.currentTarget;
+                        if (img.src !== JEWELLERY_PLACEHOLDER_IMAGE) {
+                          img.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                        }
+                      }}
                     />
                   )}
                   <div className="flex-1 min-w-0 pr-1">

@@ -41,6 +41,41 @@ export const CartProvider: React.FC<{ products?: Product[]; children: React.Reac
 
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [appliedPromo, setAppliedPromo] = useState<string | null>(null);
+  const [customCoupons, setCustomCoupons] = useState<
+    Array<{
+      code: string;
+      discountType: 'percentage' | 'fixed';
+      discountValue: number;
+      minOrderAmount: number;
+      active: boolean;
+    }>
+  >(() => {
+    try {
+      const raw = localStorage.getItem('vidhyaa_coupons');
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    const reloadCoupons = () => {
+      try {
+        const raw = localStorage.getItem('vidhyaa_coupons');
+        const parsed = raw ? JSON.parse(raw) : [];
+        setCustomCoupons(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        setCustomCoupons([]);
+      }
+    };
+    window.addEventListener('vidhyaa_coupons_updated', reloadCoupons);
+    window.addEventListener('storage', reloadCoupons);
+    return () => {
+      window.removeEventListener('vidhyaa_coupons_updated', reloadCoupons);
+      window.removeEventListener('storage', reloadCoupons);
+    };
+  }, []);
 
   // Synchronize cart item prices immediately whenever saved admin product prices change
   useEffect(() => {
@@ -154,13 +189,83 @@ export const CartProvider: React.FC<{ products?: Product[]; children: React.Reac
   const subtotal = items.reduce((acc, item) => acc + item.price * item.quantity, 0);
   const productSavings = Math.max(0, originalTotal - subtotal);
 
-  // Promo code discounts
-  let discount = 0;
-  if (appliedPromo === 'VIDHYAA10') {
-    discount = Math.round(subtotal * 0.1); // 10% off
-  } else if (appliedPromo === 'FESTIVE500' && subtotal >= 2500) {
-    discount = 500;
-  }
+  const evaluatePromoDiscount = (code: string | null, cartSubtotal: number): { valid: boolean; discountAmount: number; message: string } => {
+    if (!code) return { valid: false, discountAmount: 0, message: '' };
+    const clean = code.trim().toUpperCase();
+
+    if (clean === 'VIDHYAA10' || clean === 'ROYAL10') {
+      return {
+        valid: true,
+        discountAmount: Math.round(cartSubtotal * 0.1),
+        message: 'Exclusive 10% Patron Discount applied!'
+      };
+    }
+    if (clean === 'LIVESTUDIO15') {
+      return {
+        valid: true,
+        discountAmount: Math.round(cartSubtotal * 0.15),
+        message: '15% Live Studio Showcase Discount applied!'
+      };
+    }
+    if (clean === 'FESTIVE500') {
+      if (cartSubtotal < 2500) {
+        return {
+          valid: false,
+          discountAmount: 0,
+          message: 'Code FESTIVE500 requires minimum cart of ₹2,500'
+        };
+      }
+      return {
+        valid: true,
+        discountAmount: 500,
+        message: '₹500 Festive Savings applied!'
+      };
+    }
+    if (clean === 'BRIDALVIP') {
+      if (cartSubtotal < 5000) {
+        return {
+          valid: false,
+          discountAmount: 0,
+          message: 'Code BRIDALVIP requires minimum cart of ₹5,000'
+        };
+      }
+      return {
+        valid: true,
+        discountAmount: Math.round(cartSubtotal * 0.15),
+        message: '15% Bridal VIP Savings applied!'
+      };
+    }
+
+    const custom = customCoupons.find(
+      (c) => c && c.active !== false && String(c.code || '').trim().toUpperCase() === clean
+    );
+    if (custom) {
+      const minOrder = Number(custom.minOrderAmount || 0);
+      if (cartSubtotal < minOrder) {
+        return {
+          valid: false,
+          discountAmount: 0,
+          message: `Code ${clean} requires minimum cart of ₹${minOrder.toLocaleString('en-IN')}`
+        };
+      }
+      const val = Number(custom.discountValue || 0);
+      const calc =
+        custom.discountType === 'percentage'
+          ? Math.round((cartSubtotal * val) / 100)
+          : Math.round(val);
+      return {
+        valid: true,
+        discountAmount: Math.max(0, calc),
+        message: `Promo code ${clean} applied!`
+      };
+    }
+
+    return { valid: false, discountAmount: 0, message: 'Invalid or expired promotional code' };
+  };
+
+  // Promo code discounts (capped at cart subtotal)
+  const rawPromoEval = evaluatePromoDiscount(appliedPromo, subtotal);
+  const discount = rawPromoEval.valid ? Math.min(subtotal, Math.max(0, rawPromoEval.discountAmount)) : 0;
 
   const totalSavings = productSavings + discount;
 
@@ -174,18 +279,12 @@ export const CartProvider: React.FC<{ products?: Product[]; children: React.Reac
 
   const applyPromo = (code: string) => {
     const clean = code.trim().toUpperCase();
-    if (clean === 'VIDHYAA10') {
-      setAppliedPromo('VIDHYAA10');
-      return { success: true, message: 'Exclusive 10% Patron Discount applied!' };
+    const res = evaluatePromoDiscount(clean, subtotal);
+    if (res.valid) {
+      setAppliedPromo(clean);
+      return { success: true, message: res.message };
     }
-    if (clean === 'FESTIVE500') {
-      if (subtotal < 2500) {
-        return { success: false, message: 'Code FESTIVE500 requires minimum cart of ₹2,500' };
-      }
-      setAppliedPromo('FESTIVE500');
-      return { success: true, message: '₹500 Festive Savings applied!' };
-    }
-    return { success: false, message: 'Invalid or expired promotional code' };
+    return { success: false, message: res.message };
   };
 
   const removePromo = () => setAppliedPromo(null);

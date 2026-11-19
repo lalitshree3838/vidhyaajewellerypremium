@@ -34,7 +34,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 }) => {
   const { signInWithGoogle, signInWithEmail, signUpWithEmail, resetPassword } = useAuth();
 
-  // Primary Method: 'mobile' (Worldwide SMS OTP) vs 'email' (Email & Password)
+  // Primary Method: 'mobile' (+91 Mobile & Password) vs 'email' (Email & Password)
   const [authMethod, setAuthMethod] = useState<'mobile' | 'email'>(
     initialMode === 'mobile' ? 'mobile' : 'email'
   );
@@ -114,12 +114,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
     if (raw.includes('auth/popup-closed-by-user')) {
       return 'Google Sign-In was closed before completing.';
-    }
-    if (raw.includes('auth/invalid-verification-code')) {
-      return 'Incorrect verification code. Please check the 6-digit OTP received on your phone.';
-    }
-    if (raw.includes('auth/code-expired')) {
-      return 'Verification code has expired. Please tap Resend OTP to receive a fresh code.';
     }
     return raw || 'Authentication request failed. Please try again.';
   };
@@ -890,7 +884,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     }}
                     className="text-xs text-[#802336] hover:text-[#3B1E22] font-semibold hover:underline cursor-pointer"
                   >
-                    📱 Or Login with Mobile Number (Worldwide SMS OTP)
+                    📱 Or Login with +91 Mobile Number & Password
                   </button>
                 </div>
               )}

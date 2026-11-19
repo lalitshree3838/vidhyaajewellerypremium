@@ -1,65 +1,150 @@
 {
   "project": "VIDHYAA Jewellery Studio",
   "productionDomain": "https://vidhyaajewellerystudio.com",
+  "generatedAt": "2026-11-19T10:19:29.569Z",
   "packageDirectory": "safe-deploy-package/",
   "localBuildVerified": true,
   "liveDeploymentVerified": false,
-  "gitRepositoryConnected": false,
-  "previousProductionBundle": "/assets/index-DfwSxkcQ.js",
   "newProductionAssets": {
     "html": "/index.html",
-    "js": "/assets/index-BaL4kABd.js",
-    "css": "/assets/index-CD1gwki0.css"
+    "js": "/assets/index-D3aAc3Vd.js",
+    "css": "/assets/index-CNtIG6oJ.css"
   },
   "uploadFilesToHostingerPublicHtml": [
     {
-      "localSource": "safe-deploy-package/assets/index-BaL4kABd.js",
-      "hostingerTarget": "public_html/assets/index-BaL4kABd.js",
-      "uploadOrder": 1,
-      "bytes": 9813691,
-      "sha256": "093452b274f5a1640940c724091bb23c3ca8657b4adc834d4c538a50dd56882d",
-      "notes": "Upload BEFORE index.html so no visitor hits a 404 on the new bundle."
+      "localSource": "safe-deploy-package/assets/index-CNtIG6oJ.css",
+      "hostingerTarget": "public_html/assets/index-CNtIG6oJ.css",
+      "bytes": 123831,
+      "sha256": "d2b782d7852318fddad04acb5915a291c42ab35b4f22ff00f8ed95c9200f290f"
     },
     {
-      "localSource": "safe-deploy-package/assets/index-CD1gwki0.css",
-      "hostingerTarget": "public_html/assets/index-CD1gwki0.css",
-      "uploadOrder": 2,
-      "bytes": 117722,
-      "sha256": "f88af2fef19b660d85a0f96eeea88e6f6d72e386b1cba77b3740b648168423ae",
-      "notes": "Referenced by dist/index.html (unchanged CSS)."
+      "localSource": "safe-deploy-package/assets/index-D3aAc3Vd.js",
+      "hostingerTarget": "public_html/assets/index-D3aAc3Vd.js",
+      "bytes": 9719944,
+      "sha256": "2384a273df3476162cbd8f5de3f7e1b12bfdb570448a36f8e585c3675f002653"
+    },
+    {
+      "localSource": "safe-deploy-package/.htaccess",
+      "hostingerTarget": "public_html/.htaccess",
+      "bytes": 5987,
+      "sha256": "1298aad612b73fecec060a71dcc05e5e8af631cf11fbebeba51e6d6472b8bd62"
+    },
+    {
+      "localSource": "safe-deploy-package/api/admin/_auth.php",
+      "hostingerTarget": "public_html/api/admin/_auth.php",
+      "bytes": 44698,
+      "sha256": "151e438dc9d8f6015e3ae3d8446d133679874fb1e13315a1b9d6dfcae4333517"
+    },
+    {
+      "localSource": "safe-deploy-package/api/admin/login.php",
+      "hostingerTarget": "public_html/api/admin/login.php",
+      "bytes": 5743,
+      "sha256": "44ac768945c31a45cd9ae5e77d0d6ef48285a915349d26e98a24e5514ad6755d"
+    },
+    {
+      "localSource": "safe-deploy-package/api/admin/logout.php",
+      "hostingerTarget": "public_html/api/admin/logout.php",
+      "bytes": 646,
+      "sha256": "2f9d0125fa4015e86f8d6c833f5765b308d1e4b97234dfab2cf94f942d1bf899"
+    },
+    {
+      "localSource": "safe-deploy-package/api/admin/sms-config.php",
+      "hostingerTarget": "public_html/api/admin/sms-config.php",
+      "bytes": 6917,
+      "sha256": "47a80d5906ef1c6a8bb84b36098b7de8d1cb2c28a992a9349bf70adf4dc5d00c"
+    },
+    {
+      "localSource": "safe-deploy-package/api/admin/verify-session.php",
+      "hostingerTarget": "public_html/api/admin/verify-session.php",
+      "bytes": 1644,
+      "sha256": "1d64df9a86a5729d91f972f11926372029f58e675d766c129fd09c83054a4b09"
+    },
+    {
+      "localSource": "safe-deploy-package/api/admin/whatsapp-status.php",
+      "hostingerTarget": "public_html/api/admin/whatsapp-status.php",
+      "bytes": 2210,
+      "sha256": "466ae4ced8ef223d273cdec420d603a223f2c7c40416c0eb4ea952a9014219fe"
+    },
+    {
+      "localSource": "safe-deploy-package/api/auth/mobile.php",
+      "hostingerTarget": "public_html/api/auth/mobile.php",
+      "bytes": 6721,
+      "sha256": "dc30f78b10aeaf035f5a41a9e531f82f1719cd86ca99ee6581e80de199d0db2a"
+    },
+    {
+      "localSource": "safe-deploy-package/api/media/available.php",
+      "hostingerTarget": "public_html/api/media/available.php",
+      "bytes": 1911,
+      "sha256": "0c2598999c7ae65fff54cc893fbbd08140d68ea110c3c924a8325efb3cf98e2f"
+    },
+    {
+      "localSource": "safe-deploy-package/api/orders.php",
+      "hostingerTarget": "public_html/api/orders.php",
+      "bytes": 25878,
+      "sha256": "ce8080a7bebb5a3828a987e092428a5293ef38fae29ac59ca4490b54638d820f"
+    },
+    {
+      "localSource": "safe-deploy-package/api/payments/cashfree.php",
+      "hostingerTarget": "public_html/api/payments/cashfree.php",
+      "bytes": 46520,
+      "sha256": "bcd5f8d53c41eea0ea097def80242f502bcabbdb73bb8f7a37c50ca2837461fb"
+    },
+    {
+      "localSource": "safe-deploy-package/api/products.php",
+      "hostingerTarget": "public_html/api/products.php",
+      "bytes": 5885,
+      "sha256": "d1b01b8ed4b10e559c3407000b8ed87811d50b59da5afc5624dc09503c6f5898"
+    },
+    {
+      "localSource": "safe-deploy-package/api/videos/available.php",
+      "hostingerTarget": "public_html/api/videos/available.php",
+      "bytes": 1244,
+      "sha256": "4243413ddca3fa227ff00d23c5aa29a7653f707ad57292af82e775c7b4dd2a96"
+    },
+    {
+      "localSource": "safe-deploy-package/api/videos/upload.php",
+      "hostingerTarget": "public_html/api/videos/upload.php",
+      "bytes": 6407,
+      "sha256": "07ffe026bd739b69479ba4611ded5df749d29b9d028589cf7cba173249f5d2ba"
+    },
+    {
+      "localSource": "safe-deploy-package/google-pay-logo.svg",
+      "hostingerTarget": "public_html/google-pay-logo.svg",
+      "bytes": 940,
+      "sha256": "0cb8100c9952435c3b1966a3e30d4cae4217e510a328787ef5f4e1108481a696"
+    },
+    {
+      "localSource": "safe-deploy-package/google-pay-mark.svg",
+      "hostingerTarget": "public_html/google-pay-mark.svg",
+      "bytes": 1814,
+      "sha256": "9aa3aee7c288b01b23a55b7f012ef964b38112515b20cca9d1fd480436d9f4fd"
+    },
+    {
+      "localSource": "safe-deploy-package/hero-section-image-final.jpg",
+      "hostingerTarget": "public_html/hero-section-image-final.jpg",
+      "bytes": 274227,
+      "sha256": "e3d727d3391dee63ae730e21b3a79b4dccc388b2299c1902627ce6574966fa34"
+    },
+    {
+      "localSource": "safe-deploy-package/vidhyaa-home-hero.jpg",
+      "hostingerTarget": "public_html/vidhyaa-home-hero.jpg",
+      "bytes": 274227,
+      "sha256": "e3d727d3391dee63ae730e21b3a79b4dccc388b2299c1902627ce6574966fa34"
     },
     {
       "localSource": "safe-deploy-package/index.html",
       "hostingerTarget": "public_html/index.html",
-      "uploadOrder": 3,
       "bytes": 1861,
-      "sha256": "9f75e38d231de6202d7d29a145138f7020724781d0e5da5d9b574b07fe1b4688",
-      "notes": "Upload LAST; switches live entrypoint from index-DfwSxkcQ.js to index-BaL4kABd.js."
+      "sha256": "5b115cfdba2d8a892a5efaf1307f6ca430b784b2bb57d5d602725bd8162c45bf"
     }
   ],
-  "githubManualSyncFiles": [
-    {
-      "path": "assets/index-D2RoHgHG.js",
-      "bytes": 9848745,
-      "sha256": "6b9d1de6c30c1c834b66942249bb18145fd8fad26b3f3ee28000813fab7d42b2"
-    },
-    {
-      "path": "scripts/patch_media_restore.cjs",
-      "bytes": 83680,
-      "sha256": "9053fc78b200b03991c0a5982193b51a8f81e95b7831448cc0a8eae7bca06f09"
-    }
-  ],
-  "strictlyDoNotOverwrite": [
-    "public_html/data/ (products.json, orders.json, patrons.json, whatsapp_logs.json, backups)",
-    "public_html/api/ (products, products.php, orders, admin/, videos/)",
-    "public_html/videos/uploads/ (all 6 existing MP4 videos)",
-    "public_html/products/ (uploaded product photos)",
-    "public_html/.htaccess"
-  ],
-  "includedFixes": [
-    "ShopByVideoSection PN card Play Arrow button: removed destructive el.load() before play(), added inline zIndex:25 and pointerEvents:'auto', synchronous el.play() on real video ref, stopPropagation/preventDefault, honest playing state only after play() resolves with !el.paused or onPlaying event, diagnostic console logs",
-    "ShopByVideoSection FN modal: initialized modalPlaying=false instead of fake true, replaced non-clickable pointer-events-none div with real <button type='button'> at zIndex:30 and pointerEvents:'auto', removed fake setModalPlaying(true) when play() rejects",
-    "SeamlessLoopVideo Lk: converted non-button play/retry overlays to real <button type='button'> with zIndex:30 and pointerEvents:'auto', removed destructive el.load() on normal play clicks, honest state updates on real play() resolution/rejection + diagnostic console logs",
-    "Preserved earlier fixes: ShopByVideoSection 9:16 sizing & ProductCard multi-candidate image fallback"
+  "strictlyExcludedFromPackage": [
+    ".backups/",
+    ".admin-secrets/",
+    "data/ (products.json, categories.json, orders.json, patrons.json, whatsapp_logs.json)",
+    "videos/uploads/",
+    "products/",
+    "categories/",
+    ".env*"
   ]
 }

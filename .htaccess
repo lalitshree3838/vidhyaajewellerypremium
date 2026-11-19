@@ -86,6 +86,7 @@
   RewriteRule ^api/auth/mobile-register/?$ /api/auth/mobile.php?action=register [QSA,L]
   RewriteRule ^api/auth/mobile-login/?$ /api/auth/mobile.php?action=login [QSA,L]
   RewriteRule ^api/videos/available/?$ /api/videos/available.php [QSA,L]
+  RewriteRule ^api/media/available/?$ /api/media/available.php [QSA,L]
 
   # Cashfree PG & Webhook routes
   RewriteRule ^api/payments/cashfree/status/?$ /api/payments/cashfree.php?action=status [QSA,L]

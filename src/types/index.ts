@@ -212,6 +212,7 @@ export interface Order {
   totalSavings?: number;
   subtotal: number;
   discount: number;
+  appliedPromo?: string;
   deliveryCharge: number;
   totalAmount: number;
   paymentMethod: 'UPI' | 'Google Pay (UPI)' | 'Pay by UPI Mobile Number' | 'Pay by UPI QR Code' | string;

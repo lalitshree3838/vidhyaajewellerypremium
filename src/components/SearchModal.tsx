@@ -1,8 +1,13 @@
 import React, { useState, useMemo } from 'react';
 import { X, Search, Star, ArrowRight, ShoppingBag } from 'lucide-react';
 import { Product } from '../types';
-import { isGenuineProduct, isGenuineImageUrl } from '../lib/sampleData';
+import { isGenuineProduct } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
+import {
+  JEWELLERY_PLACEHOLDER_IMAGE,
+  resolveSafeProductImageUrl,
+  useAvailableMediaInventory
+} from '../lib/storageService';
 
 interface SearchModalProps {
   isOpen: boolean;
@@ -19,9 +24,10 @@ export const SearchModal: React.FC<SearchModalProps> = ({
 }) => {
   const [queryText, setQueryText] = useState('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const mediaInventory = useAvailableMediaInventory();
 
   const genuineProducts = useMemo(() => {
-    return products.filter((p) => isGenuineProduct(p) && p.images && p.images.some(isGenuineImageUrl));
+    return products.filter((p) => isGenuineProduct(p));
   }, [products]);
 
   const filteredProducts = useMemo(() => {
@@ -137,17 +143,17 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                 }}
                 className="flex items-center gap-3.5 p-2.5 rounded-xl hover:bg-[#FAF7F2] border border-transparent hover:border-[#E8DCCF] cursor-pointer transition-all group"
               >
-                {prod.images?.[0] ? (
-                  <img
-                    src={prod.images[0]}
-                    alt={prod.name}
-                    className="w-14 h-14 object-contain p-1 rounded-lg bg-white border border-[#E8DCCF]/60 flex-shrink-0"
-                  />
-                ) : (
-                  <div className="w-14 h-14 rounded-lg bg-[#FAF7F2] border border-[#E8DCCF]/60 flex items-center justify-center flex-shrink-0 text-[#802336]">
-                    <ShoppingBag className="w-5 h-5 opacity-70" />
-                  </div>
-                )}
+                <img
+                  src={resolveSafeProductImageUrl(prod.images?.[0], mediaInventory)}
+                  alt={prod.name}
+                  className="w-14 h-14 object-contain p-1 rounded-lg bg-white border border-[#E8DCCF]/60 flex-shrink-0"
+                  onError={(e) => {
+                    const img = e.currentTarget;
+                    if (img.src !== JEWELLERY_PLACEHOLDER_IMAGE) {
+                      img.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                    }
+                  }}
+                />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] text-[#802336] uppercase font-semibold">

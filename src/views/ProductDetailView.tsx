@@ -30,7 +30,11 @@ import { isGenuineProduct, isGenuineImageUrl, isGenuineVideoUrl } from '../lib/s
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 import { SeamlessLoopVideo } from '../components/SeamlessLoopVideo';
 import { useResolvedProductVideo } from '../lib/videoFallback';
-import { JEWELLERY_PLACEHOLDER_IMAGE } from '../lib/storageService';
+import {
+  JEWELLERY_PLACEHOLDER_IMAGE,
+  resolveSafeProductImageUrl,
+  useAvailableMediaInventory
+} from '../lib/storageService';
 
 interface ProductDetailViewProps {
   product: Product;
@@ -52,27 +56,14 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const { addToCart } = useCart();
   const { isInWishlist, toggleWishlist } = useWishlist();
   const { user } = useAuth();
+  const mediaInventory = useAvailableMediaInventory();
+  const resolvedVideo = useResolvedProductVideo(product);
 
-  if (!product || !isGenuineProduct(product)) {
-    return (
-      <div className="max-w-4xl mx-auto py-24 px-4 text-center">
-        <h2 className="font-serif text-3xl font-bold text-[#241C1A]">Product Unavailable</h2>
-        <p className="text-gray-600 mt-3 text-sm">
-          This piece is currently being updated with verified studio imagery.
-        </p>
-        <button
-          onClick={() => window.location.assign('/#shop')}
-          className="mt-6 bg-[#0F4C4A] hover:bg-[#0A3635] text-white px-8 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer shadow-md"
-        >
-          Explore Verified Catalog
-        </button>
-      </div>
-    );
-  }
+  const isValidProduct = Boolean(product && isGenuineProduct(product));
 
   // Active variation state (swaps main image and sku/price)
   const [selectedVariation, setSelectedVariation] = useState<ProductVariation | undefined>(
-    initialVariation || (product.variations && product.variations.length > 0 ? product.variations[0] : undefined)
+    initialVariation || (product?.variations && product.variations.length > 0 ? product.variations[0] : undefined)
   );
 
   const [activeImageIndex, setActiveImageIndex] = useState(0);
@@ -93,6 +84,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const [activeMedia, setActiveMedia] = useState<'image' | 'video'>('image');
 
   useEffect(() => {
+    if (!isValidProduct) return;
     if (initialVariation) {
       setSelectedVariation(initialVariation);
     } else if (product.variations && product.variations.length > 0) {
@@ -106,18 +98,41 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
     // Load reviews
     fetchProductReviews(product.id).then(setReviews);
-  }, [product, initialVariation]);
+  }, [product, initialVariation, isValidProduct]);
+
+  if (!isValidProduct) {
+    return (
+      <div className="max-w-4xl mx-auto py-24 px-4 text-center">
+        <h2 className="font-serif text-3xl font-bold text-[#241C1A]">Product Unavailable</h2>
+        <p className="text-gray-600 mt-3 text-sm">
+          This piece is currently being updated with verified studio imagery.
+        </p>
+        <button
+          onClick={() => window.location.assign('/#shop')}
+          className="mt-6 bg-[#0F4C4A] hover:bg-[#0A3635] text-white px-8 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer shadow-md"
+        >
+          Explore Verified Catalog
+        </button>
+      </div>
+    );
+  }
 
   // When variation changes, prioritize variation image as index 0!
   const variationImage = selectedVariation?.image;
   const rawGallery = variationImage
-    ? [variationImage, ...product.images.filter((img) => img !== variationImage)]
-    : product.images;
-  const validGallery = rawGallery.filter((img) => img && isGenuineImageUrl(img));
+    ? [variationImage, ...(product.images || []).filter((img) => img !== variationImage)]
+    : product.images || [];
+  const seenGallery = new Set<string>();
+  const validGallery = rawGallery
+    .map((img) => resolveSafeProductImageUrl(img, mediaInventory))
+    .filter((img) => {
+      if (!img || img === JEWELLERY_PLACEHOLDER_IMAGE || seenGallery.has(img)) return false;
+      seenGallery.add(img);
+      return isGenuineImageUrl(img);
+    });
   const galleryImages = validGallery.length > 0 ? validGallery : [JEWELLERY_PLACEHOLDER_IMAGE];
 
   const currentDisplayImage = galleryImages[activeImageIndex] || galleryImages[0];
-  const resolvedVideo = useResolvedProductVideo(product);
   const hasGenuineVideo = Boolean(
     product.videoUrl &&
       isGenuineVideoUrl(product.videoUrl) &&

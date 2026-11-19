@@ -6,7 +6,11 @@ import { useWishlist } from '../context/WishlistContext';
 import { isGenuineProduct, isGenuineImageUrl, isGenuineVideoUrl } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 import { SeamlessLoopVideo } from './SeamlessLoopVideo';
-import { JEWELLERY_PLACEHOLDER_IMAGE } from '../lib/storageService';
+import {
+  JEWELLERY_PLACEHOLDER_IMAGE,
+  resolveSafeProductImageUrl,
+  useAvailableMediaInventory
+} from '../lib/storageService';
 import { useResolvedProductVideo } from '../lib/videoFallback';
 
 interface QuickViewModalProps {
@@ -24,6 +28,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
 }) => {
   const { addToCart } = useCart();
   const { isInWishlist, toggleWishlist } = useWishlist();
+  const mediaInventory = useAvailableMediaInventory();
 
   const [selectedVariation, setSelectedVariation] = useState<ProductVariation | undefined>(
     initialVariation || (product?.variations?.[0])
@@ -61,7 +66,14 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
   const rawList = variationImage
     ? [variationImage, ...product.images.filter((img) => img !== variationImage)]
     : product.images;
-  const validList = rawList.filter((img) => img && isGenuineImageUrl(img));
+  const seenImages = new Set<string>();
+  const validList = rawList
+    .map((img) => resolveSafeProductImageUrl(img, mediaInventory))
+    .filter((img) => {
+      if (!img || img === JEWELLERY_PLACEHOLDER_IMAGE || seenImages.has(img)) return false;
+      seenImages.add(img);
+      return isGenuineImageUrl(img);
+    });
   const currentImages = validList.length > 0 ? validList : [JEWELLERY_PLACEHOLDER_IMAGE];
   const activeImage = currentImages[activeImageIndex] || currentImages[0];
 

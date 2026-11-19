@@ -171,8 +171,26 @@ export function isGenuineProduct(product?: Product | null): boolean {
   return true;
 }
 
+const CATEGORY_IMAGE_FALLBACKS: Record<string, string> = {
+  necklaces: '/categories/necklaces_category.jpg',
+  'necklaces-sets': '/categories/necklaces_category.jpg',
+  mangalsutra: '/categories/mangalsutra_category.jpg',
+  rings: '/categories/rings_category.jpg',
+  'kangan-kada-bracelet': '/categories/kada_bangles_category.jpg',
+  'devotional-jewellery': '/categories/devotional_category.jpg',
+  watches: '/categories/watches_category.jpg',
+  'oxidised-jewellery': '/categories/oxidised_jewellery_category.jpg'
+};
+
+export function resolveCategoryCoverImage(catId?: string, slug?: string, rawImg?: string): string {
+  const trimmed = typeof rawImg === 'string' ? rawImg.trim() : '';
+  if (trimmed && isGenuineImageUrl(trimmed)) return trimmed;
+  return CATEGORY_IMAGE_FALLBACKS[catId || ''] || CATEGORY_IMAGE_FALLBACKS[slug || ''] || '/categories/necklaces_category.jpg';
+}
+
 export const INITIAL_CATEGORIES: Category[] = (categoriesJson as unknown as Category[]).map((cat) => ({
   ...cat,
+  image: resolveCategoryCoverImage(cat.id, cat.slug, cat.image),
   galleryImages: (cat.galleryImages || []).filter((g) => isGenuineImageUrl(g.url)),
   videos: (cat.videos || []).filter((v) => isGenuineVideoUrl(v.videoUrl))
 }));
