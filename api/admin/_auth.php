@@ -23,18 +23,34 @@ function vdhReadDotEnv(): array {
     static $cached = null;
     if ($cached !== null) return $cached;
     $vars = [];
-    $envPath = vdhRootDir() . '/.env';
-    if (is_file($envPath) && is_readable($envPath)) {
+    $root = vdhRootDir();
+    $envCandidates = [
+        dirname($root) . '/.env',
+        dirname($root) . '/.env.production',
+        dirname($root, 2) . '/.env',
+        $root . '/.env',
+    ];
+    foreach ($envCandidates as $envPath) {
+        if (!vdhIsPathPermittedByOpenBasedir($envPath)) continue;
+        if (!@is_file($envPath) || !@is_readable($envPath)) continue;
         $lines = @file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        if (is_array($lines)) {
-            foreach ($lines as $line) {
-                $t = trim($line);
-                if ($t === '' || str_starts_with($t, '#')) continue;
-                $pos = strpos($t, '=');
-                if ($pos === false) continue;
-                $k = trim(substr($t, 0, $pos));
-                $v = trim(substr($t, $pos + 1));
-                $v = trim($v, "\"'");
+        if (!is_array($lines)) continue;
+        foreach ($lines as $line) {
+            $t = trim($line);
+            if ($t === '' || str_starts_with($t, '#')) continue;
+            if (str_starts_with($t, 'export ')) {
+                $t = trim(substr($t, 7));
+            }
+            $pos = strpos($t, '=');
+            if ($pos === false) continue;
+            $k = trim(substr($t, 0, $pos));
+            if ($k === '') continue;
+            $v = trim(substr($t, $pos + 1));
+            $len = strlen($v);
+            if ($len >= 2 && (($v[0] === '"' && $v[$len - 1] === '"') || ($v[0] === "'" && $v[$len - 1] === "'"))) {
+                $v = substr($v, 1, -1);
+            }
+            if (!array_key_exists($k, $vars) || trim((string)$vars[$k]) === '') {
                 $vars[$k] = $v;
             }
         }
@@ -44,8 +60,17 @@ function vdhReadDotEnv(): array {
 }
 
 function vdhEnv(string $key, string $default = ''): string {
-    $v = getenv($key);
-    if ($v !== false && trim((string)$v) !== '') return trim((string)$v);
+    $candidates = [
+        getenv($key),
+        $_ENV[$key] ?? null,
+        $_SERVER[$key] ?? null,
+        $_SERVER['REDIRECT_' . $key] ?? null,
+    ];
+    foreach ($candidates as $val) {
+        if ($val !== false && $val !== null && trim((string)$val) !== '') {
+            return trim((string)$val);
+        }
+    }
     $dot = vdhReadDotEnv();
     if (isset($dot[$key]) && trim((string)$dot[$key]) !== '') return trim((string)$dot[$key]);
     return $default;
@@ -75,12 +100,15 @@ function vdhIsPathPermittedByOpenBasedir(string $path): bool {
 }
 
 function vdhOutsideSecretsDir(): ?string {
+    $root = vdhRootDir();
     $candidates = [];
     $override = vdhEnv('VIDHYAA_SECRETS_DIR');
     if ($override !== '') {
         $candidates[] = rtrim($override, '/\\');
     }
-    $candidates[] = dirname(vdhRootDir()) . '/.admin-secrets';
+    $candidates[] = dirname($root) . '/.admin-secrets';
+    $candidates[] = dirname($root) . '/.vidhyaa-secrets';
+    $candidates[] = dirname($root, 2) . '/.admin-secrets';
 
     foreach ($candidates as $dir) {
         if (!vdhIsPathPermittedByOpenBasedir($dir)) {
@@ -89,10 +117,13 @@ function vdhOutsideSecretsDir(): ?string {
         if (@is_dir($dir) && @is_writable($dir)) {
             return $dir;
         }
+    }
+
+    // Try creating primary outside directory if permitted
+    foreach (array_slice($candidates, 0, 2) as $dir) {
+        if (!vdhIsPathPermittedByOpenBasedir($dir)) continue;
         $parent = dirname($dir);
-        if (!vdhIsPathPermittedByOpenBasedir($parent)) {
-            continue;
-        }
+        if (!vdhIsPathPermittedByOpenBasedir($parent)) continue;
         if (@mkdir($dir, 0700, true)) {
             @chmod($dir, 0700);
             if (@is_dir($dir) && @is_writable($dir)) {
@@ -108,10 +139,13 @@ function vdhOutsideSecretsFilePath(string $filename): ?string {
     if ($dir !== null) {
         return $dir . '/' . ltrim($filename, '/\\');
     }
+    $root = vdhRootDir();
     $override = vdhEnv('VIDHYAA_SECRETS_DIR');
     $fallbackDirs = [];
     if ($override !== '') $fallbackDirs[] = rtrim($override, '/\\');
-    $fallbackDirs[] = dirname(vdhRootDir()) . '/.admin-secrets';
+    $fallbackDirs[] = dirname($root) . '/.admin-secrets';
+    $fallbackDirs[] = dirname($root) . '/.vidhyaa-secrets';
+    $fallbackDirs[] = dirname($root, 2) . '/.admin-secrets';
     foreach ($fallbackDirs as $candDir) {
         $candFile = $candDir . '/' . ltrim($filename, '/\\');
         if (vdhIsPathPermittedByOpenBasedir($candFile) && @is_file($candFile) && @is_readable($candFile)) {
@@ -174,6 +208,12 @@ function vdhGetSessionSecret(): string {
             $secret = $candidate;
             return $secret;
         }
+    }
+
+    $creds = vdhLoadAdminCredentialsConfig();
+    if (strlen($creds['sessionSigningSecret'] ?? '') >= 32) {
+        $secret = $creds['sessionSigningSecret'];
+        return $secret;
     }
 
     $outside = vdhOutsideSecretsDir();
@@ -917,8 +957,12 @@ function vdhVerifyPasswordHash(string $password, string $storedHash): bool {
         if (count($parts) === 4) {
             $iters = max(10000, (int)$parts[1]);
             $salt = $parts[2];
-            $expected = strtolower($parts[3]);
-            $actual = hash_pbkdf2('sha256', $password, $salt, $iters, 64, false);
+            $expected = strtolower(trim($parts[3]));
+            $hexLen = strlen($expected);
+            if ($hexLen < 32 || $hexLen > 256 || ($hexLen % 2) !== 0 || !preg_match('/^[0-9a-f]+$/', $expected)) {
+                return false;
+            }
+            $actual = hash_pbkdf2('sha256', $password, $salt, $iters, $hexLen, false);
             return hash_equals($expected, $actual);
         }
         return false;
@@ -993,13 +1037,22 @@ function vdhVerifyTotp(string $secretBase32, string $code): bool {
 
 function vdhLoadAdminCredentialsConfig(): array {
     $root = vdhRootDir();
-    $candidates = [];
+    $dirs = [];
     $override = vdhEnv('VIDHYAA_SECRETS_DIR');
     if ($override !== '') {
-        $candidates[] = rtrim($override, '/\\') . '/admin-credentials.json';
+        $dirs[] = rtrim($override, '/\\');
     }
-    $candidates[] = dirname($root) . '/.admin-secrets/admin-credentials.json';
-    $candidates[] = $root . '/.admin-secrets/admin-credentials.json';
+    $dirs[] = dirname($root) . '/.admin-secrets';
+    $dirs[] = dirname($root) . '/.vidhyaa-secrets';
+    $dirs[] = dirname($root);
+    $dirs[] = dirname($root, 2) . '/.admin-secrets';
+    $dirs[] = $root . '/.admin-secrets';
+
+    $candidates = [];
+    foreach ($dirs as $dir) {
+        $candidates[] = $dir . '/admin-credentials.json';
+        $candidates[] = $dir . '/admin-auth.json';
+    }
 
     $cfg = [];
     foreach ($candidates as $cand) {
@@ -1014,17 +1067,50 @@ function vdhLoadAdminCredentialsConfig(): array {
             }
         }
     }
-    $passwordHash = trim((string)($cfg['passwordHash'] ?? vdhEnv('ADMIN_PASSWORD_HASH')));
-    $plainPassword = trim((string)($cfg['password'] ?? vdhEnv('ADMIN_PASSWORD')));
-    $totpSecret = trim((string)($cfg['totpSecret'] ?? vdhEnv('ADMIN_TOTP_SECRET')));
+    $passwordHash = trim((string)($cfg['passwordHash'] ?? ($cfg['adminPasswordHash'] ?? '')));
+    if ($passwordHash === '') $passwordHash = vdhEnv('ADMIN_PASSWORD_HASH');
+    $plainPassword = trim((string)($cfg['password'] ?? ''));
+    if ($plainPassword === '') $plainPassword = vdhEnv('ADMIN_PASSWORD');
+    $totpSecret = trim((string)($cfg['totpSecret'] ?? ''));
+    if ($totpSecret === '' && is_array($cfg['totp'] ?? null)) {
+        $totpSecret = trim((string)($cfg['totp']['secretBase32'] ?? ''));
+    }
+    if ($totpSecret === '') $totpSecret = vdhEnv('ADMIN_TOTP_SECRET');
     $backupCodes = is_array($cfg['backupCodes'] ?? null) ? $cfg['backupCodes'] : [];
+    $backupPepper = trim((string)($cfg['backupPepper'] ?? ''));
+    $backupCodeHashes = is_array($cfg['backupCodeHashes'] ?? null) ? $cfg['backupCodeHashes'] : [];
+    $sessionSigningSecret = trim((string)($cfg['sessionSigningSecret'] ?? ''));
     return [
         'passwordHash' => $passwordHash,
         'plainPassword' => $plainPassword,
         'totpSecret' => $totpSecret,
         'backupCodes' => $backupCodes,
+        'backupPepper' => $backupPepper,
+        'backupCodeHashes' => $backupCodeHashes,
+        'sessionSigningSecret' => $sessionSigningSecret,
         'hasPasswordAuth' => ($passwordHash !== '' || $plainPassword !== ''),
     ];
+}
+
+function vdhVerifyAdminBackupCode(array $creds, string $totpCode): bool {
+    $normalized = strtoupper(trim($totpCode));
+    if ($normalized === '') return false;
+    foreach (($creds['backupCodes'] ?? []) as $code) {
+        if (is_string($code) && hash_equals(strtoupper(trim($code)), $normalized)) {
+            return true;
+        }
+    }
+    $pepper = (string)($creds['backupPepper'] ?? '');
+    $hashes = $creds['backupCodeHashes'] ?? [];
+    if ($pepper !== '' && is_array($hashes) && !empty($hashes)) {
+        $digest = hash_hmac('sha256', $normalized, $pepper);
+        foreach ($hashes as $expectedHex) {
+            if (is_string($expectedHex) && hash_equals(strtolower(trim($expectedHex)), $digest)) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 function vdhCheckRateLimit(string $bucketKey): array {

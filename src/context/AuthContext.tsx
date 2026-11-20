@@ -160,7 +160,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setAdminUser({
               email: data.email || ADMIN_EMAIL,
               role: 'admin',
-              name: 'Executive Administrator'
+              name: data.name || 'Executive Administrator'
             });
           } else {
             sessionStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);

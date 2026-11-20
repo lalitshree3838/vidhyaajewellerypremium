@@ -8,7 +8,7 @@ import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 import { SeamlessLoopVideo } from './SeamlessLoopVideo';
 import {
   JEWELLERY_PLACEHOLDER_IMAGE,
-  resolveSafeProductImageUrl,
+  getProductImageCandidates,
   useAvailableMediaInventory
 } from '../lib/storageService';
 import { useResolvedProductVideo } from '../lib/videoFallback';
@@ -62,18 +62,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
   );
 
   // When variation is selected, the primary image switches to that variation's image!
-  const variationImage = selectedVariation?.image;
-  const rawList = variationImage
-    ? [variationImage, ...product.images.filter((img) => img !== variationImage)]
-    : product.images;
-  const seenImages = new Set<string>();
-  const validList = rawList
-    .map((img) => resolveSafeProductImageUrl(img, mediaInventory))
-    .filter((img) => {
-      if (!img || img === JEWELLERY_PLACEHOLDER_IMAGE || seenImages.has(img)) return false;
-      seenImages.add(img);
-      return isGenuineImageUrl(img);
-    });
+  const validList = getProductImageCandidates(product, selectedVariation, mediaInventory);
   const currentImages = validList.length > 0 ? validList : [JEWELLERY_PLACEHOLDER_IMAGE];
   const activeImage = currentImages[activeImageIndex] || currentImages[0];
 
@@ -161,7 +150,13 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
                 src={activeImage}
                 alt={product.name}
                 className="w-full h-full object-contain object-center transition-transform hover:scale-105 duration-300"
-                onError={() => setImageError(true)}
+                onError={() => {
+                  if (activeImageIndex + 1 < currentImages.length) {
+                    setActiveImageIndex((prev) => prev + 1);
+                  } else {
+                    setImageError(true);
+                  }
+                }}
               />
             )}
             {discountPercent > 0 && (
@@ -196,6 +191,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
                   onClick={() => {
                     setShowVideo(false);
                     setActiveImageIndex(idx);
+                    setImageError(false);
                   }}
                   className={`w-14 h-14 rounded-lg overflow-hidden border-2 bg-white flex-shrink-0 cursor-pointer p-1 transition-all ${
                     !showVideo && activeImageIndex === idx
@@ -203,7 +199,17 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
                       : 'border-[#E8DCCF] opacity-70 hover:opacity-100'
                   }`}
                 >
-                  <img src={img} alt="" className="w-full h-full object-contain" />
+                  <img
+                    src={img}
+                    alt=""
+                    className="w-full h-full object-contain"
+                    onError={(e) => {
+                      const imgEl = e.currentTarget;
+                      if (imgEl.dataset.fallbackApplied === '1' || imgEl.src.startsWith('data:image/svg+xml')) return;
+                      imgEl.dataset.fallbackApplied = '1';
+                      imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                    }}
+                  />
                 </button>
               ))}
           </div>
@@ -268,6 +274,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
                         onClick={() => {
                           setSelectedVariation(v);
                           setActiveImageIndex(0);
+                          setImageError(false);
                         }}
                         className={`px-3 py-1.5 rounded-lg border text-xs font-medium flex items-center gap-2 transition-all cursor-pointer ${
                           isSelected

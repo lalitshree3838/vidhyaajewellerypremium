@@ -42,6 +42,7 @@ export interface Product {
   videoUrl?: string;
   showInShoppingVideos?: boolean;
   _strippedImg?: boolean;
+  _imagesCleared?: boolean;
   createdAt: string;
   updatedAt: string;
 }

@@ -18,7 +18,6 @@ import { Product, ProductVariation } from '../types';
 import { useCart } from '../context/CartContext';
 import {
   isGenuineVideoUrl,
-  isGenuineImageUrl,
   INITIAL_PRODUCTS,
   BANNED_PRODUCT_IDS
 } from '../lib/sampleData';
@@ -33,7 +32,7 @@ import {
 import { SeamlessLoopVideo, SeamlessLoopVideoHandle } from './SeamlessLoopVideo';
 import {
   JEWELLERY_PLACEHOLDER_IMAGE,
-  resolveSafeProductImageUrl,
+  getProductPrimaryImage,
   useAvailableMediaInventory
 } from '../lib/storageService';
 
@@ -623,13 +622,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
       if (seenCanonicalReels.has(dedupeKey)) continue;
       seenCanonicalReels.add(dedupeKey);
 
-      const rawThumb =
-        (p.images || []).find(isGenuineImageUrl) ||
-        (p.variations || [])
-          .map((v) => v?.image)
-          .find((img): img is string => Boolean(img && isGenuineImageUrl(img))) ||
-        '';
-      const thumb = resolveSafeProductImageUrl(rawThumb, mediaInventory);
+      const thumb = getProductPrimaryImage(p, mediaInventory);
 
       reels.push({
         id: `reel-${p.id}`,
@@ -950,15 +943,15 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
                 >
                   {reel.posterImage && (
                     <img
-                      src={resolveSafeProductImageUrl(reel.posterImage, mediaInventory)}
+                      src={reel.posterImage}
                       alt={reel.title}
                       className="w-12 h-12 rounded-xl object-cover border border-[#E8DCCF] flex-shrink-0 bg-white"
                       loading="lazy"
                       onError={(e) => {
                         const img = e.currentTarget;
-                        if (img.src !== JEWELLERY_PLACEHOLDER_IMAGE) {
-                          img.src = JEWELLERY_PLACEHOLDER_IMAGE;
-                        }
+                        if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;
+                        img.dataset.fallbackApplied = '1';
+                        img.src = JEWELLERY_PLACEHOLDER_IMAGE;
                       }}
                     />
                   )}

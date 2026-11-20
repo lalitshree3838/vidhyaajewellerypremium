@@ -15,7 +15,10 @@ import {
   fetchCategories,
   fetchStoreSettings,
   getCachedProducts,
+  getCachedProductsAsync,
   getCachedCategories,
+  getDeletedProductIds,
+  sortCatalogProducts,
   __mergeProductMedia
 } from './lib/dbService';
 import { connectionReadyPromise } from './lib/firebase';
@@ -224,26 +227,27 @@ function MainApp() {
     sessionStorage.setItem('vidhyaa_promo_popup_dismissed', 'true');
   };
 
-  // Firestore Live Catalog Data initialized with cached or empty while loading
+  // Firestore Live Catalog Data initialized with cached or sorted baseline so storefront renders immediately
   const [products, setProducts] = useState<Product[]>(() => {
     const cached = getCachedProducts();
     const hasUsableCache =
       cached.length > 0 &&
       !cached.some((p) => p && p._strippedImg && (!p.images || p.images.length === 0));
-    return hasUsableCache ? cached : [];
+    if (hasUsableCache) return cached;
+    const deletedIds = getDeletedProductIds();
+    return sortCatalogProducts(
+      INITIAL_PRODUCTS.filter((p) => isGenuineProduct(p) && !deletedIds.has(p.id)).map((p) =>
+        __mergeProductMedia(p, null)
+      )
+    );
   });
   const [categories, setCategories] = useState<Category[]>(() => {
     const cached = getCachedCategories();
     return cached.length > 0 ? cached : INITIAL_CATEGORIES;
   });
   const [storeSettings, setStoreSettings] = useState<StoreSettings>(INITIAL_STORE_SETTINGS);
-  const [loadingInitial, setLoadingInitial] = useState(() => {
-    const cached = getCachedProducts();
-    const hasUsableCache =
-      cached.length > 0 &&
-      !cached.some((p) => p && p._strippedImg && (!p.images || p.images.length === 0));
-    return !hasUsableCache;
-  });
+  const [loadingInitial, setLoadingInitial] = useState(false);
+  const [liveCatalogSynced, setLiveCatalogSynced] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
 
   const safeSetProducts = (nextList: Product[]) => {
@@ -282,17 +286,28 @@ function MainApp() {
       }
     } catch (e: any) {
       console.warn('Live data load warning:', e);
-      const cached = getCachedProducts();
-      if (cached.length > 0) {
-        safeSetProducts(cached);
+      const idbOrLocal = await getCachedProductsAsync().catch(() => getCachedProducts());
+      if (idbOrLocal.length > 0) {
+        safeSetProducts(idbOrLocal);
       }
       setInitError(e?.message || 'Unable to sync live catalog data. Displaying saved catalog.');
     } finally {
       setLoadingInitial(false);
+      setLiveCatalogSynced(true);
     }
   };
 
   useEffect(() => {
+    let active = true;
+    // Immediately hydrate full unstripped images from IndexedDB before remote sync finishes
+    getCachedProductsAsync()
+      .then((cachedFull) => {
+        if (active && Array.isArray(cachedFull) && cachedFull.length > 0) {
+          safeSetProducts(cachedFull);
+        }
+      })
+      .catch(() => {});
+
     void loadData();
 
     const handleProductsUpdated = (e: any) => {
@@ -303,6 +318,7 @@ function MainApp() {
     window.addEventListener('vidhyaa_products_updated', handleProductsUpdated);
 
     return () => {
+      active = false;
       window.removeEventListener('vidhyaa_products_updated', handleProductsUpdated);
     };
   }, []);
@@ -364,11 +380,11 @@ function MainApp() {
       setSelectedProduct(found);
       setCurrentView('product-detail');
       setPendingProductId(null);
-    } else if (!loadingInitial) {
+    } else if (liveCatalogSynced && !loadingInitial) {
       setCurrentView('shop');
       setPendingProductId(null);
     }
-  }, [pendingProductId, products, loadingInitial]);
+  }, [pendingProductId, products, loadingInitial, liveCatalogSynced]);
 
   const handleNavigate = (view: string, param?: string) => {
     setPendingProductId(null);

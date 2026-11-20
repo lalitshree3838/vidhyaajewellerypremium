@@ -18,6 +18,7 @@ import { ProductCard } from '../components/ProductCard';
 import { MetadataManager } from '../components/MetadataManager';
 import { ShopByVideoSection } from '../components/ShopByVideoSection';
 import { isGenuineProduct, isGenuineImageUrl } from '../lib/sampleData';
+import { hasRenderableProductImage, useAvailableMediaInventory } from '../lib/storageService';
 import { formatPrice } from '../lib/priceUtils';
 
 const LotusOrnament: React.FC<{ className?: string }> = ({ className = "w-6 h-5 text-[#DFB982]" }) => (
@@ -66,6 +67,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'featured' | 'bestsellers' | 'new'>('featured');
   const [failedImageUrls, setFailedImageUrls] = useState<Set<string>>(new Set());
+  const mediaInventory = useAvailableMediaInventory();
 
   const handleImageError = (url: string) => {
     setFailedImageUrls((prev) => {
@@ -80,22 +82,32 @@ export const HomeView: React.FC<HomeViewProps> = ({
   }, [products]);
 
   const filteredProducts = useMemo(() => {
+    let base: Product[] = genuineProducts;
     if (activeTab === 'bestsellers') {
       const best = genuineProducts.filter((p) => p.isBestseller);
-      if (best.length > 0) return best;
+      if (best.length > 0) base = best;
     } else if (activeTab === 'new') {
       const newItems = genuineProducts.filter((p) => p.isNewArrival);
-      if (newItems.length > 0) return newItems;
+      if (newItems.length > 0) base = newItems;
     } else {
-      // 'featured' tab: prioritize featured products, backfilled with newest active catalog pieces so new additions are always visible
+      // 'featured' tab: prioritize featured products, backfilled with newest active catalog pieces
       const feat = genuineProducts.filter((p) => p.isFeatured);
-      if (feat.length >= 8) return feat;
-      const seenIds = new Set(feat.map((p) => p.id));
-      const remaining = genuineProducts.filter((p) => !seenIds.has(p.id));
-      return [...feat, ...remaining];
+      if (feat.length >= 8) {
+        base = feat;
+      } else {
+        const seenIds = new Set(feat.map((p) => p.id));
+        const remaining = genuineProducts.filter((p) => !seenIds.has(p.id));
+        base = [...feat, ...remaining];
+      }
     }
-    return genuineProducts;
-  }, [genuineProducts, activeTab]);
+
+    // Ensure products with verified renderable photos always appear ahead of media-less legacy rows
+    return [...base].sort((a, b) => {
+      const aHas = hasRenderableProductImage(a, mediaInventory) ? 1 : 0;
+      const bHas = hasRenderableProductImage(b, mediaInventory) ? 1 : 0;
+      return bHas - aHas;
+    });
+  }, [genuineProducts, activeTab, mediaInventory]);
 
   const handleShopNow = () => {
     const el = document.getElementById('shop-products');
@@ -248,7 +260,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                           src={cat.image}
                           alt={cat.name}
                           className="w-full h-full object-cover object-center group-hover:scale-110 transition-transform duration-500 ease-out"
-                          loading="lazy"
+                          loading="eager"
                           onError={() => handleImageError(cat.image)}
                         />
                       </div>
@@ -276,7 +288,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                           src={cat.image}
                           alt={cat.name}
                           className="w-full h-full object-cover object-center group-hover:scale-110 transition-transform duration-500 ease-out"
-                          loading="lazy"
+                          loading="eager"
                           onError={() => handleImageError(cat.image)}
                         />
                       </div>

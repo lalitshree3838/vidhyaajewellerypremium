@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { argon2Verify } from 'hash-wasm';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,24 +23,34 @@ const lockChains = new Map();
 function readDotEnv() {
   if (cachedDotEnv) return cachedDotEnv;
   const vars = {};
-  try {
-    const envPath = path.join(ROOT_DIR, '.env');
-    if (fs.existsSync(envPath)) {
+  const envCandidates = [
+    path.join(path.dirname(ROOT_DIR), '.env'),
+    path.join(path.dirname(ROOT_DIR), '.env.production'),
+    path.join(path.dirname(path.dirname(ROOT_DIR)), '.env'),
+    path.join(ROOT_DIR, '.env')
+  ];
+  for (const envPath of envCandidates) {
+    try {
+      if (!fs.existsSync(envPath)) continue;
       const raw = fs.readFileSync(envPath, 'utf8');
       for (const line of raw.split(/\r?\n/)) {
-        const t = line.trim();
+        let t = line.trim();
         if (!t || t.startsWith('#')) continue;
+        if (t.startsWith('export ')) t = t.slice(7).trim();
         const idx = t.indexOf('=');
         if (idx === -1) continue;
         const k = t.slice(0, idx).trim();
+        if (!k) continue;
         let v = t.slice(idx + 1).trim();
         if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
           v = v.slice(1, -1);
         }
-        vars[k] = v;
+        if (!Object.prototype.hasOwnProperty.call(vars, k) || !String(vars[k]).trim()) {
+          vars[k] = v;
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
   cachedDotEnv = vars;
   return vars;
 }
@@ -58,6 +69,19 @@ export function getOutsideSecretsDir() {
     try {
       fs.mkdirSync(override, { recursive: true, mode: 0o700 });
       return override;
+    } catch {}
+  }
+  const existingDirs = [
+    path.join(path.dirname(ROOT_DIR), '.admin-secrets'),
+    path.join(path.dirname(ROOT_DIR), '.vidhyaa-secrets'),
+    path.join(path.dirname(path.dirname(ROOT_DIR)), '.admin-secrets')
+  ];
+  for (const dir of existingDirs) {
+    try {
+      if (fs.existsSync(dir)) {
+        fs.accessSync(dir, fs.constants.W_OK);
+        return dir;
+      }
     } catch {}
   }
   const outside = path.join(path.dirname(ROOT_DIR), '.admin-secrets');
@@ -90,6 +114,12 @@ export function getSessionSecret() {
       cachedSessionSecret = val;
       return val;
     }
+  }
+
+  const creds = loadAdminCredentialsConfig();
+  if (creds.sessionSigningSecret && creds.sessionSigningSecret.length >= 32) {
+    cachedSessionSecret = creds.sessionSigningSecret;
+    return creds.sessionSigningSecret;
   }
 
   const keyFile = path.join(getRuntimeStateDir(), 'session-secret.key');
@@ -509,9 +539,13 @@ export function verifyPatronOrAdminPassword(password, storedHash) {
     if (parts.length !== 4) return false;
     const iters = Math.max(10000, Number(parts[1]) || 100000);
     const salt = parts[2];
-    const expected = parts[3];
+    const expected = String(parts[3] || '').trim().toLowerCase();
+    if (!/^[0-9a-f]{32,256}$/.test(expected) || expected.length % 2 !== 0) {
+      return false;
+    }
     try {
-      const actual = crypto.pbkdf2Sync(password, salt, iters, 64, 'sha256').toString('hex');
+      const byteLen = expected.length / 2;
+      const actual = crypto.pbkdf2Sync(password, salt, iters, byteLen, 'sha256').toString('hex');
       const a = Buffer.from(actual, 'utf8');
       const b = Buffer.from(expected, 'utf8');
       return a.length === b.length && crypto.timingSafeEqual(a, b);
@@ -544,6 +578,19 @@ export function verifyPatronOrAdminPassword(password, storedHash) {
   }
 
   return false;
+}
+
+export async function verifyAdminPassword(password, storedHash) {
+  if (!password || !storedHash || typeof storedHash !== 'string') return false;
+  const clean = storedHash.trim();
+  if (clean.startsWith('$argon2')) {
+    try {
+      return await argon2Verify({ password, hash: clean });
+    } catch {
+      return false;
+    }
+  }
+  return verifyPatronOrAdminPassword(password, clean);
 }
 
 function base32Decode(input) {
@@ -588,11 +635,22 @@ export function verifyTotpCode(secretBase32, code) {
 
 export function loadAdminCredentialsConfig() {
   const overrideDir = getEnvVar('VIDHYAA_SECRETS_DIR');
-  const candidates = [
-    ...(overrideDir ? [path.join(overrideDir, 'admin-credentials.json')] : []),
-    path.join(path.dirname(ROOT_DIR), '.admin-secrets', 'admin-credentials.json'),
-    path.join(ROOT_DIR, '.admin-secrets', 'admin-credentials.json')
+  const parentDir = path.dirname(ROOT_DIR);
+  const grandParentDir = path.dirname(parentDir);
+  const dirs = [
+    ...(overrideDir ? [overrideDir] : []),
+    path.join(parentDir, '.admin-secrets'),
+    path.join(parentDir, '.vidhyaa-secrets'),
+    parentDir,
+    path.join(grandParentDir, '.admin-secrets'),
+    path.join(ROOT_DIR, '.admin-secrets')
   ];
+  const candidates = [];
+  for (const dir of dirs) {
+    candidates.push(path.join(dir, 'admin-credentials.json'));
+    candidates.push(path.join(dir, 'admin-auth.json'));
+  }
+
   let cfg = {};
   for (const cand of candidates) {
     try {
@@ -606,18 +664,58 @@ export function loadAdminCredentialsConfig() {
     } catch {}
   }
 
-  const passwordHash = String(cfg.passwordHash || getEnvVar('ADMIN_PASSWORD_HASH')).trim();
+  const passwordHash = String(cfg.passwordHash || cfg.adminPasswordHash || getEnvVar('ADMIN_PASSWORD_HASH')).trim();
   const plainPassword = String(cfg.password || getEnvVar('ADMIN_PASSWORD')).trim();
-  const totpSecret = String(cfg.totpSecret || getEnvVar('ADMIN_TOTP_SECRET')).trim();
+  const totpSecret = String(cfg.totpSecret || cfg.totp?.secretBase32 || getEnvVar('ADMIN_TOTP_SECRET')).trim();
   const backupCodes = Array.isArray(cfg.backupCodes) ? cfg.backupCodes : [];
+  const backupPepper = String(cfg.backupPepper || '').trim();
+  const backupCodeHashes = Array.isArray(cfg.backupCodeHashes) ? cfg.backupCodeHashes : [];
+  const sessionSigningSecret = String(cfg.sessionSigningSecret || '').trim();
 
   return {
     passwordHash,
     plainPassword,
     totpSecret,
     backupCodes,
+    backupPepper,
+    backupCodeHashes,
+    sessionSigningSecret,
     hasPasswordAuth: Boolean(passwordHash || plainPassword)
   };
+}
+
+export function verifyAdminBackupCode(creds, totpCode) {
+  const normalized = String(totpCode || '').trim().toUpperCase();
+  if (!normalized) return false;
+
+  if (Array.isArray(creds?.backupCodes)) {
+    for (const bc of creds.backupCodes) {
+      if (typeof bc === 'string') {
+        const a = Buffer.from(bc.trim().toUpperCase(), 'utf8');
+        const b = Buffer.from(normalized, 'utf8');
+        if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  const pepper = String(creds?.backupPepper || '');
+  const hashes = creds?.backupCodeHashes;
+  if (pepper && Array.isArray(hashes) && hashes.length > 0) {
+    const digest = crypto.createHmac('sha256', pepper).update(normalized).digest('hex');
+    const a = Buffer.from(digest, 'utf8');
+    for (const expectedHex of hashes) {
+      if (typeof expectedHex === 'string') {
+        const b = Buffer.from(expectedHex.trim().toLowerCase(), 'utf8');
+        if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
 }
 
 function getRateLimitFile(bucketKey) {

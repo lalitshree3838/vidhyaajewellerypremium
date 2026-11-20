@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from './firebase';
 import { isGenuineImageUrl } from './sampleData';
+import type { Product, ProductVariation } from '../types';
 
 export const JEWELLERY_PLACEHOLDER_IMAGE = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 500" width="400" height="500" fill="none"><rect width="400" height="500" fill="%23FAF7F2"/><rect x="16" y="16" width="368" height="468" rx="12" fill="%23FFFFFF" stroke="%23E8DCCF" stroke-width="1.5"/><g transform="translate(140, 160)" stroke="%23DFB982" stroke-width="2" fill="none"><path d="M60 20 C30 55 30 95 60 130 C90 95 90 55 60 20 Z" fill="%23FAF7F2"/><circle cx="60" cy="75" r="14" fill="%23DFB982" opacity="0.3"/><polygon points="60,50 76,75 60,100 44,75" fill="%230F5B46" opacity="0.85"/><circle cx="60" cy="148" r="3" fill="%23B8860B"/><circle cx="60" cy="158" r="2" fill="%23B8860B"/></g><text x="200" y="340" font-family="serif" font-size="14" font-weight="600" fill="%233B1E22" text-anchor="middle" letter-spacing="2">VIDHYAA</text><text x="200" y="362" font-family="sans-serif" font-size="10" font-weight="600" fill="%23802336" text-anchor="middle" letter-spacing="1.5">JEWELLERY STUDIO</text><text x="200" y="382" font-family="sans-serif" font-size="9" fill="%239CA3AF" text-anchor="middle">Handcrafted Fine Jewellery</text></svg>`;
 
@@ -16,6 +17,37 @@ export interface MediaInventory {
 let cachedMediaInventory: MediaInventory | null = null;
 let inflightMediaPromise: Promise<MediaInventory> | null = null;
 
+export function normalizeImageUrl(url?: string | null): string {
+  if (!url || typeof url !== 'string') return '';
+  let s = url.trim();
+  if (!s) return '';
+  if (s.startsWith('data:image/') || s.startsWith('blob:')) {
+    return s;
+  }
+  s = s.replace(/\\/g, '/');
+  s = s.replace(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?(\/.*)$/i, '$1');
+  if (/^(?:products|categories|assets|uploads)\//i.test(s)) {
+    s = '/' + s;
+  }
+  return s;
+}
+
+function hasInMediaSet(set: Set<string>, url: string): boolean {
+  if (set.has(url)) return true;
+  const noQuery = url.split(/[?#]/)[0];
+  if (set.has(noQuery)) return true;
+  try {
+    const decoded = decodeURIComponent(noQuery);
+    if (set.has(decoded)) return true;
+  } catch {}
+  return false;
+}
+
+export function invalidateMediaInventoryCache(): void {
+  cachedMediaInventory = null;
+  inflightMediaPromise = null;
+}
+
 export async function fetchAvailableMediaInventory(): Promise<MediaInventory> {
   if (cachedMediaInventory?.ready) {
     return cachedMediaInventory;
@@ -23,7 +55,7 @@ export async function fetchAvailableMediaInventory(): Promise<MediaInventory> {
   if (inflightMediaPromise) {
     return inflightMediaPromise;
   }
-  inflightMediaPromise = (async () => {
+  const promise = (async (): Promise<MediaInventory> => {
     try {
       if (typeof fetch !== 'undefined') {
         const res = await fetch('/api/media/available', { cache: 'no-store' });
@@ -31,23 +63,34 @@ export async function fetchAvailableMediaInventory(): Promise<MediaInventory> {
           const data = await res.json();
           const inv: MediaInventory = {
             ready: true,
-            productImages: new Set(Array.isArray(data?.productImages) ? data.productImages : []),
-            categoryImages: new Set(Array.isArray(data?.categoryImages) ? data.categoryImages : [])
+            productImages: new Set(
+              Array.isArray(data?.productImages)
+                ? data.productImages.map((u: string) => normalizeImageUrl(u)).filter(Boolean)
+                : []
+            ),
+            categoryImages: new Set(
+              Array.isArray(data?.categoryImages)
+                ? data.categoryImages.map((u: string) => normalizeImageUrl(u)).filter(Boolean)
+                : []
+            )
           };
           cachedMediaInventory = inv;
           return inv;
         }
       }
     } catch {}
-    const fallback: MediaInventory = {
-      ready: true,
+    return {
+      ready: false,
       productImages: new Set<string>(),
       categoryImages: new Set<string>()
     };
-    cachedMediaInventory = fallback;
-    return fallback;
-  })();
-  return inflightMediaPromise;
+  })().finally(() => {
+    if (inflightMediaPromise === promise) {
+      inflightMediaPromise = null;
+    }
+  });
+  inflightMediaPromise = promise;
+  return promise;
 }
 
 if (typeof window !== 'undefined') {
@@ -63,7 +106,7 @@ export function useAvailableMediaInventory(): MediaInventory | null {
     }
     let mounted = true;
     fetchAvailableMediaInventory().then((res) => {
-      if (mounted) setInv(res);
+      if (mounted && res.ready) setInv(res);
     });
     return () => {
       mounted = false;
@@ -72,33 +115,110 @@ export function useAvailableMediaInventory(): MediaInventory | null {
   return inv;
 }
 
+export function isKnownMissingMediaUrl(
+  url?: string | null,
+  inventory: MediaInventory | null = cachedMediaInventory
+): boolean {
+  const normalized = normalizeImageUrl(url);
+  if (!normalized || !inventory?.ready) return false;
+  if (normalized.startsWith('/products/')) {
+    return !hasInMediaSet(inventory.productImages, normalized);
+  }
+  if (normalized.startsWith('/categories/')) {
+    return inventory.categoryImages.size > 0 && !hasInMediaSet(inventory.categoryImages, normalized);
+  }
+  return false;
+}
+
 export function resolveSafeProductImageUrl(
   url?: string | null,
   inventory: MediaInventory | null = cachedMediaInventory
 ): string {
-  if (!url || typeof url !== 'string') return JEWELLERY_PLACEHOLDER_IMAGE;
-  const trimmed = url.trim();
-  if (!trimmed || !isGenuineImageUrl(trimmed)) return JEWELLERY_PLACEHOLDER_IMAGE;
-
-  if (trimmed.startsWith('data:image/') || trimmed.startsWith('blob:')) {
-    return trimmed;
+  const normalized = normalizeImageUrl(url);
+  if (!normalized || normalized.startsWith('data:image/svg+xml') || !isGenuineImageUrl(normalized)) {
+    return JEWELLERY_PLACEHOLDER_IMAGE;
   }
 
-  if (trimmed.startsWith('/products/')) {
-    if (!inventory?.ready) {
+  if (normalized.startsWith('data:image/') || normalized.startsWith('blob:')) {
+    return normalized;
+  }
+
+  if (normalized.startsWith('/products/')) {
+    if (inventory?.ready && !hasInMediaSet(inventory.productImages, normalized)) {
       return JEWELLERY_PLACEHOLDER_IMAGE;
     }
-    return inventory.productImages.has(trimmed) ? trimmed : JEWELLERY_PLACEHOLDER_IMAGE;
+    return normalized;
   }
 
-  if (trimmed.startsWith('/categories/')) {
-    if (inventory?.ready && inventory.categoryImages.size > 0 && !inventory.categoryImages.has(trimmed)) {
+  if (normalized.startsWith('/categories/')) {
+    if (inventory?.ready && inventory.categoryImages.size > 0 && !hasInMediaSet(inventory.categoryImages, normalized)) {
       return JEWELLERY_PLACEHOLDER_IMAGE;
     }
-    return trimmed;
+    return normalized;
   }
 
-  return trimmed;
+  return normalized;
+}
+
+export function getProductImageCandidates(
+  product?: Partial<Product> | null,
+  variation?: Partial<ProductVariation> | null,
+  inventory: MediaInventory | null = cachedMediaInventory
+): string[] {
+  if (!product) return [];
+  const raw: string[] = [];
+
+  if (variation?.image && typeof variation.image === 'string') {
+    raw.push(variation.image);
+  }
+  if (Array.isArray(variation?.additionalImages)) {
+    variation.additionalImages.forEach((img) => {
+      if (typeof img === 'string') raw.push(img);
+    });
+  }
+  if (Array.isArray(product.images)) {
+    product.images.forEach((img) => {
+      if (typeof img === 'string') raw.push(img);
+    });
+  }
+  if (Array.isArray(product.variations)) {
+    product.variations.forEach((v) => {
+      if (v?.image && typeof v.image === 'string') raw.push(v.image);
+      if (Array.isArray(v?.additionalImages)) {
+        v.additionalImages.forEach((img) => {
+          if (typeof img === 'string') raw.push(img);
+        });
+      }
+    });
+  }
+
+  const seen = new Set<string>();
+  const valid: string[] = [];
+  raw.forEach((u) => {
+    const safeUrl = resolveSafeProductImageUrl(u, inventory);
+    if (!safeUrl || safeUrl === JEWELLERY_PLACEHOLDER_IMAGE || seen.has(safeUrl)) return;
+    seen.add(safeUrl);
+    if (isGenuineImageUrl(safeUrl)) {
+      valid.push(safeUrl);
+    }
+  });
+  return valid;
+}
+
+export function getProductPrimaryImage(
+  product?: Partial<Product> | null,
+  inventory: MediaInventory | null = cachedMediaInventory,
+  variation?: Partial<ProductVariation> | null
+): string {
+  const candidates = getProductImageCandidates(product, variation, inventory);
+  return candidates[0] || JEWELLERY_PLACEHOLDER_IMAGE;
+}
+
+export function hasRenderableProductImage(
+  product?: Partial<Product> | null,
+  inventory: MediaInventory | null = cachedMediaInventory
+): boolean {
+  return getProductImageCandidates(product, null, inventory).length > 0;
 }
 
 export function isDataUrl(url?: string | null): boolean {

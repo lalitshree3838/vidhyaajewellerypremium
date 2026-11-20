@@ -24,6 +24,7 @@ import {
   isGenuineProduct,
   resolveCategoryCoverImage
 } from './sampleData';
+import { invalidateMediaInventoryCache, normalizeImageUrl } from './storageService';
 
 const PRODUCTS_COL = 'products';
 const CATEGORIES_COL = 'categories';
@@ -50,8 +51,183 @@ export function saveCachedOrders(orders: Order[]): void {
 }
 
 const PRODUCTS_CACHE_KEY = 'vidhyaa_products_cache';
+const PRODUCTS_IDB_NAME = 'vidhyaa_store_db';
+const PRODUCTS_IDB_STORE = 'kv';
+const PRODUCTS_IDB_KEY = 'products_full';
 
 let __vidhyaaMemProducts: Product[] = [];
+
+const NOV16_RESEED_START_MS = Date.parse('2026-11-16T14:35:00.000Z');
+const NOV16_RESEED_END_MS = Date.parse('2026-11-16T14:45:00.000Z');
+const INITIAL_PRODUCT_BASELINE_MAP = new Map<string, Product>(
+  Array.isArray(INITIAL_PRODUCTS) ? INITIAL_PRODUCTS.map((p) => [p.id, p]) : []
+);
+
+function getEffectiveCatalogSortTimestamp(product: Product): number {
+  const rawTs = new Date(product.updatedAt || product.createdAt || 0).getTime() || 0;
+  if (rawTs >= NOV16_RESEED_START_MS && rawTs <= NOV16_RESEED_END_MS) {
+    const baseline = INITIAL_PRODUCT_BASELINE_MAP.get(product.id);
+    if (baseline) {
+      return new Date(baseline.updatedAt || baseline.createdAt || product.createdAt || 0).getTime() || 0;
+    }
+  }
+  return rawTs;
+}
+
+export function sortCatalogProducts(list: Product[]): Product[] {
+  return [...list].sort((a, b) => getEffectiveCatalogSortTimestamp(b) - getEffectiveCatalogSortTimestamp(a));
+}
+
+function openCatalogIdb(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === 'undefined') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(null);
+      }
+    }, 1200);
+    try {
+      const req = indexedDB.open(PRODUCTS_IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        try {
+          const dbInst = req.result;
+          if (!dbInst.objectStoreNames.contains(PRODUCTS_IDB_STORE)) {
+            dbInst.createObjectStore(PRODUCTS_IDB_STORE);
+          }
+        } catch {}
+      };
+      req.onsuccess = () => {
+        clearTimeout(timer);
+        if (!settled) {
+          settled = true;
+          resolve(req.result);
+        }
+      };
+      req.onerror = () => {
+        clearTimeout(timer);
+        if (!settled) {
+          settled = true;
+          resolve(null);
+        }
+      };
+      req.onblocked = () => {
+        clearTimeout(timer);
+        if (!settled) {
+          settled = true;
+          resolve(null);
+        }
+      };
+    } catch {
+      clearTimeout(timer);
+      if (!settled) {
+        settled = true;
+        resolve(null);
+      }
+    }
+  });
+}
+
+async function loadProductsFromIdb(): Promise<Product[]> {
+  try {
+    const dbInst = await openCatalogIdb();
+    if (!dbInst) return [];
+    return await new Promise<Product[]>((resolve) => {
+      let settled = false;
+      const finish = (items: Product[]) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          dbInst.close();
+        } catch {}
+        resolve(items);
+      };
+      const timer = setTimeout(() => finish([]), 1200);
+      try {
+        const tx = dbInst.transaction(PRODUCTS_IDB_STORE, 'readonly');
+        const store = tx.objectStore(PRODUCTS_IDB_STORE);
+        const getReq = store.get(PRODUCTS_IDB_KEY);
+        let result: Product[] = [];
+        getReq.onsuccess = () => {
+          const val = getReq.result;
+          result = Array.isArray(val) ? val : [];
+        };
+        getReq.onerror = () => finish([]);
+        tx.oncomplete = () => finish(result);
+        tx.onerror = () => finish(result);
+        tx.onabort = () => finish(result);
+      } catch {
+        finish([]);
+      }
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function saveProductsToIdb(products: Product[]): Promise<void> {
+  if (!Array.isArray(products) || products.length === 0) return;
+  try {
+    const dbInst = await openCatalogIdb();
+    if (!dbInst) return;
+    const hasIncomingStripped = products.some(
+      (p) => p && (p as any)._strippedImg === true && !p._imagesCleared && (!Array.isArray(p.images) || p.images.length === 0)
+    );
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          dbInst.close();
+        } catch {}
+        resolve();
+      };
+      const timer = setTimeout(finish, 2000);
+      try {
+        const tx = dbInst.transaction(PRODUCTS_IDB_STORE, 'readwrite');
+        const store = tx.objectStore(PRODUCTS_IDB_STORE);
+        tx.oncomplete = finish;
+        tx.onerror = finish;
+        tx.onabort = finish;
+        if (hasIncomingStripped) {
+          const existingReq = store.get(PRODUCTS_IDB_KEY);
+          existingReq.onsuccess = () => {
+            try {
+              const existingList = Array.isArray(existingReq.result) ? (existingReq.result as Product[]) : [];
+              const existingMap = new Map<string, Product>();
+              existingList.forEach((ep) => {
+                if (ep && ep.id) existingMap.set(ep.id, ep);
+              });
+              const protectedList = products.map((p) => {
+                if (!p || !p.id) return p;
+                const existing = existingMap.get(p.id);
+                return existing ? __mergeProductMedia(p, existing) : p;
+              });
+              store.put(protectedList, PRODUCTS_IDB_KEY);
+            } catch {
+              try {
+                store.put(products, PRODUCTS_IDB_KEY);
+              } catch {}
+            }
+          };
+          existingReq.onerror = () => {
+            try {
+              store.put(products, PRODUCTS_IDB_KEY);
+            } catch {}
+          };
+        } else {
+          store.put(products, PRODUCTS_IDB_KEY);
+        }
+      } catch {
+        finish();
+      }
+    });
+  } catch {}
+}
 
 export function __normVidUrl(u?: string): string {
   if (!u || typeof u !== 'string') return '';
@@ -65,12 +241,33 @@ export function __mergeProductMedia(incoming: Product, fallback?: Product | null
   const incAny = incoming as any;
   const fbAny = fallback as any;
   const incImgs = Array.isArray(incoming.images)
-    ? incoming.images.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+    ? incoming.images
+        .map((x) => (typeof x === 'string' ? normalizeImageUrl(x) : ''))
+        .filter((x): x is string => x.length > 0 && !x.startsWith('data:image/svg+xml'))
     : [];
-  const fbImgs = fallback && Array.isArray(fallback.images)
-    ? fallback.images.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-    : [];
-  const mergedImgs = incImgs.length > 0 ? incImgs : fbImgs;
+  const fbImgs =
+    fallback && Array.isArray(fallback.images)
+      ? fallback.images
+          .map((x) => (typeof x === 'string' ? normalizeImageUrl(x) : ''))
+          .filter((x): x is string => x.length > 0 && !x.startsWith('data:image/svg+xml'))
+      : [];
+
+  const incStripped = incAny._strippedImg === true;
+  const incCleared = incAny._imagesCleared === true && incImgs.length === 0;
+  const fbCleared = Boolean(fbAny && fbAny._imagesCleared === true);
+
+  let mergedImgs: string[];
+  if (incImgs.length > 0) {
+    mergedImgs = incImgs;
+  } else if (incCleared) {
+    mergedImgs = [];
+  } else if (incStripped) {
+    mergedImgs = fbImgs;
+  } else if (fbCleared) {
+    mergedImgs = [];
+  } else {
+    mergedImgs = fbImgs;
+  }
 
   const mergedVars: ProductVariation[] =
     Array.isArray(incoming.variations) && incoming.variations.length > 0
@@ -78,11 +275,29 @@ export function __mergeProductMedia(incoming: Product, fallback?: Product | null
           const fv =
             fallback?.variations?.[idx] ||
             (fallback?.variations || []).find((x) => x && v && x.id === v.id);
-          const img =
-            v && typeof v.image === 'string' && v.image.trim()
-              ? v.image
-              : fv?.image || mergedImgs[0] || '';
-          return { ...v, image: img };
+          const vImgNorm = v && typeof v.image === 'string' ? normalizeImageUrl(v.image) : '';
+          const fvImgNorm = fv && typeof fv.image === 'string' ? normalizeImageUrl(fv.image) : '';
+          let img = '';
+          if (incCleared) {
+            img = vImgNorm || '';
+          } else if (incStripped) {
+            img = fvImgNorm || vImgNorm || mergedImgs[0] || '';
+          } else {
+            img = vImgNorm || fvImgNorm || mergedImgs[0] || '';
+          }
+          const vAdd = Array.isArray(v?.additionalImages)
+            ? v.additionalImages.map((x) => normalizeImageUrl(x)).filter(Boolean)
+            : [];
+          const fvAdd = Array.isArray(fv?.additionalImages)
+            ? fv.additionalImages.map((x) => normalizeImageUrl(x)).filter(Boolean)
+            : [];
+          const nextVar: ProductVariation = { ...v, image: img };
+          if (incCleared) {
+            if (vAdd.length > 0) nextVar.additionalImages = vAdd;
+          } else if (vAdd.length > 0 || fvAdd.length > 0) {
+            nextVar.additionalImages = vAdd.length > 0 ? vAdd : fvAdd;
+          }
+          return nextVar;
         })
       : fallback?.variations || [];
 
@@ -101,7 +316,13 @@ export function __mergeProductMedia(incoming: Product, fallback?: Product | null
         : fallback?.showInShoppingVideos
   };
 
-  if (out._strippedImg && mergedImgs.length > 0) {
+  if (mergedImgs.length > 0) {
+    delete out._strippedImg;
+    delete out._imagesCleared;
+  } else if (incCleared || (fbCleared && !incStripped)) {
+    out._imagesCleared = true;
+    delete out._strippedImg;
+  } else if (out._strippedImg && mergedVars.some((v) => Boolean(v?.image))) {
     delete out._strippedImg;
   }
   return out;
@@ -111,7 +332,7 @@ export function getCachedProducts(): Product[] {
   const baseMap = new Map<string, Product>();
   if (Array.isArray(INITIAL_PRODUCTS)) {
     INITIAL_PRODUCTS.forEach((p) => {
-      if (p && p.id) baseMap.set(p.id, p);
+      if (p && p.id) baseMap.set(p.id, __mergeProductMedia(p, null));
     });
   }
 
@@ -119,7 +340,7 @@ export function getCachedProducts(): Product[] {
     __vidhyaaMemProducts.forEach((p) => {
       if (p && p.id) baseMap.set(p.id, __mergeProductMedia(p, baseMap.get(p.id)));
     });
-    return Array.from(baseMap.values());
+    return sortCatalogProducts(Array.from(baseMap.values()));
   }
 
   if (typeof localStorage === 'undefined') return [];
@@ -128,14 +349,53 @@ export function getCachedProducts(): Product[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.map((p: Product) => {
-      if (!p || !p.id) return p;
-      const fb = baseMap.get(p.id);
-      return __mergeProductMedia(p, fb);
-    });
+    return sortCatalogProducts(
+      parsed.map((p: Product) => {
+        if (!p || !p.id) return p;
+        const fb = baseMap.get(p.id);
+        return __mergeProductMedia(p, fb);
+      })
+    );
   } catch {
     return [];
   }
+}
+
+export async function getCachedProductsAsync(): Promise<Product[]> {
+  if (Array.isArray(__vidhyaaMemProducts) && __vidhyaaMemProducts.length > 0) {
+    const hasStripped = __vidhyaaMemProducts.some((p) => p && p._strippedImg && (!p.images || p.images.length === 0));
+    if (!hasStripped) {
+      return sortCatalogProducts(__vidhyaaMemProducts);
+    }
+  }
+  const idbList = await loadProductsFromIdb();
+  if (idbList.length === 0) {
+    return getCachedProducts();
+  }
+  const lsList = getCachedProducts();
+  const baseMap = new Map<string, Product>();
+  if (Array.isArray(INITIAL_PRODUCTS)) {
+    INITIAL_PRODUCTS.forEach((p) => {
+      if (p && p.id) baseMap.set(p.id, __mergeProductMedia(p, null));
+    });
+  }
+  idbList.forEach((p) => {
+    if (p && p.id && isGenuineProduct(p)) {
+      baseMap.set(p.id, __mergeProductMedia(p, baseMap.get(p.id)));
+    }
+  });
+  lsList.forEach((p) => {
+    if (p && p.id && isGenuineProduct(p)) {
+      const existing = baseMap.get(p.id);
+      baseMap.set(p.id, existing ? __mergeProductMedia(p, existing) : p);
+    }
+  });
+  const deletedIds = getDeletedProductIds();
+  const merged = sortCatalogProducts(Array.from(baseMap.values()).filter((p) => p && !deletedIds.has(p.id)));
+  if (merged.length > 0) {
+    __vidhyaaMemProducts = merged;
+  }
+  return merged;
 }
 
 export function saveCachedProducts(products: Product[]): void {
@@ -155,43 +415,59 @@ export function saveCachedProducts(products: Product[]): void {
   const clean = products.map((p) => (p && p.id ? __mergeProductMedia(p, prevMap.get(p.id)) : p));
   __vidhyaaMemProducts = clean;
 
+  // Persist complete unstripped product images cleanly in IndexedDB (supports 50MB+ quota)
+  void saveProductsToIdb(clean);
+
   if (typeof localStorage !== 'undefined') {
+    const buildSlimCatalog = (items: Product[]): Product[] =>
+      items.map((item) => {
+        if (!item || typeof item !== 'object') return item;
+        const hadDataImg =
+          (Array.isArray(item.images) &&
+            item.images.some((x) => typeof x === 'string' && x.startsWith('data:image/'))) ||
+          (Array.isArray(item.variations) &&
+            item.variations.some(
+              (v) => v && typeof v.image === 'string' && v.image.startsWith('data:image/')
+            ));
+        const safeImages = Array.isArray(item.images)
+          ? item.images
+              .map((img) => (typeof img === 'string' && img.startsWith('data:image/') ? '' : img))
+              .filter(Boolean)
+          : [];
+        const safeVariations = Array.isArray(item.variations)
+          ? item.variations.map((v) =>
+              v && typeof v.image === 'string' && v.image.startsWith('data:image/')
+                ? { ...v, image: '' }
+                : v
+            )
+          : item.variations;
+        const copy: Product = {
+          ...item,
+          images: safeImages,
+          variations: safeVariations
+        };
+        if (hadDataImg && !copy._imagesCleared) {
+          copy._strippedImg = true;
+        }
+        return copy;
+      });
+
+    const LOCAL_STORAGE_SAFE_LIMIT = 1_500_000;
+    const hasIdb = typeof indexedDB !== 'undefined';
+    let persisted = false;
     try {
-      localStorage.setItem(PRODUCTS_CACHE_KEY, JSON.stringify(clean));
+      const cleanJson = JSON.stringify(clean);
+      if (!hasIdb || cleanJson.length <= LOCAL_STORAGE_SAFE_LIMIT) {
+        localStorage.setItem(PRODUCTS_CACHE_KEY, cleanJson);
+        persisted = true;
+      }
     } catch {
+      persisted = false;
+    }
+
+    if (!persisted) {
       try {
-        const slim = clean.map((item) => {
-          if (!item || typeof item !== 'object') return item;
-          const hadDataImg =
-            (Array.isArray(item.images) &&
-              item.images.some((x) => typeof x === 'string' && x.startsWith('data:image/'))) ||
-            (Array.isArray(item.variations) &&
-              item.variations.some(
-                (v) => v && typeof v.image === 'string' && v.image.startsWith('data:image/')
-              ));
-          const safeImages = Array.isArray(item.images)
-            ? item.images
-                .map((img) => (typeof img === 'string' && img.startsWith('data:image/') ? '' : img))
-                .filter(Boolean)
-            : [];
-          const safeVariations = Array.isArray(item.variations)
-            ? item.variations.map((v) =>
-                v && typeof v.image === 'string' && v.image.startsWith('data:image/')
-                  ? { ...v, image: '' }
-                  : v
-              )
-            : item.variations;
-          const copy: Product = {
-            ...item,
-            images: safeImages,
-            variations: safeVariations
-          };
-          if (hadDataImg) {
-            copy._strippedImg = true;
-          }
-          return copy;
-        });
-        localStorage.setItem(PRODUCTS_CACHE_KEY, JSON.stringify(slim));
+        localStorage.setItem(PRODUCTS_CACHE_KEY, JSON.stringify(buildSlimCatalog(clean)));
       } catch (fallbackErr) {
         console.warn('[Cache Diagnostic] Could not persist products to localStorage:', fallbackErr);
       }
@@ -200,11 +476,16 @@ export function saveCachedProducts(products: Product[]): void {
 }
 
 export function cleanLegacyImageUrl(url: string): string {
-  if (!url || typeof url !== 'string') return '';
-  const trimmed = url.trim();
-  if (isGenuineImageUrl(trimmed)) return trimmed;
-  if (trimmed.startsWith('/') || trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
-    return trimmed;
+  const normalized = normalizeImageUrl(url);
+  if (!normalized) return '';
+  if (isGenuineImageUrl(normalized)) return normalized;
+  if (
+    normalized.startsWith('/') ||
+    normalized.startsWith('http://') ||
+    normalized.startsWith('https://') ||
+    normalized.startsWith('data:')
+  ) {
+    return normalized;
   }
   return '';
 }
@@ -327,6 +608,10 @@ export function sanitizeProductForFirestore(product: Product): Product {
     cleanProduct.specifications = product.specifications;
   } else {
     cleanProduct.specifications = { 'Plating': '24K Micro Gold Plated', 'Craft': 'Handcrafted Heirlooms' };
+  }
+
+  if (cleanImages.length === 0 && (product as any)._imagesCleared === true) {
+    cleanProduct._imagesCleared = true;
   }
 
   return cleanProduct as Product;
@@ -454,6 +739,7 @@ export async function forceReseedCatalog(throwOnError: boolean = true): Promise<
 
 // Products - Load latest saved products directly from persistent Firestore collection
 export async function fetchProducts(): Promise<Product[]> {
+  const [idbCached] = await Promise.all([loadProductsFromIdb()]);
   const cached = getCachedProducts();
   const deletedIds = getDeletedProductIds();
 
@@ -467,7 +753,16 @@ export async function fetchProducts(): Promise<Product[]> {
     }
   });
 
-  // 2. Fetch server store products from /api/products (persisted in data/products.json)
+  // 2. Hydrate full unstripped products from IndexedDB first (protects 9 Firestore-only products if offline/quota)
+  if (Array.isArray(idbCached) && idbCached.length > 0) {
+    idbCached.forEach((ip) => {
+      if (isGenuineProduct(ip) && !deletedIds.has(ip.id)) {
+        catalogMap.set(ip.id, __mergeProductMedia(ip, catalogMap.get(ip.id)));
+      }
+    });
+  }
+
+  // 3. Fetch server store products from /api/products (persisted in data/products.json)
   let apiSucceeded = false;
   try {
     if (typeof fetch !== 'undefined') {
@@ -486,7 +781,7 @@ export async function fetchProducts(): Promise<Product[]> {
     }
   } catch {}
 
-  // 3. Merge cached products (including products created or updated locally in Admin Panel)
+  // 4. Merge cached products (including products created or updated locally in Admin Panel)
   if (Array.isArray(cached) && cached.length > 0) {
     cached.forEach((cp) => {
       if (isGenuineProduct(cp) && !deletedIds.has(cp.id)) {
@@ -494,8 +789,8 @@ export async function fetchProducts(): Promise<Product[]> {
         if (!existing) {
           catalogMap.set(cp.id, __mergeProductMedia(cp, null));
         } else if (!cp._strippedImg) {
-          const timeExisting = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
-          const timeCached = new Date(cp.updatedAt || cp.createdAt || 0).getTime();
+          const timeExisting = getEffectiveCatalogSortTimestamp(existing);
+          const timeCached = getEffectiveCatalogSortTimestamp(cp);
           if (timeCached > timeExisting || !apiSucceeded) {
             catalogMap.set(cp.id, __mergeProductMedia(cp, existing));
           }
@@ -504,7 +799,7 @@ export async function fetchProducts(): Promise<Product[]> {
     });
   }
 
-  // 4. Query authoritative Firestore collection /products
+  // 5. Query authoritative Firestore collection /products
   try {
     const snap = await getDocs(collection(db, PRODUCTS_COL));
     snap.forEach((d) => {
@@ -561,6 +856,7 @@ export async function fetchProducts(): Promise<Product[]> {
         videoUrl: cleanVideoUrl || undefined,
         showInShoppingVideos:
           typeof data.showInShoppingVideos === 'boolean' ? data.showInShoppingVideos : undefined,
+        ...((data as any)._imagesCleared === true && cleanImgs.length === 0 ? { _imagesCleared: true } : {}),
         createdAt: data.createdAt || new Date().toISOString(),
         updatedAt: data.updatedAt || data.createdAt || new Date().toISOString()
       };
@@ -588,12 +884,7 @@ export async function fetchProducts(): Promise<Product[]> {
     }
   }
 
-  const merged = Array.from(catalogMap.values());
-  merged.sort((a, b) => {
-    const timeA = new Date(a.updatedAt || a.createdAt || 0).getTime();
-    const timeB = new Date(b.updatedAt || b.createdAt || 0).getTime();
-    return timeB - timeA;
-  });
+  const merged = sortCatalogProducts(Array.from(catalogMap.values()));
 
   saveCachedProducts(merged);
   return merged;
@@ -668,6 +959,7 @@ export function subscribeToProducts(
             videoUrl: cleanVideoUrl || undefined,
             showInShoppingVideos:
               typeof data.showInShoppingVideos === 'boolean' ? data.showInShoppingVideos : undefined,
+            ...((data as any)._imagesCleared === true && cleanImgs.length === 0 ? { _imagesCleared: true } : {}),
             createdAt: data.createdAt || new Date().toISOString(),
             updatedAt: data.updatedAt || data.createdAt || new Date().toISOString()
           };
@@ -706,11 +998,7 @@ export function subscribeToProducts(
             }
           });
 
-          const sorted = Array.from(mergedMap.values()).sort((a, b) => {
-            const timeA = new Date(a.updatedAt || a.createdAt || 0).getTime();
-            const timeB = new Date(b.updatedAt || b.createdAt || 0).getTime();
-            return timeB - timeA;
-          });
+          const sorted = sortCatalogProducts(Array.from(mergedMap.values()));
 
           saveCachedProducts(sorted);
           callback(sorted);
@@ -777,6 +1065,7 @@ export async function fetchProductById(id: string): Promise<Product | null> {
         careInstructions: data.careInstructions || '',
         variations: cleanVars,
         videoUrl: (typeof data.videoUrl === 'string' && data.videoUrl.trim()) ? data.videoUrl.trim() : undefined,
+        ...((data as any)._imagesCleared === true && cleanImgs.length === 0 ? { _imagesCleared: true } : {}),
         createdAt: data.createdAt || new Date().toISOString(),
         updatedAt: data.updatedAt || data.createdAt || new Date().toISOString()
       };
@@ -857,7 +1146,16 @@ export function getOrderReceiptToken(orderKey: string): string {
 }
 
 export async function saveProduct(product: Product): Promise<Product> {
-  const sanitized = sanitizeProductForFirestore(product);
+  // Hydrate full unstripped catalog first (even on cold memory cache) so existing media is never lost
+  const existingCatalog = await getCachedProductsAsync().catch(() => getCachedProducts());
+  const existingMatch =
+    existingCatalog.find((p) => p && p.id === product.id) ||
+    INITIAL_PRODUCT_BASELINE_MAP.get(product.id) ||
+    null;
+
+  const candidateMerged = __mergeProductMedia(product, existingMatch);
+  const sanitized = sanitizeProductForFirestore(candidateMerged);
+  delete (sanitized as any)._strippedImg;
   if (sanitized.videoUrl && sanitized.showInShoppingVideos === undefined) {
     sanitized.showInShoppingVideos = true;
   }
@@ -902,23 +1200,25 @@ export async function saveProduct(product: Product): Promise<Product> {
     console.warn('[Server] Notice saving product to server endpoint:', serverErr);
   }
 
-  // 3. Update local cache
-  const cached = getCachedProducts();
-  const index = cached.findIndex((p) => p.id === sanitized.id);
+  // 3. Update local memory, IndexedDB (awaited), and compact localStorage cache
+  const updatedCatalog = [...existingCatalog];
+  const index = updatedCatalog.findIndex((p) => p.id === sanitized.id);
   if (index !== -1) {
-    cached[index] = sanitized;
+    updatedCatalog[index] = sanitized;
   } else {
-    cached.unshift(sanitized);
+    updatedCatalog.unshift(sanitized);
   }
-  saveCachedProducts(cached);
+  saveCachedProducts(updatedCatalog);
+  await saveProductsToIdb(updatedCatalog);
+  invalidateMediaInventoryCache();
 
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('vidhyaa_products_updated', { detail: cached }));
+    window.dispatchEvent(new CustomEvent('vidhyaa_products_updated', { detail: updatedCatalog }));
   }
 
   // Report or throw Firestore errors only if both Firestore and server persistence failed
   if (!firestoreSuccess) {
-    if (serverSuccess || cached.length > 0) {
+    if (serverSuccess || updatedCatalog.length > 0) {
       console.warn(`[Firestore Warning] Firestore write delayed (${firestoreError?.message || 'offline/quota'}). Product preserved in server and local store.`);
     } else if (firestoreError) {
       handleFirestoreError(firestoreError, OperationType.WRITE, `${PRODUCTS_COL}/${sanitized.id}`);

@@ -29,6 +29,8 @@ import {
   normalizePhone10,
   hashPasswordPbkdf2,
   verifyPatronOrAdminPassword,
+  verifyAdminPassword,
+  verifyAdminBackupCode,
   verifyTotpCode,
   loadAdminCredentialsConfig,
   checkRateLimit,
@@ -928,7 +930,7 @@ export function handleApiMiddleware(req, res, next) {
 
         let passwordOk = false;
         if (creds.passwordHash) {
-          passwordOk = verifyPatronOrAdminPassword(password, creds.passwordHash);
+          passwordOk = await verifyAdminPassword(password, creds.passwordHash);
         } else if (creds.plainPassword) {
           const a = Buffer.from(creds.plainPassword, 'utf8');
           const b = Buffer.from(password, 'utf8');
@@ -959,17 +961,8 @@ export function handleApiMiddleware(req, res, next) {
           }
 
           let totpOk = verifyTotpCode(creds.totpSecret, totpCode);
-          if (!totpOk && Array.isArray(creds.backupCodes)) {
-            for (const bc of creds.backupCodes) {
-              if (typeof bc === 'string') {
-                const a = Buffer.from(bc.trim().toUpperCase(), 'utf8');
-                const b = Buffer.from(totpCode.toUpperCase(), 'utf8');
-                if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
-                  totpOk = true;
-                  break;
-                }
-              }
-            }
+          if (!totpOk) {
+            totpOk = verifyAdminBackupCode(creds, totpCode);
           }
 
           if (!totpOk) {

@@ -5,7 +5,7 @@ import { isGenuineProduct } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 import {
   JEWELLERY_PLACEHOLDER_IMAGE,
-  resolveSafeProductImageUrl,
+  getProductPrimaryImage,
   useAvailableMediaInventory
 } from '../lib/storageService';
 
@@ -144,14 +144,14 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                 className="flex items-center gap-3.5 p-2.5 rounded-xl hover:bg-[#FAF7F2] border border-transparent hover:border-[#E8DCCF] cursor-pointer transition-all group"
               >
                 <img
-                  src={resolveSafeProductImageUrl(prod.images?.[0], mediaInventory)}
+                  src={getProductPrimaryImage(prod, mediaInventory)}
                   alt={prod.name}
                   className="w-14 h-14 object-contain p-1 rounded-lg bg-white border border-[#E8DCCF]/60 flex-shrink-0"
                   onError={(e) => {
                     const img = e.currentTarget;
-                    if (img.src !== JEWELLERY_PLACEHOLDER_IMAGE) {
-                      img.src = JEWELLERY_PLACEHOLDER_IMAGE;
-                    }
+                    if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;
+                    img.dataset.fallbackApplied = '1';
+                    img.src = JEWELLERY_PLACEHOLDER_IMAGE;
                   }}
                 />
                 <div className="flex-1 min-w-0">

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { CartItem, Product, ProductVariation } from '../types';
+import { getProductPrimaryImage } from '../lib/storageService';
 
 interface CartContextType {
   items: CartItem[];
@@ -131,7 +132,7 @@ export const CartProvider: React.FC<{ products?: Product[]; children: React.Reac
     const itemId = `${product.id}_${variation.id}`;
     const priceToUse = product.price;
     const mrpToUse = Math.max(product.mrp || product.price, product.price);
-    const imageToUse = variation.image || product.images[0];
+    const imageToUse = getProductPrimaryImage(product, undefined, variation);
 
     setItems((prev) => {
       const existing = prev.find((item) => item.id === itemId);

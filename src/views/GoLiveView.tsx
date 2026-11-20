@@ -30,7 +30,8 @@ import { useAuth } from '../context/AuthContext';
 import { MetadataManager } from '../components/MetadataManager';
 import {
   JEWELLERY_PLACEHOLDER_IMAGE,
-  resolveSafeProductImageUrl,
+  getProductPrimaryImage,
+  hasRenderableProductImage,
   useAvailableMediaInventory
 } from '../lib/storageService';
 import { isGenuineProduct } from '../lib/sampleData';
@@ -103,7 +104,11 @@ export const GoLiveView: React.FC<GoLiveViewProps> = ({
 
   // Pinned Product for Live Shopping
   const [pinnedProduct, setPinnedProduct] = useState<Product>(() => {
-    return products.find((p) => isGenuineProduct(p)) || products[0];
+    return (
+      products.find((p) => isGenuineProduct(p) && hasRenderableProductImage(p, mediaInventory)) ||
+      products.find((p) => isGenuineProduct(p)) ||
+      products[0]
+    );
   });
   const [selectedVariation, setSelectedVariation] = useState<ProductVariation | undefined>(
     pinnedProduct?.variations?.[0]
@@ -410,12 +415,22 @@ export const GoLiveView: React.FC<GoLiveViewProps> = ({
                 /* High-Definition Studio Showcase Feed */
                 <div className="relative w-full h-full">
                   <img
-                    src={resolveSafeProductImageUrl(
-                      pinnedProduct?.images?.[0] || products.find((p) => p.images && p.images.length > 0)?.images?.[0],
-                      mediaInventory
-                    )}
+                    src={
+                      hasRenderableProductImage(pinnedProduct, mediaInventory)
+                        ? getProductPrimaryImage(pinnedProduct, mediaInventory, selectedVariation)
+                        : getProductPrimaryImage(
+                            verifiedProducts.find((p) => hasRenderableProductImage(p, mediaInventory)) || pinnedProduct,
+                            mediaInventory
+                          )
+                    }
                     alt="Live Studio Stream"
                     className="w-full h-full object-cover transition-all duration-700 filter brightness-95"
+                    onError={(e) => {
+                      const img = e.currentTarget;
+                      if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;
+                      img.dataset.fallbackApplied = '1';
+                      img.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                    }}
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/40" />
 
@@ -539,9 +554,15 @@ export const GoLiveView: React.FC<GoLiveViewProps> = ({
                 <div className="flex items-center gap-4 w-full sm:w-auto">
                   <div className="relative w-20 h-20 rounded-xl overflow-hidden border border-[#DFB982]/40 flex-shrink-0">
                     <img
-                      src={resolveSafeProductImageUrl(selectedVariation?.image || pinnedProduct.images?.[0], mediaInventory)}
+                      src={getProductPrimaryImage(pinnedProduct, mediaInventory, selectedVariation)}
                       alt={pinnedProduct.name}
                       className="w-full h-full object-cover"
+                      onError={(e) => {
+                        const img = e.currentTarget;
+                        if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;
+                        img.dataset.fallbackApplied = '1';
+                        img.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                      }}
                     />
                     <span className="absolute top-1 left-1 bg-[#802336] text-[9px] font-bold text-white px-1.5 py-0.2 rounded uppercase">
                       ON AIR
@@ -751,9 +772,15 @@ export const GoLiveView: React.FC<GoLiveViewProps> = ({
                 >
                   <div className="flex items-center gap-3">
                     <img
-                      src={resolveSafeProductImageUrl(prod.images?.[0], mediaInventory)}
+                      src={getProductPrimaryImage(prod, mediaInventory)}
                       alt=""
                       className="w-12 h-12 object-cover rounded-lg border border-[#3B1E22]"
+                      onError={(e) => {
+                        const img = e.currentTarget;
+                        if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;
+                        img.dataset.fallbackApplied = '1';
+                        img.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                      }}
                     />
                     <div>
                       <h4 className="font-bold text-white text-xs">{prod.name}</h4>

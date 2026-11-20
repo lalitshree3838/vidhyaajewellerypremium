@@ -10,6 +10,7 @@ import {
 import { ProductCard } from '../components/ProductCard';
 import { MetadataManager } from '../components/MetadataManager';
 import { isGenuineProduct, isGenuineImageUrl, isGenuineVideoUrl } from '../lib/sampleData';
+import { hasRenderableProductImage, useAvailableMediaInventory } from '../lib/storageService';
 import { SeamlessLoopVideo } from '../components/SeamlessLoopVideo';
 import {
   Sparkles,
@@ -60,6 +61,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
 
   // Video Modal Player
   const [activeVideo, setActiveVideo] = useState<CategoryVideo | null>(null);
+  const mediaInventory = useAvailableMediaInventory();
 
   // Products belonging to this category with normalized ID and keyword fallback
   const categoryProducts = useMemo(() => {
@@ -108,11 +110,18 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
 
   // Featured Products pinned by CMS
   const featuredProducts = useMemo(() => {
-    if (category.featuredProductIds && category.featuredProductIds.length > 0) {
-      return categoryProducts.filter((p) => category.featuredProductIds?.includes(p.id));
-    }
-    return categoryProducts.filter((p) => p.isFeatured || p.isBestseller).slice(0, 4);
-  }, [categoryProducts, category.featuredProductIds]);
+    const base =
+      category.featuredProductIds && category.featuredProductIds.length > 0
+        ? categoryProducts.filter((p) => category.featuredProductIds?.includes(p.id))
+        : categoryProducts.filter((p) => p.isFeatured || p.isBestseller);
+    return [...base]
+      .sort(
+        (a, b) =>
+          (hasRenderableProductImage(b, mediaInventory) ? 1 : 0) -
+          (hasRenderableProductImage(a, mediaInventory) ? 1 : 0)
+      )
+      .slice(0, category.featuredProductIds?.length ? undefined : 4);
+  }, [categoryProducts, category.featuredProductIds, mediaInventory]);
 
   // Filtered & Sorted Products
   const filteredProducts = useMemo(() => {
@@ -162,9 +171,13 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
       if (sortBy === 'price-high') return b.price - a.price;
       if (sortBy === 'rating') return (b.rating || 0) - (a.rating || 0);
       if (sortBy === 'newest') return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      const imgDiff =
+        (hasRenderableProductImage(b, mediaInventory) ? 1 : 0) -
+        (hasRenderableProductImage(a, mediaInventory) ? 1 : 0);
+      if (imgDiff !== 0) return imgDiff;
       return (b.isFeatured ? 1 : 0) - (a.isFeatured ? 1 : 0);
     });
-  }, [categoryProducts, category.featuredProductIds, category.bestsellerProductIds, category.newArrivalProductIds, category.trendingProductIds, curationFilter, selectedSubcategory, searchQuery, inStockOnly, sortBy]);
+  }, [categoryProducts, category.featuredProductIds, category.bestsellerProductIds, category.newArrivalProductIds, category.trendingProductIds, curationFilter, selectedSubcategory, searchQuery, inStockOnly, sortBy, mediaInventory]);
 
   // Published gallery images - only genuine uploaded images
   const galleryImages = useMemo(() => {

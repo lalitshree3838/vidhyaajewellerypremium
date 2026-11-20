@@ -48,7 +48,7 @@
 </IfModule>
 
 # Protect sensitive directories, internal includes, and secret/PII files from direct public HTTP access
-<FilesMatch "^(cashfree-config\.json|sms-config\.json|admin-credentials\.json|_auth\.php|\.env(\..*)?|orders|patrons\.json|orders\.json|backup_orders.*\.json|whatsapp_logs\.json)$">
+<FilesMatch "^(cashfree-config\.json|sms-config\.json|admin-credentials\.json|admin-auth\.json|_auth\.php|\.env(\..*)?|orders|patrons\.json|orders\.json|backup_orders.*\.json|whatsapp_logs\.json)$">
   <IfModule mod_authz_core.c>
     Require all denied
   </IfModule>
@@ -71,7 +71,7 @@
   RewriteRule ^(\.admin-secrets|\.backups)(/.*)?$ - [F,L]
   RewriteRule ^api/admin/_ - [F,L]
   RewriteRule ^data/(orders|patrons|whatsapp_logs|backup_orders.*)\.json$ - [F,L]
-  RewriteRule ^(cashfree-config|sms-config|admin-credentials)\.json$ - [F,L]
+  RewriteRule ^(cashfree-config|sms-config|admin-credentials|admin-auth)\.json$ - [F,L]
 
   # Route dynamic products, orders, auth & videos API requests to PHP handlers BEFORE physical file checks
   RewriteRule ^api/products/?$ /api/products.php [QSA,L]

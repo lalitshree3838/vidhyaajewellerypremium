@@ -77,6 +77,8 @@ import { isGenuineImageUrl } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice, validatePrices } from '../lib/priceUtils';
 import {
   JEWELLERY_PLACEHOLDER_IMAGE,
+  getProductPrimaryImage,
+  hasRenderableProductImage,
   resolveSafeProductImageUrl,
   uploadProductImageToStorage,
   useAvailableMediaInventory
@@ -574,6 +576,9 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
       const isItemActive = editingProduct.active !== false;
 
+      const hadRemovedAllImages =
+        productImages.length === 0 && Boolean((editingProduct as any)._imagesCleared);
+
       const updated: Product = {
         ...editingProduct,
         images: productImages,
@@ -591,6 +596,8 @@ export const AdminView: React.FC<AdminViewProps> = ({
         active: isItemActive,
         status: isItemActive ? 'published' : 'draft',
         published: isItemActive,
+        _strippedImg: undefined,
+        _imagesCleared: hadRemovedAllImages ? true : undefined,
         updatedAt: new Date().toISOString()
       };
 
@@ -837,6 +844,8 @@ export const AdminView: React.FC<AdminViewProps> = ({
       setEditingProduct({
         ...editingProduct,
         images: updatedImages,
+        _strippedImg: undefined,
+        _imagesCleared: undefined,
         variations: updatedVariations.length > 0 ? updatedVariations : [
           {
             id: `var_${Date.now()}`,
@@ -883,7 +892,13 @@ export const AdminView: React.FC<AdminViewProps> = ({
       }
       return v;
     });
-    setEditingProduct({ ...editingProduct, images: imgs, variations: updatedVariations });
+    setEditingProduct({
+      ...editingProduct,
+      images: imgs,
+      variations: updatedVariations,
+      _strippedImg: undefined,
+      _imagesCleared: imgs.length === 0 ? true : undefined
+    });
   };
 
   const handleSetPrimaryImage = (index: number) => {
@@ -1507,14 +1522,14 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     {lowStockProducts.map((prod) => (
                       <div key={prod.id} className="py-3 flex items-center justify-between gap-3">
                         <div className="flex items-center gap-3">
-                          {prod.images?.[0] ? (
+                          {hasRenderableProductImage(prod, mediaInventory) ? (
                             <img
-                              src={resolveSafeProductImageUrl(prod.images[0], mediaInventory)}
+                              src={getProductPrimaryImage(prod, mediaInventory)}
                               alt=""
                               className="w-10 h-10 object-contain bg-white p-0.5 rounded-lg border border-[#E8DCCF]"
                               onError={(e) => {
                                 const imgEl = e.currentTarget;
-                                if (imgEl.dataset.fallbackApplied === '1') return;
+                                if (imgEl.dataset.fallbackApplied === '1' || imgEl.src.startsWith('data:image/svg+xml')) return;
                                 imgEl.dataset.fallbackApplied = '1';
                                 imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
                               }}
@@ -1746,14 +1761,14 @@ export const AdminView: React.FC<AdminViewProps> = ({
                         <tr key={prod.id} className="hover:bg-[#FAF7F2]/50 transition-colors">
                           <td className="py-3.5 px-4">
                             <div className="flex items-center gap-3">
-                              {prod.images?.[0] ? (
+                              {hasRenderableProductImage(prod, mediaInventory) ? (
                                 <img
-                                  src={resolveSafeProductImageUrl(prod.images[0], mediaInventory)}
+                                  src={getProductPrimaryImage(prod, mediaInventory)}
                                   alt=""
                                   className="w-12 h-12 object-contain bg-white p-0.5 rounded-xl border border-[#E8DCCF] flex-shrink-0"
                                   onError={(e) => {
                                     const imgEl = e.currentTarget;
-                                    if (imgEl.dataset.fallbackApplied === '1') return;
+                                    if (imgEl.dataset.fallbackApplied === '1' || imgEl.src.startsWith('data:image/svg+xml')) return;
                                     imgEl.dataset.fallbackApplied = '1';
                                     imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
                                   }}
@@ -3303,6 +3318,8 @@ export const AdminView: React.FC<AdminViewProps> = ({
                       setEditingProduct({
                         ...editingProduct,
                         images: updatedImages,
+                        _strippedImg: undefined,
+                        _imagesCleared: undefined,
                         variations: updatedVariations
                       });
                       setImageUrlInput('');
@@ -3643,14 +3660,14 @@ export const AdminView: React.FC<AdminViewProps> = ({
             </div>
 
             <div className="bg-[#FAF7F2] p-3.5 rounded-2xl border border-[#E8DCCF] flex items-center gap-3">
-              {productToDelete.images?.[0] ? (
+              {hasRenderableProductImage(productToDelete, mediaInventory) ? (
                 <img
-                  src={resolveSafeProductImageUrl(productToDelete.images[0], mediaInventory)}
+                  src={getProductPrimaryImage(productToDelete, mediaInventory)}
                   alt={productToDelete.name}
                   className="w-12 h-12 object-cover rounded-xl border border-[#E8DCCF] bg-white"
                   onError={(e) => {
                     const imgEl = e.currentTarget;
-                    if (imgEl.dataset.fallbackApplied === '1') return;
+                    if (imgEl.dataset.fallbackApplied === '1' || imgEl.src.startsWith('data:image/svg+xml')) return;
                     imgEl.dataset.fallbackApplied = '1';
                     imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
                   }}

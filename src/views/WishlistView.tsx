@@ -6,7 +6,7 @@ import { useCart } from '../context/CartContext';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 import {
   JEWELLERY_PLACEHOLDER_IMAGE,
-  resolveSafeProductImageUrl,
+  getProductPrimaryImage,
   useAvailableMediaInventory
 } from '../lib/storageService';
 
@@ -88,14 +88,14 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
               onClick={() => onSelectProduct(prod)}
             >
               <img
-                src={resolveSafeProductImageUrl(prod.images?.[0], mediaInventory)}
+                src={getProductPrimaryImage(prod, mediaInventory)}
                 alt={prod.name}
                 className="w-full h-full object-contain p-2"
                 onError={(e) => {
                   const img = e.currentTarget;
-                  if (img.src !== JEWELLERY_PLACEHOLDER_IMAGE) {
-                    img.src = JEWELLERY_PLACEHOLDER_IMAGE;
-                  }
+                  if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;
+                  img.dataset.fallbackApplied = '1';
+                  img.src = JEWELLERY_PLACEHOLDER_IMAGE;
                 }}
               />
               <button

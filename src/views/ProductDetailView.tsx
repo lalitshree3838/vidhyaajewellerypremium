@@ -32,7 +32,7 @@ import { SeamlessLoopVideo } from '../components/SeamlessLoopVideo';
 import { useResolvedProductVideo } from '../lib/videoFallback';
 import {
   JEWELLERY_PLACEHOLDER_IMAGE,
-  resolveSafeProductImageUrl,
+  getProductImageCandidates,
   useAvailableMediaInventory
 } from '../lib/storageService';
 
@@ -118,18 +118,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   }
 
   // When variation changes, prioritize variation image as index 0!
-  const variationImage = selectedVariation?.image;
-  const rawGallery = variationImage
-    ? [variationImage, ...(product.images || []).filter((img) => img !== variationImage)]
-    : product.images || [];
-  const seenGallery = new Set<string>();
-  const validGallery = rawGallery
-    .map((img) => resolveSafeProductImageUrl(img, mediaInventory))
-    .filter((img) => {
-      if (!img || img === JEWELLERY_PLACEHOLDER_IMAGE || seenGallery.has(img)) return false;
-      seenGallery.add(img);
-      return isGenuineImageUrl(img);
-    });
+  const validGallery = getProductImageCandidates(product, selectedVariation, mediaInventory);
   const galleryImages = validGallery.length > 0 ? validGallery : [JEWELLERY_PLACEHOLDER_IMAGE];
 
   const currentDisplayImage = galleryImages[activeImageIndex] || galleryImages[0];
@@ -160,6 +149,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const handleVariationChange = (v: ProductVariation) => {
     setSelectedVariation(v);
     setActiveImageIndex(0); // Immediately displays that variation's photo!
+    setImageError(false);
     setActiveMedia('image');
   };
 
@@ -311,7 +301,13 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                 src={currentDisplayImage}
                 alt={product.name}
                 className="w-full h-full object-contain object-center transition-transform duration-500 group-hover:scale-105"
-                onError={() => setImageError(true)}
+                onError={() => {
+                  if (activeImageIndex + 1 < galleryImages.length) {
+                    setActiveImageIndex((prev) => prev + 1);
+                  } else {
+                    setImageError(true);
+                  }
+                }}
               />
             )}
 
@@ -361,6 +357,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                 onClick={() => {
                   setActiveMedia('image');
                   setActiveImageIndex(idx);
+                  setImageError(false);
                 }}
                 className={`w-20 h-20 rounded-xl overflow-hidden border-2 bg-white p-1 flex items-center justify-center flex-shrink-0 cursor-pointer transition-all ${
                   activeMedia === 'image' && activeImageIndex === idx
@@ -373,7 +370,10 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                   alt=""
                   className="w-full h-full object-contain"
                   onError={(e) => {
-                    (e.target as HTMLElement).style.display = 'none';
+                    const imgEl = e.currentTarget;
+                    if (imgEl.dataset.fallbackApplied === '1' || imgEl.src.startsWith('data:image/svg+xml')) return;
+                    imgEl.dataset.fallbackApplied = '1';
+                    imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
                   }}
                 />
               </button>

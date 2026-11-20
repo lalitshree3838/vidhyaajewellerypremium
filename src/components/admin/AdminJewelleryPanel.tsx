@@ -4,7 +4,7 @@ import { Product, ProductVariation } from '../../types';
 import { calculateDiscountPercent, formatPrice } from '../../lib/priceUtils';
 import {
   JEWELLERY_PLACEHOLDER_IMAGE,
-  resolveSafeProductImageUrl,
+  getProductPrimaryImage,
   useAvailableMediaInventory
 } from '../../lib/storageService';
 
@@ -88,14 +88,14 @@ export const AdminJewelleryPanel: React.FC<AdminJewelleryPanelProps> = ({
           >
             <div className="relative aspect-square overflow-hidden bg-black/40 flex items-center justify-center">
               <img
-                src={resolveSafeProductImageUrl(prod.images?.[0], mediaInventory)}
+                src={getProductPrimaryImage(prod, mediaInventory)}
                 alt={prod.name}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                 onError={(e) => {
                   const img = e.currentTarget;
-                  if (img.src !== JEWELLERY_PLACEHOLDER_IMAGE) {
-                    img.src = JEWELLERY_PLACEHOLDER_IMAGE;
-                  }
+                  if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;
+                  img.dataset.fallbackApplied = '1';
+                  img.src = JEWELLERY_PLACEHOLDER_IMAGE;
                 }}
               />
               <span className="absolute top-2.5 left-2.5 bg-black/80 backdrop-blur-md px-2 py-0.5 rounded text-[10px] font-bold text-[#DFB982] uppercase border border-[#DFB982]/30">

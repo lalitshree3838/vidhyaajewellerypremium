@@ -136,13 +136,8 @@ if ($creds['totpSecret'] !== '') {
     }
 
     $totpOk = vdhVerifyTotp($creds['totpSecret'], $totpCode);
-    if (!$totpOk && !empty($creds['backupCodes'])) {
-        foreach ($creds['backupCodes'] as $code) {
-            if (is_string($code) && hash_equals(strtoupper(trim($code)), strtoupper($totpCode))) {
-                $totpOk = true;
-                break;
-            }
-        }
+    if (!$totpOk) {
+        $totpOk = vdhVerifyAdminBackupCode($creds, $totpCode);
     }
 
     if (!$totpOk) {

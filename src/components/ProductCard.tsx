@@ -7,7 +7,7 @@ import { isGenuineImageUrl, isGenuineProduct, isGenuineVideoUrl } from '../lib/s
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 import {
   JEWELLERY_PLACEHOLDER_IMAGE,
-  resolveSafeProductImageUrl,
+  getProductImageCandidates,
   useAvailableMediaInventory
 } from '../lib/storageService';
 import { SeamlessLoopVideo } from './SeamlessLoopVideo';
@@ -37,6 +37,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
   const [addedToast, setAddedToast] = useState(false);
   const [imgIdx, setImgIdx] = useState(0);
+  const [retryCount, setRetryCount] = useState(0);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
   // Synchronize variation when product changes
@@ -52,37 +53,29 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
   useEffect(() => {
     setImgIdx(0);
+    setRetryCount(0);
   }, [product?.id, selectedVariation?.id]);
 
-  // Build ordered deduplicated candidate list using verified media inventory
+  // Build ordered deduplicated candidate list across variation, product.images, and all variations
   const imgCandidates = useMemo(() => {
-    const raw: string[] = [];
-    if (selectedVariation?.image && typeof selectedVariation.image === 'string') {
-      raw.push(selectedVariation.image.trim());
-    }
-    if (Array.isArray(product?.images)) {
-      product.images.forEach((img) => {
-        if (typeof img === 'string' && img.trim()) raw.push(img.trim());
-      });
-    }
-    if (Array.isArray(product?.variations)) {
-      product.variations.forEach((v) => {
-        if (v?.image && typeof v.image === 'string' && v.image.trim()) raw.push(v.image.trim());
-      });
-    }
-    const seen = new Set<string>();
-    const valid: string[] = [];
-    raw.forEach((u) => {
-      if (!u || u.startsWith('data:image/svg+xml')) return;
-      const safeUrl = resolveSafeProductImageUrl(u, mediaInventory);
-      if (!safeUrl || safeUrl === JEWELLERY_PLACEHOLDER_IMAGE || seen.has(safeUrl)) return;
-      seen.add(safeUrl);
-      if (isGenuineImageUrl(safeUrl)) valid.push(safeUrl);
-    });
-    return valid;
-  }, [product?.images, product?.variations, selectedVariation?.image, mediaInventory]);
+    return getProductImageCandidates(product, selectedVariation, mediaInventory);
+  }, [product, selectedVariation, mediaInventory]);
 
-  const displayImage = imgCandidates[imgIdx] || '';
+  const baseDisplayImage = imgCandidates[imgIdx] || '';
+  const displayImage = useMemo(() => {
+    if (!baseDisplayImage) return '';
+    if (
+      retryCount > 0 &&
+      (baseDisplayImage.startsWith('http://') ||
+        baseDisplayImage.startsWith('https://') ||
+        baseDisplayImage.startsWith('/products/'))
+    ) {
+      const sep = baseDisplayImage.includes('?') ? '&' : '?';
+      return `${baseDisplayImage}${sep}_retry=${retryCount}`;
+    }
+    return baseDisplayImage;
+  }, [baseDisplayImage, retryCount]);
+
   const hasRealImg = imgCandidates.length > 0;
   const isInstantImg = !hasRealImg || displayImage.startsWith('data:image/') || displayImage.startsWith('blob:');
 
@@ -106,7 +99,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       return;
     }
     setImageLoaded(false);
-    const timer = setTimeout(() => setImageLoaded(true), 4500);
+    const timer = setTimeout(() => setImageLoaded(true), 9000);
     return () => clearTimeout(timer);
   }, [product?.id, displayImage]);
 
@@ -184,38 +177,31 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     setSelectedVariation(variation);
     setImageError(false);
     setImgIdx(0);
+    setRetryCount(0);
     if (variation.image && isGenuineImageUrl(variation.image)) {
       setShowVideo(false);
     }
   };
 
   const handleImgError = () => {
+    if (
+      retryCount === 0 &&
+      baseDisplayImage &&
+      (baseDisplayImage.startsWith('http://') || baseDisplayImage.startsWith('https://'))
+    ) {
+      setRetryCount(1);
+      setImageLoaded(false);
+      return;
+    }
     if (imgIdx + 1 < imgCandidates.length) {
       setImgIdx(imgIdx + 1);
+      setRetryCount(0);
       setImageLoaded(false);
       return;
     }
     setImageError(true);
     setImageLoaded(true);
   };
-
-  useEffect(() => {
-    if (imageLoaded || isDisplayingVideo || imageError || !hasRealImg) return;
-    const el = imgRef.current;
-    if (el && el.complete && el.naturalWidth > 0) {
-      setImageLoaded(true);
-    }
-  }, [imageLoaded, displayImage, isDisplayingVideo, imageError, hasRealImg]);
-
-  useEffect(() => {
-    if (!isDisplayingVideo) return;
-    if (hasRealImg) {
-      setImageLoaded(true);
-      return;
-    }
-    const timer = setTimeout(() => setImageLoaded(true), 2500);
-    return () => clearTimeout(timer);
-  }, [isDisplayingVideo, hasRealImg]);
 
   return (
     <div
@@ -271,19 +257,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
               )}
             </button>
           </div>
-        ) : hasRealImg && imageError ? (
-          <div className="w-full h-full flex flex-col items-center justify-center text-center p-4 bg-[#FAF7F2] rounded-lg border border-[#E8DCCF]/80">
-            <Sparkles className="w-7 h-7 text-[#D4AF37] mb-2 opacity-70" />
-            <span className="text-[11px] font-semibold text-[#802336]">Image Unavailable</span>
-            <span className="text-[10px] text-gray-500 mt-0.5 line-clamp-2">{product.name}</span>
-          </div>
         ) : (
           <img
             ref={imgRef}
             src={effectiveImage}
             alt={product.name}
             className={`w-full h-full object-contain object-center group-hover:scale-105 transition-transform duration-500 ease-out ${
-              imageLoaded || !hasRealImg ? 'opacity-100' : 'opacity-0'
+              imageLoaded || !hasRealImg || imageError ? 'opacity-100' : 'opacity-0'
             }`}
             loading="eager"
             referrerPolicy={effectiveImage.startsWith('http') ? 'no-referrer' : undefined}

@@ -1,45 +1,33 @@
 {
   "project": "VIDHYAA Jewellery Studio",
   "productionDomain": "https://vidhyaajewellerystudio.com",
-  "generatedAt": "2026-11-19T10:19:29.569Z",
+  "generatedAt": "2026-11-20T08:05:39.646Z",
   "packageDirectory": "safe-deploy-package/",
   "localBuildVerified": true,
   "liveDeploymentVerified": false,
   "newProductionAssets": {
     "html": "/index.html",
-    "js": "/assets/index-D3aAc3Vd.js",
-    "css": "/assets/index-CNtIG6oJ.css"
+    "js": "/assets/index-CP1DvYbP.js",
+    "css": "/assets/index-BTkogFAO.css"
   },
   "uploadFilesToHostingerPublicHtml": [
     {
-      "localSource": "safe-deploy-package/assets/index-CNtIG6oJ.css",
-      "hostingerTarget": "public_html/assets/index-CNtIG6oJ.css",
-      "bytes": 123831,
-      "sha256": "d2b782d7852318fddad04acb5915a291c42ab35b4f22ff00f8ed95c9200f290f"
-    },
-    {
-      "localSource": "safe-deploy-package/assets/index-D3aAc3Vd.js",
-      "hostingerTarget": "public_html/assets/index-D3aAc3Vd.js",
-      "bytes": 9719944,
-      "sha256": "2384a273df3476162cbd8f5de3f7e1b12bfdb570448a36f8e585c3675f002653"
-    },
-    {
       "localSource": "safe-deploy-package/.htaccess",
       "hostingerTarget": "public_html/.htaccess",
-      "bytes": 5987,
-      "sha256": "1298aad612b73fecec060a71dcc05e5e8af631cf11fbebeba51e6d6472b8bd62"
+      "bytes": 6015,
+      "sha256": "e57289613acccbb0e8255cbc70f9b29f648307bab6a7628b3f879c192eae64af"
     },
     {
       "localSource": "safe-deploy-package/api/admin/_auth.php",
       "hostingerTarget": "public_html/api/admin/_auth.php",
-      "bytes": 44698,
-      "sha256": "151e438dc9d8f6015e3ae3d8446d133679874fb1e13315a1b9d6dfcae4333517"
+      "bytes": 48127,
+      "sha256": "22733fcfd957f43b49f7d85afc69161b0c5589880cabb7df9754362d039fa368"
     },
     {
       "localSource": "safe-deploy-package/api/admin/login.php",
       "hostingerTarget": "public_html/api/admin/login.php",
-      "bytes": 5743,
-      "sha256": "44ac768945c31a45cd9ae5e77d0d6ef48285a915349d26e98a24e5514ad6755d"
+      "bytes": 5544,
+      "sha256": "4a978cb1bf9aae47035a35428e20a43de8d8f988307499be10233c4a46ba255f"
     },
     {
       "localSource": "safe-deploy-package/api/admin/logout.php",
@@ -108,6 +96,18 @@
       "sha256": "07ffe026bd739b69479ba4611ded5df749d29b9d028589cf7cba173249f5d2ba"
     },
     {
+      "localSource": "safe-deploy-package/assets/index-BTkogFAO.css",
+      "hostingerTarget": "public_html/assets/index-BTkogFAO.css",
+      "bytes": 154910,
+      "sha256": "dc2e2508a9d74430d83977c6bf05f4d8755fcc917309797f607c8f78d42bb1ca"
+    },
+    {
+      "localSource": "safe-deploy-package/assets/index-CP1DvYbP.js",
+      "hostingerTarget": "public_html/assets/index-CP1DvYbP.js",
+      "bytes": 10997981,
+      "sha256": "dfd4921afcd6f040cb10a5ef99f16ce93bd2c494369981b9fe1eea189e8ad614"
+    },
+    {
       "localSource": "safe-deploy-package/google-pay-logo.svg",
       "hostingerTarget": "public_html/google-pay-logo.svg",
       "bytes": 940,
@@ -126,16 +126,16 @@
       "sha256": "e3d727d3391dee63ae730e21b3a79b4dccc388b2299c1902627ce6574966fa34"
     },
     {
+      "localSource": "safe-deploy-package/index.html",
+      "hostingerTarget": "public_html/index.html",
+      "bytes": 1861,
+      "sha256": "1c2e103536ec391b5b220f1a85d1f76f2a15782261d1d28d93cf98b37934cdc8"
+    },
+    {
       "localSource": "safe-deploy-package/vidhyaa-home-hero.jpg",
       "hostingerTarget": "public_html/vidhyaa-home-hero.jpg",
       "bytes": 274227,
       "sha256": "e3d727d3391dee63ae730e21b3a79b4dccc388b2299c1902627ce6574966fa34"
-    },
-    {
-      "localSource": "safe-deploy-package/index.html",
-      "hostingerTarget": "public_html/index.html",
-      "bytes": 1861,
-      "sha256": "5b115cfdba2d8a892a5efaf1307f6ca430b784b2bb57d5d602725bd8162c45bf"
     }
   ],
   "strictlyExcludedFromPackage": [

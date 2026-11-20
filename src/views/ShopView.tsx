@@ -13,6 +13,7 @@ import { ProductCard } from '../components/ProductCard';
 import { MetadataManager } from '../components/MetadataManager';
 import { isGenuineProduct, isGenuineImageUrl } from '../lib/sampleData';
 import { filterProductsByNavSlug, getNavHeadingInfo } from '../lib/navigationConfig';
+import { hasRenderableProductImage, useAvailableMediaInventory } from '../lib/storageService';
 
 interface ShopViewProps {
   products: Product[];
@@ -92,9 +93,11 @@ export const ShopView: React.FC<ShopViewProps> = ({
   const [selectedFinish, setSelectedFinish] = useState<string>('all');
   const [inStockOnly, setInStockOnly] = useState<boolean>(false);
   const [minRating, setMinRating] = useState<number>(0);
-  const [priceRange, setPriceRange] = useState<[number, number]>([0, 5000]);
+  const [minPrice, setMinPrice] = useState<number>(0);
+  const [userMaxPrice, setUserMaxPrice] = useState<number | null>(null);
   const [sortBy, setSortBy] = useState<string>('featured');
   const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
+  const mediaInventory = useAvailableMediaInventory();
 
   // Available subcategories based on chosen category
   const availableSubcategories = useMemo(() => {
@@ -129,6 +132,13 @@ export const ShopView: React.FC<ShopViewProps> = ({
   const genuineProducts = useMemo(() => {
     return products.filter((p) => isGenuineProduct(p));
   }, [products]);
+
+  const maxCatalogPrice = useMemo(() => {
+    const highest = genuineProducts.reduce((m, p) => Math.max(m, Number(p.price) || 0), 5000);
+    return Math.max(5000, Math.ceil(highest / 500) * 500);
+  }, [genuineProducts]);
+
+  const priceRange: [number, number] = [minPrice, Math.min(userMaxPrice ?? maxCatalogPrice, maxCatalogPrice)];
 
   // Dynamic materials & finishes derived solely from actual catalog products
   const materials = useMemo(() => {
@@ -201,9 +211,12 @@ export const ShopView: React.FC<ShopViewProps> = ({
         if (sortBy === 'newest') return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
         if (sortBy === 'rating') return b.rating - a.rating;
         if (sortBy === 'bestseller') return (b.isBestseller ? 1 : 0) - (a.isBestseller ? 1 : 0);
-        return 0; // featured default
+        // featured default: keep renderable photo products first while preserving catalog order
+        const aHas = hasRenderableProductImage(a, mediaInventory) ? 1 : 0;
+        const bHas = hasRenderableProductImage(b, mediaInventory) ? 1 : 0;
+        return bHas - aHas;
       });
-  }, [genuineProducts, navSlug, selectedCategory, selectedSubcategory, selectedMaterial, selectedFinish, inStockOnly, minRating, priceRange, sortBy]);
+  }, [genuineProducts, navSlug, selectedCategory, selectedSubcategory, selectedMaterial, selectedFinish, inStockOnly, minRating, priceRange[0], priceRange[1], sortBy, mediaInventory]);
 
   const resetFilters = () => {
     setNavSlug('all');
@@ -213,7 +226,8 @@ export const ShopView: React.FC<ShopViewProps> = ({
     setSelectedFinish('all');
     setInStockOnly(false);
     setMinRating(0);
-    setPriceRange([0, 5000]);
+    setMinPrice(0);
+    setUserMaxPrice(null);
     setSortBy('featured');
     window.history.pushState({}, '', '/shop');
   };
@@ -229,7 +243,7 @@ export const ShopView: React.FC<ShopViewProps> = ({
     inStockOnly ||
     minRating > 0 ||
     priceRange[0] > 0 ||
-    priceRange[1] < 5000;
+    (userMaxPrice !== null && userMaxPrice < maxCatalogPrice);
 
   const activeCatObj = categories.find((c) => c.id === selectedCategory);
   const pageTitle = navSlug === 'all'
@@ -428,10 +442,10 @@ export const ShopView: React.FC<ShopViewProps> = ({
             <input
               type="range"
               min={0}
-              max={5000}
+              max={maxCatalogPrice}
               step={50}
               value={priceRange[1]}
-              onChange={(e) => setPriceRange([priceRange[0], Number(e.target.value)])}
+              onChange={(e) => setUserMaxPrice(Number(e.target.value))}
               className="w-full accent-[#802336] cursor-pointer"
             />
           </div>
@@ -671,10 +685,10 @@ export const ShopView: React.FC<ShopViewProps> = ({
               <input
                 type="range"
                 min={0}
-                max={5000}
+                max={maxCatalogPrice}
                 step={50}
                 value={priceRange[1]}
-                onChange={(e) => setPriceRange([priceRange[0], Number(e.target.value)])}
+                onChange={(e) => setUserMaxPrice(Number(e.target.value))}
                 className="w-full accent-[#802336]"
               />
             </div>
