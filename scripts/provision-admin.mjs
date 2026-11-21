@@ -5,7 +5,7 @@
  * Security guarantees:
  * - Reads owner password privately from interactive TTY (masked input; never CLI args or logs).
  * - Enforces NIST-aligned strong password policy.
- * - Hashes password with Argon2id ($argon2id$v=19$m=65536,t=3,p=1$...) via hash-wasm.
+ * - Hashes password with PBKDF2-HMAC-SHA256 (100,000 iterations) using Node built-in crypto (exact format verified by both Hostinger PHP and Node).
  * - Generates a fresh CSPRNG 20-byte (160-bit) RFC 4648 Base32 TOTP secret.
  * - Displays QR code directly in the private terminal for Google Authenticator / Authy.
  * - Requires live verification of a genuine 6-digit TOTP code before activating Admin access.
@@ -17,8 +17,28 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import { argon2id, argon2Verify } from 'hash-wasm';
 import QRCode from 'qrcode';
+
+function hashPasswordPbkdf2(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const iters = 100000;
+  const hash = crypto.pbkdf2Sync(password, salt, iters, 64, 'sha256').toString('hex');
+  return `pbkdf2_sha256:${iters}:${salt}:${hash}`;
+}
+
+function verifyPasswordPbkdf2(password, storedHash) {
+  if (!password || !storedHash || typeof storedHash !== 'string') return false;
+  const parts = storedHash.trim().split(':');
+  if (parts.length !== 4 || parts[0] !== 'pbkdf2_sha256') return false;
+  const iters = Math.max(10000, Number(parts[1]) || 100000);
+  const salt = parts[2];
+  const expected = String(parts[3] || '').trim().toLowerCase();
+  if (!/^[0-9a-f]{32,256}$/.test(expected) || expected.length % 2 !== 0) return false;
+  const actual = crypto.pbkdf2Sync(password, salt, iters, expected.length / 2, 'sha256').toString('hex');
+  const a = Buffer.from(actual, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -229,22 +249,21 @@ async function runSelfTest() {
     throw new Error('TOTP verify failed for RFC 6238 vector');
   }
 
-  // Ephemeral Argon2id hash + verify check (not stored anywhere)
-  const testSalt = crypto.randomBytes(16);
+  // Ephemeral PBKDF2-SHA256 hash + verify check (not stored anywhere)
   const ephemInput = crypto.randomBytes(16).toString('hex');
-  const testHash = await argon2id({
-    password: ephemInput,
-    salt: testSalt,
-    parallelism: 1,
-    iterations: 3,
-    memorySize: 65536,
-    hashLength: 32,
-    outputType: 'encoded'
-  });
-  const ok = await argon2Verify({ password: ephemInput, hash: testHash });
-  const bad = await argon2Verify({ password: `${ephemInput}_bad`, hash: testHash });
-  if (!testHash.startsWith('$argon2id$v=19$m=65536,t=3,p=1$') || !ok || bad) {
-    throw new Error('Argon2id verification self-test failed');
+  const testHash = hashPasswordPbkdf2(ephemInput);
+  const parts = testHash.split(':');
+  const ok = verifyPasswordPbkdf2(ephemInput, testHash);
+  const bad = verifyPasswordPbkdf2(`${ephemInput}_bad`, testHash);
+  if (
+    parts.length !== 4 ||
+    parts[0] !== 'pbkdf2_sha256' ||
+    !/^[0-9a-f]{32}$/.test(parts[2]) ||
+    !/^[0-9a-f]{128}$/.test(parts[3]) ||
+    !ok ||
+    bad
+  ) {
+    throw new Error('PBKDF2-SHA256 verification self-test failed');
   }
 
   const qrPreview = await QRCode.toString('otpauth://totp/Test:test@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Test', {
@@ -255,7 +274,7 @@ async function runSelfTest() {
     throw new Error('Terminal QR rendering failed');
   }
 
-  console.log('SELF_TEST_PASSED: RFC6238_TOTP=OK ARGON2ID_PHC=OK TERMINAL_QR=OK');
+  console.log('SELF_TEST_PASSED: RFC6238_TOTP=OK PBKDF2_SHA256=OK TERMINAL_QR=OK');
 }
 
 async function main() {
@@ -319,17 +338,8 @@ async function main() {
     break;
   }
 
-  console.log('\nHashing password with Argon2id (m=65536 KiB, t=3, p=1)...');
-  const salt = crypto.randomBytes(16);
-  const passwordHash = await argon2id({
-    password,
-    salt,
-    parallelism: 1,
-    iterations: 3,
-    memorySize: 65536,
-    hashLength: 32,
-    outputType: 'encoded'
-  });
+  console.log('\nHashing password with PBKDF2-SHA256 (100,000 iterations)...');
+  const passwordHash = hashPasswordPbkdf2(password);
   password = ''; // clear reference
 
   // Step 2: Generate fresh 20-byte cryptographic Base32 TOTP secret
@@ -388,7 +398,7 @@ async function main() {
     email: AUTHORIZED_ADMIN_EMAIL,
     role: 'admin',
     name: 'Neeraj Chauhan (Owner)',
-    passwordAlgorithm: 'argon2id',
+    passwordAlgorithm: 'pbkdf2_sha256',
     passwordHash,
     totp: {
       algorithm: 'SHA1',
@@ -413,7 +423,7 @@ async function main() {
   console.log('\n============================================================');
   console.log('  ADMIN SECURITY ENROLLMENT COMPLETE & VERIFIED');
   console.log('============================================================');
-  console.log('Status           : ACTIVATED (Argon2id + Verified TOTP)');
+  console.log('Status           : ACTIVATED (PBKDF2-SHA256 + Verified TOTP)');
   console.log(`Owner            : ${AUTHORIZED_ADMIN_EMAIL}`);
   console.log(`Stored Safely At : ${SECRETS_FILE} (chmod 600)`);
   console.log('\nSINGLE-USE RECOVERY BACKUP CODES (write these down offline NOW — shown once only):');
