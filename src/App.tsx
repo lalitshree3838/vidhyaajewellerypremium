@@ -531,24 +531,41 @@ function MainApp() {
 
             {currentView === 'category' && (
               <CategoryView
-                category={
-                  categories.find(
-                    (c) =>
-                      c.id === currentParam ||
-                      c.slug === currentParam ||
-                      (currentParam &&
-                        [
+                category={(() => {
+                  const rawParam = (currentParam || '').toLowerCase().trim();
+                  const aliasedId =
+                    rawParam === 'devotional-jewellery'
+                      ? 'devotional-rings'
+                      : [
                           'kangan-kada',
                           'bracelet',
                           'bracelets',
                           'bangles-kangan',
                           'bangles-bracelets',
+                          'kada-bangles',
+                          'kada-and-bangles',
+                          'bangles-kangan-kada-bracelets',
                           'kangan-kada-bracelet',
                           'kangan-kada-and-bracelet'
-                        ].includes(currentParam.toLowerCase()) &&
-                        c.id === 'kangan-kada-bracelet')
-                  ) || categories[0]
-                }
+                        ].includes(rawParam)
+                      ? 'kangan-kada-bracelet'
+                      : rawParam === 'necklace'
+                      ? 'necklaces'
+                      : rawParam === 'ring'
+                      ? 'rings'
+                      : rawParam === 'watch'
+                      ? 'watches'
+                      : rawParam;
+                  return (
+                    categories.find(
+                      (c) =>
+                        c.id === currentParam ||
+                        c.slug === currentParam ||
+                        c.id.toLowerCase() === aliasedId ||
+                        c.slug.toLowerCase() === aliasedId
+                    ) || categories[0]
+                  );
+                })()}
                 categories={categories}
                 products={products}
                 onSelectProduct={handleSelectProduct}

@@ -336,9 +336,10 @@ export const AccountView: React.FC<AccountViewProps> = ({
                             src={resolveSafeProductImageUrl(it.image, mediaInventory)}
                             alt={it.productName}
                             className="w-12 h-12 rounded-lg object-cover border border-[#E8DCCF] bg-[#FAF7F2]"
+                            referrerPolicy="no-referrer"
                             onError={(e) => {
                               const imgEl = e.currentTarget;
-                              if (imgEl.dataset.fallbackApplied === '1') return;
+                              if (imgEl.dataset.fallbackApplied === '1' || imgEl.src.startsWith('data:image/svg+xml')) return;
                               imgEl.dataset.fallbackApplied = '1';
                               imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
                             }}

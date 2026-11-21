@@ -147,6 +147,7 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                   src={getProductPrimaryImage(prod, mediaInventory)}
                   alt={prod.name}
                   className="w-14 h-14 object-contain p-1 rounded-lg bg-white border border-[#E8DCCF]/60 flex-shrink-0"
+                  referrerPolicy="no-referrer"
                   onError={(e) => {
                     const img = e.currentTarget;
                     if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;

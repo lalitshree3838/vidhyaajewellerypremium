@@ -33,6 +33,8 @@ import {
   verifyAdminBackupCode,
   verifyTotpCode,
   loadAdminCredentialsConfig,
+  validateNewAdminPassword,
+  saveAdminBootstrapCredentials,
   checkRateLimit,
   recordRateLimitFailure,
   clearRateLimit,
@@ -842,6 +844,116 @@ export function handleApiMiddleware(req, res, next) {
       // 2. Auth status check
       if (pathname === '/api/auth/status' && req.method === 'GET') {
         return sendJson(res, 200, { ready: true });
+      }
+
+      // 2b. Admin Auth Capabilities & First-Run Setup Status
+      if ((pathname === '/api/admin/auth-status' || pathname === '/api/admin/auth-status.php') && req.method === 'GET') {
+        const creds = loadAdminCredentialsConfig();
+        const admin = await authenticateAdminRequest(req);
+        const liveProd = isLiveProductionRequest(req);
+        return sendJson(res, 200, {
+          passwordConfigured: Boolean(creds.hasPasswordAuth),
+          totpRequired: Boolean(creds.totpSecret),
+          canFirstRunSetup: !creds.hasPasswordAuth && (!liveProd || Boolean(admin)),
+          isAuthenticatedAdmin: Boolean(admin),
+          googleSsoEnabled: true
+        });
+      }
+
+      // 2c. Admin Password Setup (one-time bootstrap in preview, or verified Google Admin in any env)
+      if ((pathname === '/api/admin/setup-password' || pathname === '/api/admin/setup-password.php') && req.method === 'POST') {
+        const rlKey = `admin_setup:${clientIp}`;
+        const rl = checkRateLimit(rlKey);
+        if (!rl.allowed) {
+          return sendJson(res, 429, {
+            success: false,
+            error: `Too many setup attempts. Retry in ${rl.remainingSeconds} seconds.`
+          });
+        }
+
+        const body = await parseBody(req);
+        if (body?.__tooLarge) {
+          return sendJson(res, 413, { success: false, error: 'Request payload exceeds maximum allowed size.' });
+        }
+        if (!body || typeof body !== 'object') {
+          return sendJson(res, 400, { success: false, error: 'Invalid JSON request payload.' });
+        }
+
+        return await withResourceLock('admin_creds', async () => {
+          const creds = loadAdminCredentialsConfig();
+          const admin = await authenticateAdminRequest(req);
+          const liveProd = isLiveProductionRequest(req);
+
+          if (liveProd && !admin) {
+            return sendJson(res, 403, {
+              success: false,
+              error: 'Sign in with Google Workspace Admin first before configuring server password login on production.'
+            });
+          }
+
+          if (creds.hasPasswordAuth && !admin) {
+            return sendJson(res, 409, {
+              success: false,
+              error: 'Administrator password is already configured. Please sign in with your password or Google Workspace Admin.'
+            });
+          }
+
+          const email = String(body.email || admin?.email || '').trim().toLowerCase();
+          const password = String(body.password || '');
+          const confirmPassword = String(body.confirmPassword ?? password);
+
+          if (!email || !getAllowedAdminEmails().has(email)) {
+            recordRateLimitFailure(rlKey);
+            return sendJson(res, 401, {
+              success: false,
+              error: 'Only the authorized administrator email can be configured.'
+            });
+          }
+
+          if (admin && email !== admin.email) {
+            return sendJson(res, 403, {
+              success: false,
+              error: 'Email must match your authenticated administrator account.'
+            });
+          }
+
+          if (password !== confirmPassword) {
+            return sendJson(res, 400, {
+              success: false,
+              error: 'Password and confirmation password do not match.'
+            });
+          }
+
+          const policy = validateNewAdminPassword(password);
+          if (!policy.valid) {
+            return sendJson(res, 400, {
+              success: false,
+              error: policy.error
+            });
+          }
+
+          if (creds.hasEnvPasswordOverride) {
+            return sendJson(res, 409, {
+              success: false,
+              error: 'ADMIN_PASSWORD_HASH is managed by server environment variables.'
+            });
+          }
+
+          saveAdminBootstrapCredentials({ email, password });
+          clearRateLimit(rlKey);
+
+          const adminInfo = {
+            email,
+            role: 'admin',
+            name: admin?.name || 'Neeraj Chauhan (Owner)'
+          };
+          const token = signAdminToken(email, { name: adminInfo.name, authMethod: 'password_setup' });
+          return sendJson(res, 200, {
+            success: true,
+            token,
+            admin: adminInfo
+          });
+        });
       }
 
       // 3. Admin Login: POST /api/admin/login or /api/admin/login.php

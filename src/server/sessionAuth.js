@@ -643,7 +643,8 @@ export function loadAdminCredentialsConfig() {
     path.join(parentDir, '.vidhyaa-secrets'),
     parentDir,
     path.join(grandParentDir, '.admin-secrets'),
-    path.join(ROOT_DIR, '.admin-secrets')
+    path.join(ROOT_DIR, '.admin-secrets'),
+    getTempStateDir()
   ];
   const candidates = [];
   for (const dir of dirs) {
@@ -664,9 +665,13 @@ export function loadAdminCredentialsConfig() {
     } catch {}
   }
 
-  const passwordHash = String(cfg.passwordHash || cfg.adminPasswordHash || getEnvVar('ADMIN_PASSWORD_HASH')).trim();
-  const plainPassword = String(cfg.password || getEnvVar('ADMIN_PASSWORD')).trim();
-  const totpSecret = String(cfg.totpSecret || cfg.totp?.secretBase32 || getEnvVar('ADMIN_TOTP_SECRET')).trim();
+  const envPasswordHash = getEnvVar('ADMIN_PASSWORD_HASH');
+  const envPlainPassword = getEnvVar('ADMIN_PASSWORD');
+  const envTotpSecret = getEnvVar('ADMIN_TOTP_SECRET');
+
+  const passwordHash = String(envPasswordHash || cfg.passwordHash || cfg.adminPasswordHash || '').trim();
+  const plainPassword = String(envPlainPassword || cfg.password || '').trim();
+  const totpSecret = String(envTotpSecret || cfg.totpSecret || cfg.totp?.secretBase32 || '').trim();
   const backupCodes = Array.isArray(cfg.backupCodes) ? cfg.backupCodes : [];
   const backupPepper = String(cfg.backupPepper || '').trim();
   const backupCodeHashes = Array.isArray(cfg.backupCodeHashes) ? cfg.backupCodeHashes : [];
@@ -680,8 +685,65 @@ export function loadAdminCredentialsConfig() {
     backupPepper,
     backupCodeHashes,
     sessionSigningSecret,
+    hasEnvPasswordOverride: Boolean(envPasswordHash || envPlainPassword),
     hasPasswordAuth: Boolean(passwordHash || plainPassword)
   };
+}
+
+const COMPROMISED_ADMIN_PASSWORDS = new Set([
+  'password', 'password123', 'admin123', 'admin1234', 'admin12345', 'admin123456',
+  '12345678', '123456789', '1234567890', 'qwerty123456', 'welcome123', 'welcome@123',
+  'vidhyaa123', 'vidhyaa@123', 'jewellery123', 'jewellery2026', 'superadmin123',
+  'letmein123', 'pass@1234', 'india@123', 'jaipur123', 'royal12345'
+]);
+
+export function validateNewAdminPassword(password) {
+  const clean = String(password || '');
+  if (clean.length < 12) {
+    return { valid: false, error: 'Password must be at least 12 characters long.' };
+  }
+  if (COMPROMISED_ADMIN_PASSWORDS.has(clean.trim().toLowerCase())) {
+    return { valid: false, error: 'Please choose a unique password not in common breach lists.' };
+  }
+  if (!/[A-Z]/.test(clean) || !/[a-z]/.test(clean) || !/[0-9]/.test(clean) || !/[^A-Za-z0-9]/.test(clean)) {
+    return {
+      valid: false,
+      error: 'Password must include uppercase, lowercase, a digit, and a special character.'
+    };
+  }
+  return { valid: true };
+}
+
+export function saveAdminBootstrapCredentials({ email, password }) {
+  const secretDir = getOutsideSecretsDir() || getTempStateDir();
+  const targetFile = path.join(secretDir, 'admin-credentials.json');
+  let existing = {};
+  try {
+    if (fs.existsSync(targetFile)) {
+      const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf8'));
+      if (parsed && typeof parsed === 'object') existing = parsed;
+    }
+  } catch {}
+
+  const signingSecret = existing.sessionSigningSecret && String(existing.sessionSigningSecret).length >= 32
+    ? String(existing.sessionSigningSecret)
+    : getSessionSecret();
+
+  const passwordHash = hashPasswordPbkdf2(password);
+  const next = {
+    ...existing,
+    version: 1,
+    algorithm: 'pbkdf2-sha256',
+    email: String(email).toLowerCase().trim(),
+    passwordHash,
+    sessionSigningSecret: signingSecret,
+    updatedAt: new Date().toISOString()
+  };
+
+  atomicWriteFileSync(targetFile, JSON.stringify(next, null, 2));
+  try { fs.chmodSync(targetFile, 0o600); } catch {}
+  cachedSessionSecret = signingSecret;
+  return { savedTo: targetFile };
 }
 
 export function verifyAdminBackupCode(creds, totpCode) {

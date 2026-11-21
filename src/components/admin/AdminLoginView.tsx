@@ -35,6 +35,8 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
 }) => {
   const {
     loginAdminBackend,
+    setupAdminPassword,
+    getLastAdminAuthError,
     exchangeFirebaseAdminToken,
     signInWithGoogle,
     signInWithEmail,
@@ -45,11 +47,25 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
 
   const [email, setEmail] = useState('anavneeraj2003@gmail.com');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
 
+  // Server auth capabilities
+  const [authCapabilities, setAuthCapabilities] = useState<{
+    loaded: boolean;
+    passwordConfigured: boolean;
+    canFirstRunSetup: boolean;
+  }>({
+    loaded: false,
+    passwordConfigured: true,
+    canFirstRunSetup: false
+  });
+  const [setupMode, setSetupMode] = useState(false);
+
   // States
   const [loading, setLoading] = useState(false);
+  const [googleSigningIn, setGoogleSigningIn] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -70,6 +86,35 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
   // Password analysis
   const passwordAnalysis = analyzePassword(password);
 
+  // Query server authentication status on mount
+  const refreshAuthCapabilities = async () => {
+    try {
+      const res = await fetch('/api/admin/auth-status');
+      if (!res.ok) {
+        setAuthCapabilities({ loaded: true, passwordConfigured: true, canFirstRunSetup: false });
+        return;
+      }
+      const data = await res.json().catch(() => null);
+      if (data && typeof data.passwordConfigured === 'boolean') {
+        const nextCaps = {
+          loaded: true,
+          passwordConfigured: Boolean(data.passwordConfigured),
+          canFirstRunSetup: Boolean(data.canFirstRunSetup)
+        };
+        setAuthCapabilities(nextCaps);
+        if (!nextCaps.passwordConfigured && nextCaps.canFirstRunSetup) {
+          setSetupMode(true);
+        }
+      }
+    } catch {
+      setAuthCapabilities({ loaded: true, passwordConfigured: true, canFirstRunSetup: false });
+    }
+  };
+
+  useEffect(() => {
+    refreshAuthCapabilities();
+  }, []);
+
   // Auto-detect when Google/Firebase sign-in has exchanged a verified backend admin session token
   useEffect(() => {
     let active = true;
@@ -77,7 +122,7 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
       onSuccessLogin();
       return;
     }
-    if (user && user.email?.toLowerCase() === 'anavneeraj2003@gmail.com') {
+    if (!googleSigningIn && user && user.email?.toLowerCase() === 'anavneeraj2003@gmail.com') {
       exchangeFirebaseAdminToken(user).then((ok) => {
         if (ok && active) {
           onSuccessLogin();
@@ -87,7 +132,7 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
     return () => {
       active = false;
     };
-  }, [user, adminSessionActive, exchangeFirebaseAdminToken, onSuccessLogin]);
+  }, [user, adminSessionActive, googleSigningIn, exchangeFirebaseAdminToken, onSuccessLogin]);
 
   useEffect(() => {
     // Check rate limiting on mount
@@ -165,8 +210,22 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
         }
       }
 
+      const isUnconfiguredServerError = Boolean(
+        backendRes.error && /not configured/i.test(backendRes.error)
+      );
+
       // Both failed: handle failed attempt & report accurate reason
       setLoading(false);
+
+      if (isUnconfiguredServerError) {
+        await refreshAuthCapabilities();
+        setErrorMessage(
+          backendRes.error ||
+            'Server password login is not configured. Sign in with Google Workspace Admin (anavneeraj2003@gmail.com) or configure ADMIN_PASSWORD_HASH outside public_html.'
+        );
+        return;
+      }
+
       const failStatus = recordFailedAttempt(email);
 
       await logAuditEvent({
@@ -192,21 +251,94 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
     }
   };
 
+  const handleSetupSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    if (!email.trim() || !password || !confirmPassword) {
+      setErrorMessage('Please enter your admin email, new password, and confirmation password.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setErrorMessage('Passwords do not match. Please enter the same password in both fields.');
+      return;
+    }
+    if (!passwordAnalysis.isStrong) {
+      setErrorMessage(
+        passwordAnalysis.warnings[0] ||
+          'Please choose a stronger password (at least 12 characters with uppercase, lowercase, number, and symbol).'
+      );
+      return;
+    }
+
+    setLoading(true);
+    const res = await setupAdminPassword(email.trim(), password, confirmPassword);
+    setLoading(false);
+
+    if (!res.success) {
+      setErrorMessage(res.error || 'Failed to save administrator password.');
+      return;
+    }
+
+    resetFailedAttempts(email);
+    setAuthCapabilities((prev) => ({ ...prev, passwordConfigured: true, canFirstRunSetup: false }));
+    setSetupMode(false);
+    setSuccessMessage('Administrator password saved securely. Entering Executive Admin Dashboard...');
+    onSuccessLogin();
+  };
+
   const handleGoogleAdminLogin = async () => {
     setErrorMessage(null);
+    setSuccessMessage(null);
     setLoading(true);
+    setGoogleSigningIn(true);
     try {
-      await signInWithGoogle();
-      const exchanged = await exchangeFirebaseAdminToken();
-      if (exchanged) {
-        onSuccessLogin();
-      } else {
+      const signedInUser = await signInWithGoogle();
+      if (!signedInUser) {
         setLoading(false);
-        setErrorMessage('Signed-in Google account is not authorized for Executive Admin access.');
+        setGoogleSigningIn(false);
+        setErrorMessage('Google sign-in did not complete. Please allow popups and try again.');
+        return;
+      }
+
+      const exchanged = await exchangeFirebaseAdminToken(signedInUser);
+      if (exchanged) {
+        setLoading(false);
+        setGoogleSigningIn(false);
+        onSuccessLogin();
+        return;
+      }
+
+      setLoading(false);
+      setGoogleSigningIn(false);
+      if (signedInUser.email?.toLowerCase() !== 'anavneeraj2003@gmail.com') {
+        setErrorMessage(
+          `Signed-in Google account (${signedInUser.email || 'unknown'}) is not authorized for Executive Admin access. Please select anavneeraj2003@gmail.com in the Google account chooser.`
+        );
+      } else {
+        setErrorMessage(
+          getLastAdminAuthError() ||
+            'Google session verified, but backend admin authorization failed. Please refresh and try again.'
+        );
       }
     } catch (err: any) {
       setLoading(false);
-      setErrorMessage(err.message || 'Google administrator sign-in failed. Please try again.');
+      setGoogleSigningIn(false);
+      const code = String(err?.code || err?.message || '');
+      if (code.includes('auth/popup-blocked')) {
+        setErrorMessage('Google Sign-In popup was blocked by your browser. Please allow popups for this site and try again.');
+      } else if (code.includes('auth/popup-closed-by-user') || code.includes('auth/cancelled-popup-request')) {
+        setErrorMessage('Google Sign-In window was closed before completing. Please click Google Workspace Admin Sign In again.');
+      } else if (code.includes('auth/unauthorized-domain')) {
+        setErrorMessage(
+          `Google Sign-In is not yet authorized on this domain (${window.location.hostname}) in Firebase Authentication settings. Add this hostname to Firebase Console → Authentication → Authorized domains, or sign in with an Administrator Password.`
+        );
+      } else if (code.includes('auth/network-request-failed')) {
+        setErrorMessage('Network error during Google Sign-In. Please check your internet connection and retry.');
+      } else {
+        setErrorMessage(err?.message || 'Google administrator sign-in failed. Please try again.');
+      }
     }
   };
 
@@ -342,173 +474,366 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
             </div>
           )}
 
-          {/* Step 1: Email & Password */}
+          {/* Unconfigured live-server guidance banner */}
+          {!step2FA && authCapabilities.loaded && !authCapabilities.passwordConfigured && !setupMode && (
+            <div className="mb-6 p-4 rounded-2xl bg-[#0F4C4A]/35 border border-[#DFB982]/40 text-xs text-[#F5EDE5] space-y-1.5">
+              <div className="font-bold text-[#DFB982] flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 shrink-0" />
+                <span>Recommended: Google Workspace Admin Sign In</span>
+              </div>
+              <p className="text-gray-300 leading-relaxed">
+                Server password login is not configured yet. Sign in using <strong>Google Workspace Admin Sign In</strong> below with <span className="font-mono text-[#DFB982]">anavneeraj2003@gmail.com</span>.
+              </p>
+              {authCapabilities.canFirstRunSetup && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setErrorMessage(null);
+                    setSetupMode(true);
+                  }}
+                  className="text-[#DFB982] underline font-semibold hover:text-white cursor-pointer pt-0.5"
+                >
+                  Or set up first-run Admin Password now →
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Step 1: First-Run Setup OR Email & Password */}
           {!step2FA ? (
-            <form onSubmit={handleSubmit} className="space-y-5">
-              <div>
-                <label className="block text-xs font-semibold text-[#DFB982] uppercase tracking-wider mb-2">
-                  Admin Email / Username
-                </label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400">
-                    <Mail className="w-4 h-4" />
+            setupMode && authCapabilities.canFirstRunSetup ? (
+              <form onSubmit={handleSetupSubmit} className="space-y-5">
+                <div className="p-3.5 rounded-2xl bg-[#0F4C4A]/30 border border-[#DFB982]/35 text-xs space-y-1">
+                  <div className="font-bold text-[#DFB982] flex items-center gap-1.5">
+                    <KeyRound className="w-4 h-4 shrink-0" />
+                    <span>First-Run Admin Password Setup</span>
                   </div>
-                  <input
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="admin@vidhyaajewellery.com"
-                    disabled={lockoutRemaining > 0 || loading}
-                    className="w-full bg-[#120B0D] border border-[#DFB982]/30 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#DFB982] focus:ring-1 focus:ring-[#DFB982] transition-colors disabled:opacity-50"
-                  />
+                  <p className="text-gray-300 leading-relaxed">
+                    No server admin password is saved yet. Create your PBKDF2-SHA256 admin password now to unlock Executive Admin login.
+                  </p>
                 </div>
-              </div>
 
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="block text-xs font-semibold text-[#DFB982] uppercase tracking-wider">
-                    Password
+                <div>
+                  <label className="block text-xs font-semibold text-[#DFB982] uppercase tracking-wider mb-2">
+                    Authorized Admin Email
                   </label>
-                  <button
-                    type="button"
-                    onClick={() => setForgotModalOpen(true)}
-                    className="text-xs text-[#DFB982] hover:text-white underline cursor-pointer"
-                  >
-                    Forgot password?
-                  </button>
-                </div>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400">
-                    <Lock className="w-4 h-4" />
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400">
+                      <Mail className="w-4 h-4" />
+                    </div>
+                    <input
+                      type="email"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      disabled={loading}
+                      className="w-full bg-[#120B0D] border border-[#DFB982]/30 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#DFB982] focus:ring-1 focus:ring-[#DFB982] transition-colors disabled:opacity-50"
+                    />
                   </div>
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••••••"
-                    disabled={lockoutRemaining > 0 || loading}
-                    className="w-full bg-[#120B0D] border border-[#DFB982]/30 rounded-xl pl-10 pr-12 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#DFB982] focus:ring-1 focus:ring-[#DFB982] transition-colors disabled:opacity-50"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-gray-400 hover:text-white cursor-pointer"
-                    title={showPassword ? 'Hide password' : 'Show password'}
-                  >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
                 </div>
 
-                {/* Password Strength & Breach Detection Preview */}
-                {password.length > 0 && (
-                  <div className="mt-3 p-3 rounded-xl bg-[#120B0D] border border-[#DFB982]/20 space-y-2 text-xs">
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-400">Security Strength:</span>
-                      <span
-                        className={`font-bold ${
-                          passwordAnalysis.score >= 75
-                            ? 'text-emerald-400'
-                            : passwordAnalysis.score >= 50
-                            ? 'text-amber-400'
-                            : 'text-red-400'
-                        }`}
-                      >
-                        {passwordAnalysis.level} ({passwordAnalysis.score}%)
-                      </span>
+                <div>
+                  <label className="block text-xs font-semibold text-[#DFB982] uppercase tracking-wider mb-2">
+                    New Admin Password (min 12 chars)
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400">
+                      <Lock className="w-4 h-4" />
                     </div>
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Upper, lower, digit & symbol"
+                      disabled={loading}
+                      className="w-full bg-[#120B0D] border border-[#DFB982]/30 rounded-xl pl-10 pr-12 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#DFB982] focus:ring-1 focus:ring-[#DFB982] transition-colors disabled:opacity-50"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-gray-400 hover:text-white cursor-pointer"
+                      title={showPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
 
-                    <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full transition-all duration-300 ${
-                          passwordAnalysis.score >= 75
-                            ? 'bg-emerald-500'
-                            : passwordAnalysis.score >= 50
-                            ? 'bg-amber-500'
-                            : 'bg-red-500'
-                        }`}
-                        style={{ width: `${passwordAnalysis.score}%` }}
-                      />
-                    </div>
-
-                    {passwordAnalysis.isCompromised && (
-                      <div className="flex items-center gap-1.5 text-red-400 text-[11px] font-semibold pt-1">
-                        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                        <span>Warning: Commonly breached password pattern detected!</span>
+                  {password.length > 0 && (
+                    <div className="mt-3 p-3 rounded-xl bg-[#120B0D] border border-[#DFB982]/20 space-y-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-400">Security Strength:</span>
+                        <span
+                          className={`font-bold ${
+                            passwordAnalysis.score >= 75
+                              ? 'text-emerald-400'
+                              : passwordAnalysis.score >= 50
+                              ? 'text-amber-400'
+                              : 'text-red-400'
+                          }`}
+                        >
+                          {passwordAnalysis.level} ({passwordAnalysis.score}%)
+                        </span>
                       </div>
-                    )}
+                      <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full transition-all duration-300 ${
+                            passwordAnalysis.score >= 75
+                              ? 'bg-emerald-500'
+                              : passwordAnalysis.score >= 50
+                              ? 'bg-amber-500'
+                              : 'bg-red-500'
+                          }`}
+                          style={{ width: `${passwordAnalysis.score}%` }}
+                        />
+                      </div>
+                      {passwordAnalysis.warnings.length > 0 && (
+                        <p className="text-[11px] text-amber-300">{passwordAnalysis.warnings[0]}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#DFB982] uppercase tracking-wider mb-2">
+                    Confirm Admin Password
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400">
+                      <Lock className="w-4 h-4" />
+                    </div>
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="Re-enter password"
+                      disabled={loading}
+                      className="w-full bg-[#120B0D] border border-[#DFB982]/30 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#DFB982] focus:ring-1 focus:ring-[#DFB982] transition-colors disabled:opacity-50"
+                    />
                   </div>
-                )}
-              </div>
-
-              <div className="flex items-center justify-between pt-1">
-                <label className="flex items-center gap-2 cursor-pointer text-xs text-gray-300">
-                  <input
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={(e) => setRememberMe(e.target.checked)}
-                    className="rounded bg-[#120B0D] border-[#DFB982]/40 text-[#DFB982] focus:ring-0 cursor-pointer"
-                  />
-                  <span>Remember this secure workstation</span>
-                </label>
-              </div>
-
-              <button
-                type="submit"
-                disabled={lockoutRemaining > 0 || loading}
-                className="w-full bg-[#0F4C4A] hover:bg-[#0A3635] text-white py-3.5 px-6 rounded-xl font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 transition-all duration-300 shadow-lg hover:shadow-xl cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed border border-[#DFB982]/30 active:scale-98"
-              >
-                {loading ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin text-[#DFB982]" />
-                    <span>Verifying Credentials...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>Authenticate & Continue</span>
-                    <ArrowRight className="w-4 h-4 text-[#DFB982]" />
-                  </>
-                )}
-              </button>
-
-              {/* Alternative Google Admin Sign-in */}
-              <div className="relative my-4">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-[#DFB982]/20" />
                 </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-[#1C1215] px-3 text-gray-400 font-medium tracking-wider">Or Sign In Via</span>
-                </div>
-              </div>
 
-              <button
-                type="button"
-                onClick={handleGoogleAdminLogin}
-                disabled={loading}
-                className="w-full bg-[#120B0D] hover:bg-[#1a0f12] border border-[#DFB982]/40 text-[#F5EDE5] py-3 px-4 rounded-xl text-xs font-semibold flex items-center justify-center gap-2.5 transition-colors cursor-pointer disabled:opacity-50"
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
-                  <path
-                    fill="#EA4335"
-                    d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.4 9 5 12 5z"
-                  />
-                  <path
-                    fill="#4285F4"
-                    d="M23.5 12.3c0-.8-.1-1.7-.2-2.3H12v4.6h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.9z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.6 14.8c-.2-.7-.4-1.5-.4-2.3s.2-1.6.4-2.3L1.9 7.3C.7 9.7 0 12.3 0 15s.7 5.3 1.9 7.7l3.7-2.9z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2-6.4-4.8L1.9 16.4C3.7 20.1 7.5 23 12 23z"
-                  />
-                </svg>
-                <span>Google Workspace Admin Sign In</span>
-              </button>
-            </form>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full bg-[#0F4C4A] hover:bg-[#0A3635] text-white py-3.5 px-6 rounded-xl font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 transition-all duration-300 shadow-lg cursor-pointer disabled:opacity-50 border border-[#DFB982]/30"
+                >
+                  {loading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin text-[#DFB982]" />
+                      <span>Saving Credentials...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Save Password & Enter Dashboard</span>
+                      <ArrowRight className="w-4 h-4 text-[#DFB982]" />
+                    </>
+                  )}
+                </button>
+
+                <div className="relative my-4">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-[#DFB982]/20" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-[#1C1215] px-3 text-gray-400 font-medium tracking-wider">Or Use Google</span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleGoogleAdminLogin}
+                  disabled={loading}
+                  className="w-full bg-[#120B0D] hover:bg-[#1a0f12] border border-[#DFB982]/40 text-[#F5EDE5] py-3 px-4 rounded-xl text-xs font-semibold flex items-center justify-center gap-2.5 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <span>Google Workspace Admin Sign In</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setErrorMessage(null);
+                    setSetupMode(false);
+                  }}
+                  className="w-full py-1.5 text-xs text-gray-400 hover:text-white transition-colors cursor-pointer text-center"
+                >
+                  Switch to standard password login
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleSubmit} className="space-y-5">
+                <div>
+                  <label className="block text-xs font-semibold text-[#DFB982] uppercase tracking-wider mb-2">
+                    Admin Email / Username
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400">
+                      <Mail className="w-4 h-4" />
+                    </div>
+                    <input
+                      type="email"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="admin@vidhyaajewellery.com"
+                      disabled={lockoutRemaining > 0 || loading}
+                      className="w-full bg-[#120B0D] border border-[#DFB982]/30 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#DFB982] focus:ring-1 focus:ring-[#DFB982] transition-colors disabled:opacity-50"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-xs font-semibold text-[#DFB982] uppercase tracking-wider">
+                      Password
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setForgotModalOpen(true)}
+                      className="text-xs text-[#DFB982] hover:text-white underline cursor-pointer"
+                    >
+                      Forgot password?
+                    </button>
+                  </div>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400">
+                      <Lock className="w-4 h-4" />
+                    </div>
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••••••"
+                      disabled={lockoutRemaining > 0 || loading}
+                      className="w-full bg-[#120B0D] border border-[#DFB982]/30 rounded-xl pl-10 pr-12 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#DFB982] focus:ring-1 focus:ring-[#DFB982] transition-colors disabled:opacity-50"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-gray-400 hover:text-white cursor-pointer"
+                      title={showPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                  {/* Password Strength & Breach Detection Preview */}
+                  {password.length > 0 && (
+                    <div className="mt-3 p-3 rounded-xl bg-[#120B0D] border border-[#DFB982]/20 space-y-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-400">Security Strength:</span>
+                        <span
+                          className={`font-bold ${
+                            passwordAnalysis.score >= 75
+                              ? 'text-emerald-400'
+                              : passwordAnalysis.score >= 50
+                              ? 'text-amber-400'
+                              : 'text-red-400'
+                          }`}
+                        >
+                          {passwordAnalysis.level} ({passwordAnalysis.score}%)
+                        </span>
+                      </div>
+
+                      <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full transition-all duration-300 ${
+                            passwordAnalysis.score >= 75
+                              ? 'bg-emerald-500'
+                              : passwordAnalysis.score >= 50
+                              ? 'bg-amber-500'
+                              : 'bg-red-500'
+                          }`}
+                          style={{ width: `${passwordAnalysis.score}%` }}
+                        />
+                      </div>
+
+                      {passwordAnalysis.isCompromised && (
+                        <div className="flex items-center gap-1.5 text-red-400 text-[11px] font-semibold pt-1">
+                          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                          <span>Warning: Commonly breached password pattern detected!</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <label className="flex items-center gap-2 cursor-pointer text-xs text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={rememberMe}
+                      onChange={(e) => setRememberMe(e.target.checked)}
+                      className="rounded bg-[#120B0D] border-[#DFB982]/40 text-[#DFB982] focus:ring-0 cursor-pointer"
+                    />
+                    <span>Remember this secure workstation</span>
+                  </label>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={lockoutRemaining > 0 || loading}
+                  className="w-full bg-[#0F4C4A] hover:bg-[#0A3635] text-white py-3.5 px-6 rounded-xl font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 transition-all duration-300 shadow-lg hover:shadow-xl cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed border border-[#DFB982]/30 active:scale-98"
+                >
+                  {loading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin text-[#DFB982]" />
+                      <span>Verifying Credentials...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Authenticate & Continue</span>
+                      <ArrowRight className="w-4 h-4 text-[#DFB982]" />
+                    </>
+                  )}
+                </button>
+
+                {/* Alternative Google Admin Sign-in */}
+                <div className="relative my-4">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-[#DFB982]/20" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-[#1C1215] px-3 text-gray-400 font-medium tracking-wider">Or Sign In Via</span>
+                  </div>
+                </div>
+
+                {user && user.email && user.email.toLowerCase() !== 'anavneeraj2003@gmail.com' && (
+                  <p className="text-[11px] text-amber-300/90 text-center">
+                    Currently signed in as <span className="font-mono">{user.email}</span>. Click below to select <span className="font-mono">anavneeraj2003@gmail.com</span>.
+                  </p>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleGoogleAdminLogin}
+                  disabled={loading}
+                  className="w-full bg-[#120B0D] hover:bg-[#1a0f12] border border-[#DFB982]/40 text-[#F5EDE5] py-3 px-4 rounded-xl text-xs font-semibold flex items-center justify-center gap-2.5 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24">
+                    <path
+                      fill="#EA4335"
+                      d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.4 9 5 12 5z"
+                    />
+                    <path
+                      fill="#4285F4"
+                      d="M23.5 12.3c0-.8-.1-1.7-.2-2.3H12v4.6h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.9z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.6 14.8c-.2-.7-.4-1.5-.4-2.3s.2-1.6.4-2.3L1.9 7.3C.7 9.7 0 12.3 0 15s.7 5.3 1.9 7.7l3.7-2.9z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2-6.4-4.8L1.9 16.4C3.7 20.1 7.5 23 12 23z"
+                    />
+                  </svg>
+                  <span>Google Workspace Admin Sign In</span>
+                </button>
+              </form>
+            )
           ) : (
             /* Step 2: Two-Factor Authentication TOTP */
             <form onSubmit={handleVerify2FA} className="space-y-6">
@@ -582,7 +907,7 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
         <div className="text-center space-y-1 text-[11px] text-gray-500">
           <p className="flex items-center justify-center gap-1.5">
             <Lock className="w-3 h-3 text-[#DFB982]" />
-            <span>256-Bit TLS Encryption • Argon2id Hashing • OWASP Compliant</span>
+            <span>256-Bit TLS Encryption • PBKDF2-SHA256 Hashing • OWASP Compliant</span>
           </p>
           <p>Protected by VIDHYAA Automated Intrusion Detection & Audit Telemetry</p>
         </div>

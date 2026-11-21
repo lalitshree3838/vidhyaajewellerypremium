@@ -234,11 +234,12 @@ export const TrackOrderView: React.FC<TrackOrderViewProps> = ({
                     src={resolveSafeProductImageUrl(item.image, mediaInventory)}
                     alt={item.productName}
                     className="w-14 h-14 object-contain rounded-lg border border-[#E8DCCF] bg-white"
+                    referrerPolicy="no-referrer"
                     onError={(e) => {
                       const img = e.currentTarget;
-                      if (img.src !== JEWELLERY_PLACEHOLDER_IMAGE) {
-                        img.src = JEWELLERY_PLACEHOLDER_IMAGE;
-                      }
+                      if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;
+                      img.dataset.fallbackApplied = '1';
+                      img.src = JEWELLERY_PLACEHOLDER_IMAGE;
                     }}
                   />
                   <div>

@@ -548,6 +548,10 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
             className="absolute inset-0 w-full h-full object-contain pointer-events-none transition-opacity duration-300"
             style={{ zIndex: 1, pointerEvents: 'none' }}
             loading="eager"
+            referrerPolicy="no-referrer"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none';
+            }}
           />
         )}
 

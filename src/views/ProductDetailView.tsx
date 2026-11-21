@@ -33,6 +33,7 @@ import { useResolvedProductVideo } from '../lib/videoFallback';
 import {
   JEWELLERY_PLACEHOLDER_IMAGE,
   getProductImageCandidates,
+  shouldDeferLocalMediaUrl,
   useAvailableMediaInventory
 } from '../lib/storageService';
 
@@ -121,7 +122,9 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const validGallery = getProductImageCandidates(product, selectedVariation, mediaInventory);
   const galleryImages = validGallery.length > 0 ? validGallery : [JEWELLERY_PLACEHOLDER_IMAGE];
 
-  const currentDisplayImage = galleryImages[activeImageIndex] || galleryImages[0];
+  const safeActiveIdx = activeImageIndex < galleryImages.length ? activeImageIndex : 0;
+  const currentDisplayImage = galleryImages[safeActiveIdx] || galleryImages[0];
+  const isDeferredMainImage = shouldDeferLocalMediaUrl(currentDisplayImage, mediaInventory);
   const hasGenuineVideo = Boolean(
     product.videoUrl &&
       isGenuineVideoUrl(product.videoUrl) &&
@@ -289,6 +292,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                   </span>
                 </div>
               </div>
+            ) : isDeferredMainImage ? (
+              <div className="w-full h-full bg-[#FAF7F2] rounded-xl animate-pulse" aria-hidden="true" />
             ) : imageError || !currentDisplayImage || !isGenuineImageUrl(currentDisplayImage) ? (
               <div className="w-full h-full flex flex-col items-center justify-center text-center p-6 bg-[#FAF7F2] text-gray-400 select-none">
                 <div className="w-14 h-14 rounded-full bg-[#DFB982]/15 border border-[#DFB982]/30 flex items-center justify-center text-[#802336] mb-3">
@@ -301,9 +306,10 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                 src={currentDisplayImage}
                 alt={product.name}
                 className="w-full h-full object-contain object-center transition-transform duration-500 group-hover:scale-105"
+                referrerPolicy={currentDisplayImage.startsWith('http') ? 'no-referrer' : undefined}
                 onError={() => {
-                  if (activeImageIndex + 1 < galleryImages.length) {
-                    setActiveImageIndex((prev) => prev + 1);
+                  if (safeActiveIdx + 1 < galleryImages.length) {
+                    setActiveImageIndex(safeActiveIdx + 1);
                   } else {
                     setImageError(true);
                   }
@@ -350,34 +356,40 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               </button>
             )}
 
-            {galleryImages.map((img, idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => {
-                  setActiveMedia('image');
-                  setActiveImageIndex(idx);
-                  setImageError(false);
-                }}
-                className={`w-20 h-20 rounded-xl overflow-hidden border-2 bg-white p-1 flex items-center justify-center flex-shrink-0 cursor-pointer transition-all ${
-                  activeMedia === 'image' && activeImageIndex === idx
-                    ? 'border-[#0F5B46] ring-2 ring-[#0F5B46]/30 scale-105'
-                    : 'border-[#E8DCCF] opacity-70 hover:opacity-100 hover:border-gray-400'
-                }`}
-              >
-                <img
-                  src={img}
-                  alt=""
-                  className="w-full h-full object-contain"
-                  onError={(e) => {
-                    const imgEl = e.currentTarget;
-                    if (imgEl.dataset.fallbackApplied === '1' || imgEl.src.startsWith('data:image/svg+xml')) return;
-                    imgEl.dataset.fallbackApplied = '1';
-                    imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
+            {galleryImages.map((img, idx) => {
+              const effectiveThumb = shouldDeferLocalMediaUrl(img, mediaInventory)
+                ? JEWELLERY_PLACEHOLDER_IMAGE
+                : img;
+              return (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => {
+                    setActiveMedia('image');
+                    setActiveImageIndex(idx);
+                    setImageError(false);
                   }}
-                />
-              </button>
-            ))}
+                  className={`w-20 h-20 rounded-xl overflow-hidden border-2 bg-white p-1 flex items-center justify-center flex-shrink-0 cursor-pointer transition-all ${
+                    activeMedia === 'image' && safeActiveIdx === idx
+                      ? 'border-[#0F5B46] ring-2 ring-[#0F5B46]/30 scale-105'
+                      : 'border-[#E8DCCF] opacity-70 hover:opacity-100 hover:border-gray-400'
+                  }`}
+                >
+                  <img
+                    src={effectiveThumb}
+                    alt=""
+                    className="w-full h-full object-contain"
+                    referrerPolicy={effectiveThumb.startsWith('http') ? 'no-referrer' : undefined}
+                    onError={(e) => {
+                      const imgEl = e.currentTarget;
+                      if (imgEl.dataset.fallbackApplied === '1' || imgEl.src.startsWith('data:image/svg+xml')) return;
+                      imgEl.dataset.fallbackApplied = '1';
+                      imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                    }}
+                  />
+                </button>
+              );
+            })}
           </div>
 
           {videoData && (

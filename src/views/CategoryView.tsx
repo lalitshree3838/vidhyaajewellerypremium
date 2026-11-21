@@ -9,8 +9,15 @@ import {
 } from '../types';
 import { ProductCard } from '../components/ProductCard';
 import { MetadataManager } from '../components/MetadataManager';
-import { isGenuineProduct, isGenuineImageUrl, isGenuineVideoUrl } from '../lib/sampleData';
-import { hasRenderableProductImage, useAvailableMediaInventory } from '../lib/storageService';
+import { isGenuineProduct, isGenuineImageUrl, isGenuineVideoUrl, resolveCategoryCoverImage } from '../lib/sampleData';
+import {
+  JEWELLERY_PLACEHOLDER_IMAGE,
+  hasRenderableProductImage,
+  isKnownMissingMediaUrl,
+  resolveSafeProductImageUrl,
+  shouldDeferLocalMediaUrl,
+  useAvailableMediaInventory
+} from '../lib/storageService';
 import { SeamlessLoopVideo } from '../components/SeamlessLoopVideo';
 import {
   Sparkles,
@@ -62,6 +69,8 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
   // Video Modal Player
   const [activeVideo, setActiveVideo] = useState<CategoryVideo | null>(null);
   const mediaInventory = useAvailableMediaInventory();
+  const [failedBannerUrls, setFailedBannerUrls] = useState<Record<string, boolean>>({});
+  const [failedGalleryIds, setFailedGalleryIds] = useState<Record<string, boolean>>({});
 
   // Products belonging to this category with normalized ID and keyword fallback
   const categoryProducts = useMemo(() => {
@@ -179,12 +188,18 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     });
   }, [categoryProducts, category.featuredProductIds, category.bestsellerProductIds, category.newArrivalProductIds, category.trendingProductIds, curationFilter, selectedSubcategory, searchQuery, inStockOnly, sortBy, mediaInventory]);
 
-  // Published gallery images - only genuine uploaded images
+  // Published gallery images - only genuine, verifiable uploaded images
   const galleryImages = useMemo(() => {
     return (category.galleryImages || [])
-      .filter((img) => isGenuineImageUrl(img.url))
+      .filter((img) => {
+        if (!img?.url || !isGenuineImageUrl(img.url)) return false;
+        if (failedGalleryIds[img.id]) return false;
+        if (shouldDeferLocalMediaUrl(img.url, mediaInventory)) return false;
+        if (isKnownMissingMediaUrl(img.url, mediaInventory)) return false;
+        return true;
+      })
       .sort((a, b) => a.order - b.order);
-  }, [category.galleryImages]);
+  }, [category.galleryImages, failedGalleryIds, mediaInventory]);
 
   // Published videos - only genuine uploaded videos
   const publishedVideos = useMemo(() => {
@@ -245,20 +260,31 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
           /* ---------------------------------------------------- */
           /* SECTION: HERO BANNER                                 */
           /* ---------------------------------------------------- */
-          case 'banner':
+          case 'banner': {
+            const fallbackCover = resolveCategoryCoverImage(category.id, category.slug);
+            const rawBanner = category.heroBannerUrl || category.image || fallbackCover;
+            const resolvedBanner = resolveSafeProductImageUrl(rawBanner, mediaInventory);
+            const primaryBanner =
+              resolvedBanner !== JEWELLERY_PLACEHOLDER_IMAGE && !failedBannerUrls[resolvedBanner]
+                ? resolvedBanner
+                : !failedBannerUrls[fallbackCover]
+                ? fallbackCover
+                : '';
+
             return (
               <section
                 key="banner"
                 className="relative overflow-hidden w-full border-b border-[#E8DCCF] min-h-[460px] sm:min-h-[520px] lg:min-h-[600px] flex items-center bg-[#241C1A]"
               >
-                {Boolean((category.heroBannerUrl || category.image) && isGenuineImageUrl(category.heroBannerUrl || category.image)) ? (
-                  <div
-                    className="absolute inset-0 w-full h-full transform scale-100 hover:scale-[1.01] transition-transform duration-1000 ease-out"
-                    style={{
-                      backgroundImage: `url(${category.heroBannerUrl || category.image})`,
-                      backgroundSize: 'cover',
-                      backgroundPosition: 'center center',
-                      backgroundRepeat: 'no-repeat'
+                {primaryBanner ? (
+                  <img
+                    src={primaryBanner}
+                    alt={category.name}
+                    className="absolute inset-0 w-full h-full object-cover object-center transform scale-100 hover:scale-[1.01] transition-transform duration-1000 ease-out"
+                    loading="eager"
+                    referrerPolicy={primaryBanner.startsWith('http') ? 'no-referrer' : undefined}
+                    onError={() => {
+                      setFailedBannerUrls((prev) => ({ ...prev, [primaryBanner]: true }));
                     }}
                   />
                 ) : (
@@ -344,6 +370,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
                 </div>
               </section>
             );
+          }
 
           /* ---------------------------------------------------- */
           /* SECTION: PROMOTIONAL / DESCRIPTION HIGHLIGHTS        */
@@ -447,10 +474,13 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
                       className="group relative rounded-2xl overflow-hidden aspect-[4/5] bg-[#F4EBE1] border border-[#E8DCCF] shadow-xs hover:shadow-xl cursor-pointer transition-all duration-300"
                     >
                       <img
-                        src={img.url}
+                        src={resolveSafeProductImageUrl(img.url, mediaInventory)}
                         alt={img.altText || img.title || category.name}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-out"
                         referrerPolicy="no-referrer"
+                        onError={() => {
+                          setFailedGalleryIds((prev) => ({ ...prev, [img.id]: true }));
+                        }}
                       />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4 text-white" />
 
@@ -526,10 +556,19 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
                           />
                         ) : (video.thumbnailUrl || category.image) ? (
                           <img
-                            src={video.thumbnailUrl || category.image}
+                            src={resolveSafeProductImageUrl(
+                              video.thumbnailUrl || category.image || resolveCategoryCoverImage(category.id, category.slug),
+                              mediaInventory
+                            )}
                             alt={video.title}
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 opacity-90"
                             referrerPolicy="no-referrer"
+                            onError={(e) => {
+                              const img = e.currentTarget;
+                              if (img.dataset.fallbackApplied === '1') return;
+                              img.dataset.fallbackApplied = '1';
+                              img.src = resolveCategoryCoverImage(category.id, category.slug);
+                            }}
                           />
                         ) : (
                           <div className="w-full h-full bg-gradient-to-br from-[#241C1A] to-[#120B0D] flex items-center justify-center opacity-90" />
@@ -633,9 +672,13 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
                       >
                         {b.imageUrl ? (
                           <img
-                            src={b.imageUrl}
+                            src={resolveSafeProductImageUrl(b.imageUrl, mediaInventory)}
                             alt={b.title}
                             className="absolute inset-0 w-full h-full object-cover opacity-25 group-hover:scale-105 transition-transform duration-700 pointer-events-none"
+                            referrerPolicy="no-referrer"
+                            onError={(e) => {
+                              e.currentTarget.style.display = 'none';
+                            }}
                           />
                         ) : null}
                         <div className="relative z-10 space-y-1.5 text-center sm:text-left">
@@ -866,13 +909,19 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
               <section key="custom_story" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
                 {hasMainStory && (
                   <div className="bg-gradient-to-br from-[#FAF7F2] to-[#F4EBE1] rounded-3xl p-8 sm:p-12 border border-[#E8DCCF] shadow-sm flex flex-col md:flex-row items-center gap-10">
-                    {category.customStoryImage && isGenuineImageUrl(category.customStoryImage) && (
+                    {category.customStoryImage && isGenuineImageUrl(category.customStoryImage) && !isKnownMissingMediaUrl(category.customStoryImage, mediaInventory) && (
                       <div className="md:w-5/12 overflow-hidden rounded-2xl border border-[#E8DCCF] shadow-md flex-shrink-0">
                         <img
-                          src={category.customStoryImage}
+                          src={resolveSafeProductImageUrl(category.customStoryImage, mediaInventory)}
                           alt={category.customStoryTitle || category.name}
                           className="w-full h-80 object-cover"
                           referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            const img = e.currentTarget;
+                            if (img.dataset.fallbackApplied === '1') return;
+                            img.dataset.fallbackApplied = '1';
+                            img.src = resolveCategoryCoverImage(category.id, category.slug);
+                          }}
                         />
                       </div>
                     )}
@@ -901,13 +950,19 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
                     key={sec.id}
                     className="bg-white rounded-3xl p-8 sm:p-10 border border-[#E8DCCF] shadow-xs flex flex-col md:flex-row items-center justify-between gap-8"
                   >
-                    {sec.imageUrl && (
+                    {sec.imageUrl && !isKnownMissingMediaUrl(sec.imageUrl, mediaInventory) && (
                       <div className="md:w-5/12 rounded-2xl overflow-hidden border border-[#E8DCCF] shadow-sm flex-shrink-0">
                         <img
-                          src={sec.imageUrl}
+                          src={resolveSafeProductImageUrl(sec.imageUrl, mediaInventory)}
                           alt={sec.title}
                           className="w-full h-64 object-cover"
                           referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            const img = e.currentTarget;
+                            if (img.dataset.fallbackApplied === '1') return;
+                            img.dataset.fallbackApplied = '1';
+                            img.src = resolveCategoryCoverImage(category.id, category.slug);
+                          }}
                         />
                       </div>
                     )}
@@ -1003,10 +1058,16 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
             </button>
 
             <img
-              src={activeLightboxImage.url}
+              src={resolveSafeProductImageUrl(activeLightboxImage.url, mediaInventory)}
               alt={activeLightboxImage.altText || activeLightboxImage.title}
               className="max-h-[75vh] w-auto object-contain rounded-2xl"
               referrerPolicy="no-referrer"
+              onError={(e) => {
+                const img = e.currentTarget;
+                if (img.dataset.fallbackApplied === '1') return;
+                img.dataset.fallbackApplied = '1';
+                img.src = resolveCategoryCoverImage(category.id, category.slug);
+              }}
             />
 
             {(activeLightboxImage.title || activeLightboxImage.caption) && (

@@ -102,6 +102,8 @@
   RewriteRule ^ - [L]
 
   # Admin & Media API routes on Hostinger Apache
+  RewriteRule ^api/admin/auth-status/?$ /api/admin/auth-status.php [QSA,L]
+  RewriteRule ^api/admin/setup-password/?$ /api/admin/setup-password.php [QSA,L]
   RewriteRule ^api/admin/login/?$ /api/admin/login.php [QSA,L]
   RewriteRule ^api/admin/verify-session/?$ /api/admin/verify-session.php [QSA,L]
   RewriteRule ^api/admin/logout/?$ /api/admin/logout.php [QSA,L]

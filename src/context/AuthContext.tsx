@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import {
   User,
   onAuthStateChanged,
@@ -38,7 +38,7 @@ interface AuthContextType {
   adminSessionActive: boolean;
   adminUser: AdminSessionData | null;
   loading: boolean;
-  signInWithGoogle: () => Promise<void>;
+  signInWithGoogle: () => Promise<User | null>;
   signInWithEmail: (email: string, pass: string) => Promise<void>;
   signUpWithEmail: (email: string, pass: string, name: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
@@ -47,6 +47,13 @@ interface AuthContextType {
     pass: string,
     totpCode?: string
   ) => Promise<{ success: boolean; requires2FA?: boolean; token?: string; admin?: AdminSessionData; error?: string }>;
+  setupAdminPassword: (
+    email: string,
+    pass: string,
+    confirmPass: string
+  ) => Promise<{ success: boolean; token?: string; admin?: AdminSessionData; error?: string }>;
+  lastAdminAuthError: string | null;
+  getLastAdminAuthError: () => string | null;
   exchangeFirebaseAdminToken: (firebaseUser?: User | null) => Promise<boolean>;
   logoutAdminSession: () => Promise<void>;
   signOut: () => Promise<void>;
@@ -119,7 +126,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   });
   const [adminUser, setAdminUser] = useState<AdminSessionData | null>(null);
+  const [lastAdminAuthError, setLastAdminAuthError] = useState<string | null>(null);
+  const lastAdminAuthErrorRef = useRef<string | null>(null);
+  const setAdminExchangeError = (msg: string | null) => {
+    lastAdminAuthErrorRef.current = msg;
+    setLastAdminAuthError(msg);
+  };
   const [loading, setLoading] = useState<boolean>(true);
+  const exchangeInFlightRef = useRef<{ uid: string; promise: Promise<boolean> } | null>(null);
 
   useEffect(() => {
     const syncPatronSession = () => {
@@ -182,27 +196,58 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const exchangeFirebaseAdminToken = async (firebaseUser?: User | null): Promise<boolean> => {
     const targetUser = firebaseUser || auth.currentUser;
-    if (!targetUser || targetUser.email?.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+    if (!targetUser) {
+      setAdminExchangeError('No signed-in Google account found. Please try again.');
       return false;
     }
-    try {
-      const idToken = await targetUser.getIdToken();
-      if (!idToken) return false;
-      const res = await fetch('/api/admin/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idToken })
-      });
-      const data = await res.json().catch(() => null);
-      if (res.ok && data?.success && data?.token) {
-        sessionStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
-        localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
-        setAdminSessionActive(true);
-        setAdminUser(data.admin || { email: ADMIN_EMAIL, role: 'admin', name: 'Neeraj Chauhan (Owner)' });
-        return true;
+
+    if (exchangeInFlightRef.current && exchangeInFlightRef.current.uid === targetUser.uid) {
+      return exchangeInFlightRef.current.promise;
+    }
+
+    const run = (async (): Promise<boolean> => {
+      try {
+        setAdminExchangeError(null);
+        const idToken = await targetUser.getIdToken();
+        if (!idToken) {
+          setAdminExchangeError('Unable to obtain a verified Google ID token.');
+          return false;
+        }
+        const res = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ idToken })
+        });
+        const data = await res.json().catch(() => null);
+        if (res.ok && data?.success && data?.token) {
+          sessionStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
+          localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
+          setAdminSessionActive(true);
+          setAdminUser(
+            data.admin || {
+              email: targetUser.email || ADMIN_EMAIL,
+              role: 'admin',
+              name: targetUser.displayName || 'Neeraj Chauhan (Owner)'
+            }
+          );
+          return true;
+        }
+        setAdminExchangeError(
+          data?.error ||
+            `Backend admin authorization failed (HTTP ${res.status}).`
+        );
+      } catch (err: any) {
+        setAdminExchangeError(
+          err?.message || 'Unable to reach authentication server.'
+        );
+      } finally {
+        exchangeInFlightRef.current = null;
       }
-    } catch {}
-    return false;
+      return false;
+    })();
+
+    exchangeInFlightRef.current = { uid: targetUser.uid, promise: run };
+    return run;
   };
 
   useEffect(() => {
@@ -320,6 +365,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const setupAdminPassword = async (
+    email: string,
+    pass: string,
+    confirmPass: string
+  ): Promise<{ success: boolean; token?: string; admin?: AdminSessionData; error?: string }> => {
+    try {
+      const storedToken =
+        sessionStorage.getItem(ADMIN_SESSION_STORAGE_KEY) ||
+        localStorage.getItem(ADMIN_SESSION_STORAGE_KEY) ||
+        '';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (storedToken) {
+        headers['Authorization'] = `Bearer ${storedToken}`;
+      }
+      const res = await fetch('/api/admin/setup-password', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          email: email.trim(),
+          password: pass,
+          confirmPassword: confirmPass
+        })
+      });
+
+      const text = await res.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        return { success: false, error: 'Setup server returned a non-JSON response.' };
+      }
+
+      if (!res.ok) {
+        return { success: false, error: data?.error || 'Failed to configure administrator password.' };
+      }
+
+      if (data?.token) {
+        sessionStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
+        localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
+        setAdminSessionActive(true);
+        setAdminUser(data.admin || { email, role: 'admin', name: 'Neeraj Chauhan (Owner)' });
+        return { success: true, token: data.token, admin: data.admin };
+      }
+
+      return { success: false, error: 'Failed to obtain session token after password setup.' };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Unable to connect to setup endpoint.' };
+    }
+  };
+
   const logoutAdminSession = async () => {
     const storedToken = sessionStorage.getItem(ADMIN_SESSION_STORAGE_KEY) || localStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
     if (storedToken) {
@@ -342,9 +437,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAdminUser(null);
   };
 
-  const signInWithGoogle = async () => {
+  const signInWithGoogle = async (): Promise<User | null> => {
     const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
+    provider.setCustomParameters({ prompt: 'select_account' });
+    const cred = await signInWithPopup(auth, provider);
+    return cred?.user || auth.currentUser || null;
   };
 
   const signInWithEmail = async (email: string, pass: string) => {
@@ -492,6 +589,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signUpWithEmail,
         resetPassword,
         loginAdminBackend,
+        setupAdminPassword,
+        lastAdminAuthError,
+        getLastAdminAuthError: () => lastAdminAuthErrorRef.current,
         exchangeFirebaseAdminToken,
         logoutAdminSession,
         signOut,

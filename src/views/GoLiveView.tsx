@@ -425,6 +425,7 @@ export const GoLiveView: React.FC<GoLiveViewProps> = ({
                     }
                     alt="Live Studio Stream"
                     className="w-full h-full object-cover transition-all duration-700 filter brightness-95"
+                    referrerPolicy="no-referrer"
                     onError={(e) => {
                       const img = e.currentTarget;
                       if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;
@@ -557,6 +558,7 @@ export const GoLiveView: React.FC<GoLiveViewProps> = ({
                       src={getProductPrimaryImage(pinnedProduct, mediaInventory, selectedVariation)}
                       alt={pinnedProduct.name}
                       className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
                       onError={(e) => {
                         const img = e.currentTarget;
                         if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;
@@ -775,6 +777,7 @@ export const GoLiveView: React.FC<GoLiveViewProps> = ({
                       src={getProductPrimaryImage(prod, mediaInventory)}
                       alt=""
                       className="w-12 h-12 object-cover rounded-lg border border-[#3B1E22]"
+                      referrerPolicy="no-referrer"
                       onError={(e) => {
                         const img = e.currentTarget;
                         if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;

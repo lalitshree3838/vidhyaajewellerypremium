@@ -322,6 +322,13 @@ const VerifiedPaymentSuccessView: React.FC<VerifiedPaymentSuccessViewProps> = ({
                       src={resolveSafeProductImageUrl(item.image, mediaInventory)}
                       alt={item.productName}
                       className="w-11 h-11 rounded-lg object-contain border border-[#E8DCCF] bg-white shrink-0"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        const img = e.currentTarget;
+                        if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;
+                        img.dataset.fallbackApplied = '1';
+                        img.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                      }}
                     />
                     <div className="min-w-0">
                       <p className="font-serif font-semibold text-[#3B1E22] truncate">
@@ -1645,11 +1652,12 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                       src={resolveSafeProductImageUrl(item.image, mediaInventory)}
                       alt={item.productName}
                       className="w-14 h-14 object-contain rounded-lg border border-[#E8DCCF] bg-white"
+                      referrerPolicy="no-referrer"
                       onError={(e) => {
                         const img = e.currentTarget;
-                        if (img.src !== JEWELLERY_PLACEHOLDER_IMAGE) {
-                          img.src = JEWELLERY_PLACEHOLDER_IMAGE;
-                        }
+                        if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;
+                        img.dataset.fallbackApplied = '1';
+                        img.src = JEWELLERY_PLACEHOLDER_IMAGE;
                       }}
                     />
                     <div>

@@ -91,6 +91,7 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
                 src={getProductPrimaryImage(prod, mediaInventory)}
                 alt={prod.name}
                 className="w-full h-full object-contain p-2"
+                referrerPolicy="no-referrer"
                 onError={(e) => {
                   const img = e.currentTarget;
                   if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;

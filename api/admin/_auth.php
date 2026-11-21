@@ -1067,15 +1067,19 @@ function vdhLoadAdminCredentialsConfig(): array {
             }
         }
     }
-    $passwordHash = trim((string)($cfg['passwordHash'] ?? ($cfg['adminPasswordHash'] ?? '')));
-    if ($passwordHash === '') $passwordHash = vdhEnv('ADMIN_PASSWORD_HASH');
-    $plainPassword = trim((string)($cfg['password'] ?? ''));
-    if ($plainPassword === '') $plainPassword = vdhEnv('ADMIN_PASSWORD');
-    $totpSecret = trim((string)($cfg['totpSecret'] ?? ''));
-    if ($totpSecret === '' && is_array($cfg['totp'] ?? null)) {
-        $totpSecret = trim((string)($cfg['totp']['secretBase32'] ?? ''));
+    $envPasswordHash = vdhEnv('ADMIN_PASSWORD_HASH');
+    $envPlainPassword = vdhEnv('ADMIN_PASSWORD');
+    $envTotpSecret = vdhEnv('ADMIN_TOTP_SECRET');
+
+    $passwordHash = $envPasswordHash !== '' ? $envPasswordHash : trim((string)($cfg['passwordHash'] ?? ($cfg['adminPasswordHash'] ?? '')));
+    $plainPassword = $envPlainPassword !== '' ? $envPlainPassword : trim((string)($cfg['password'] ?? ''));
+    $totpSecret = $envTotpSecret;
+    if ($totpSecret === '') {
+        $totpSecret = trim((string)($cfg['totpSecret'] ?? ''));
+        if ($totpSecret === '' && is_array($cfg['totp'] ?? null)) {
+            $totpSecret = trim((string)($cfg['totp']['secretBase32'] ?? ''));
+        }
     }
-    if ($totpSecret === '') $totpSecret = vdhEnv('ADMIN_TOTP_SECRET');
     $backupCodes = is_array($cfg['backupCodes'] ?? null) ? $cfg['backupCodes'] : [];
     $backupPepper = trim((string)($cfg['backupPepper'] ?? ''));
     $backupCodeHashes = is_array($cfg['backupCodeHashes'] ?? null) ? $cfg['backupCodeHashes'] : [];
@@ -1088,6 +1092,7 @@ function vdhLoadAdminCredentialsConfig(): array {
         'backupPepper' => $backupPepper,
         'backupCodeHashes' => $backupCodeHashes,
         'sessionSigningSecret' => $sessionSigningSecret,
+        'hasEnvPasswordOverride' => ($envPasswordHash !== '' || $envPlainPassword !== ''),
         'hasPasswordAuth' => ($passwordHash !== '' || $plainPassword !== ''),
     ];
 }

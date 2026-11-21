@@ -8,6 +8,7 @@ import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 import {
   JEWELLERY_PLACEHOLDER_IMAGE,
   getProductImageCandidates,
+  shouldDeferLocalMediaUrl,
   useAvailableMediaInventory
 } from '../lib/storageService';
 import { SeamlessLoopVideo } from './SeamlessLoopVideo';
@@ -61,9 +62,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     return getProductImageCandidates(product, selectedVariation, mediaInventory);
   }, [product, selectedVariation, mediaInventory]);
 
-  const baseDisplayImage = imgCandidates[imgIdx] || '';
+  const safeImgIdx = imgIdx < imgCandidates.length ? imgIdx : 0;
+  const baseDisplayImage = imgCandidates[safeImgIdx] || '';
+  const isDeferredLocalImage = shouldDeferLocalMediaUrl(baseDisplayImage, mediaInventory);
   const displayImage = useMemo(() => {
-    if (!baseDisplayImage) return '';
+    if (!baseDisplayImage || isDeferredLocalImage) return '';
     if (
       retryCount > 0 &&
       (baseDisplayImage.startsWith('http://') ||
@@ -74,10 +77,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       return `${baseDisplayImage}${sep}_retry=${retryCount}`;
     }
     return baseDisplayImage;
-  }, [baseDisplayImage, retryCount]);
+  }, [baseDisplayImage, isDeferredLocalImage, retryCount]);
 
   const hasRealImg = imgCandidates.length > 0;
-  const isInstantImg = !hasRealImg || displayImage.startsWith('data:image/') || displayImage.startsWith('blob:');
+  const isInstantImg =
+    !hasRealImg ||
+    isDeferredLocalImage ||
+    displayImage.startsWith('data:image/') ||
+    displayImage.startsWith('blob:');
 
   const [imageLoaded, setImageLoaded] = useState<boolean>(() => isInstantImg);
   const [imageError, setImageError] = useState(false);
@@ -99,17 +106,17 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       return;
     }
     setImageLoaded(false);
-    const timer = setTimeout(() => setImageLoaded(true), 9000);
+    const timer = setTimeout(() => setImageLoaded(true), 4000);
     return () => clearTimeout(timer);
   }, [product?.id, displayImage]);
 
   useEffect(() => {
-    if (imageLoaded || imageError || !hasRealImg) return;
+    if (imageLoaded || imageError || !hasRealImg || isDeferredLocalImage) return;
     const el = imgRef.current;
     if (el && el.complete && el.naturalWidth > 0) {
       setImageLoaded(true);
     }
-  }, [imageLoaded, displayImage, imageError, hasRealImg]);
+  }, [imageLoaded, displayImage, imageError, hasRealImg, isDeferredLocalImage]);
 
   const hasVideo = Boolean(
     product?.videoUrl &&
@@ -193,8 +200,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       setImageLoaded(false);
       return;
     }
-    if (imgIdx + 1 < imgCandidates.length) {
-      setImgIdx(imgIdx + 1);
+    if (safeImgIdx + 1 < imgCandidates.length) {
+      setImgIdx(safeImgIdx + 1);
       setRetryCount(0);
       setImageLoaded(false);
       return;
@@ -210,19 +217,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     >
       {/* Image / Video Container with Consistent 4:5 Aspect Ratio & Object-Contain */}
       <div className="relative aspect-[4/5] bg-white overflow-hidden flex items-center justify-center p-3 border-b border-[#F4EBE1]/60">
-        {/* Loading placeholder skeleton */}
-        {!imageLoaded && !isDisplayingVideo && !imageError && hasRealImg && (
-          <div className="absolute inset-0 bg-[#FAF7F2] animate-pulse flex items-center justify-center z-10">
-            <div className="w-8 h-8 rounded-full border-2 border-[#DFB982]/40 border-t-[#0F5B46] animate-spin" />
-          </div>
-        )}
-
         {isDisplayingVideo ? (
           <div className="relative w-full h-full flex items-center justify-center overflow-hidden bg-white">
             <SeamlessLoopVideo
               src={resolvedVideo.videoUrl || product.videoUrl!}
               fallbackUrls={resolvedVideo.fallbackUrls}
-              poster={hasRealImg && !imageError ? displayImage : undefined}
+              poster={hasRealImg && !imageError && displayImage ? displayImage : undefined}
               title={product.name}
               autoPlay={true}
               isMuted={isSoundMuted}
@@ -257,19 +257,24 @@ export const ProductCard: React.FC<ProductCardProps> = ({
               )}
             </button>
           </div>
+        ) : isDeferredLocalImage ? (
+          <div className="w-full h-full bg-[#FAF7F2] rounded-lg animate-pulse" aria-hidden="true" />
         ) : (
-          <img
-            ref={imgRef}
-            src={effectiveImage}
-            alt={product.name}
-            className={`w-full h-full object-contain object-center group-hover:scale-105 transition-transform duration-500 ease-out ${
-              imageLoaded || !hasRealImg || imageError ? 'opacity-100' : 'opacity-0'
-            }`}
-            loading="eager"
-            referrerPolicy={effectiveImage.startsWith('http') ? 'no-referrer' : undefined}
-            onLoad={() => setImageLoaded(true)}
-            onError={handleImgError}
-          />
+          <>
+            {!imageLoaded && !imageError && hasRealImg && (
+              <div className="absolute inset-0 bg-[#FAF7F2] animate-pulse pointer-events-none" aria-hidden="true" />
+            )}
+            <img
+              ref={imgRef}
+              src={effectiveImage}
+              alt={product.name}
+              className="relative z-[1] w-full h-full object-contain object-center group-hover:scale-105 transition-transform duration-500 ease-out opacity-100"
+              loading="eager"
+              referrerPolicy={effectiveImage.startsWith('http') ? 'no-referrer' : undefined}
+              onLoad={() => setImageLoaded(true)}
+              onError={handleImgError}
+            />
+          </>
         )}
 
         {/* Badges */}

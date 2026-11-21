@@ -60,14 +60,14 @@ function staticAssetsPlugin() {
         }
       }
 
-      // Copy assets directory contents to dist/assets
+      // Copy non-bundle custom media assets directory contents to dist/assets
       const srcAssets = path.resolve(__dirname, 'assets');
       const destAssets = path.resolve(outDir, 'assets');
       if (fs.existsSync(srcAssets)) {
         fs.mkdirSync(destAssets, { recursive: true });
         const assetEntries = fs.readdirSync(srcAssets, { withFileTypes: true });
         for (const entry of assetEntries) {
-          if (!entry.isDirectory()) {
+          if (!entry.isDirectory() && !/^index-[A-Za-z0-9_-]+\.(?:js|css)(?:\.bak)?$/i.test(entry.name)) {
             const destPath = path.join(destAssets, entry.name);
             fs.copyFileSync(path.join(srcAssets, entry.name), destPath);
           }

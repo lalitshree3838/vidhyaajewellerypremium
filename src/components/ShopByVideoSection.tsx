@@ -485,6 +485,10 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
           className="absolute inset-0 w-full h-full object-cover pointer-events-none transition-opacity duration-300"
           style={{ zIndex: 1, pointerEvents: 'none' }}
           loading="eager"
+          referrerPolicy="no-referrer"
+          onError={(e) => {
+            e.currentTarget.style.display = 'none';
+          }}
         />
       )}
 
@@ -622,7 +626,11 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
       if (seenCanonicalReels.has(dedupeKey)) continue;
       seenCanonicalReels.add(dedupeKey);
 
-      const thumb = getProductPrimaryImage(p, mediaInventory);
+      const rawThumb = getProductPrimaryImage(p, mediaInventory);
+      const thumb =
+        rawThumb.startsWith('/products/') && !mediaInventory?.ready && !mediaInventory?.checked
+          ? JEWELLERY_PLACEHOLDER_IMAGE
+          : rawThumb;
 
       reels.push({
         id: `reel-${p.id}`,
@@ -947,6 +955,7 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
                       alt={reel.title}
                       className="w-12 h-12 rounded-xl object-cover border border-[#E8DCCF] flex-shrink-0 bg-white"
                       loading="lazy"
+                      referrerPolicy="no-referrer"
                       onError={(e) => {
                         const img = e.currentTarget;
                         if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;

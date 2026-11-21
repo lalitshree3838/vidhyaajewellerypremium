@@ -10,6 +10,7 @@ export const LUXURY_FALLBACK_IMAGE = JEWELLERY_PLACEHOLDER_IMAGE;
 
 export interface MediaInventory {
   ready: boolean;
+  checked?: boolean;
   productImages: Set<string>;
   categoryImages: Set<string>;
 }
@@ -56,13 +57,23 @@ export async function fetchAvailableMediaInventory(): Promise<MediaInventory> {
     return inflightMediaPromise;
   }
   const promise = (async (): Promise<MediaInventory> => {
+    let controller: AbortController | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     try {
       if (typeof fetch !== 'undefined') {
-        const res = await fetch('/api/media/available', { cache: 'no-store' });
+        controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        if (controller) {
+          timer = setTimeout(() => controller?.abort(), 2500);
+        }
+        const res = await fetch('/api/media/available', {
+          cache: 'no-store',
+          signal: controller?.signal
+        });
         if (res.ok) {
           const data = await res.json();
           const inv: MediaInventory = {
             ready: true,
+            checked: true,
             productImages: new Set(
               Array.isArray(data?.productImages)
                 ? data.productImages.map((u: string) => normalizeImageUrl(u)).filter(Boolean)
@@ -78,12 +89,17 @@ export async function fetchAvailableMediaInventory(): Promise<MediaInventory> {
           return inv;
         }
       }
-    } catch {}
-    return {
+    } catch {} finally {
+      if (timer) clearTimeout(timer);
+    }
+    const fallbackInv: MediaInventory = {
       ready: false,
+      checked: true,
       productImages: new Set<string>(),
       categoryImages: new Set<string>()
     };
+    cachedMediaInventory = fallbackInv;
+    return fallbackInv;
   })().finally(() => {
     if (inflightMediaPromise === promise) {
       inflightMediaPromise = null;
@@ -100,19 +116,28 @@ if (typeof window !== 'undefined') {
 export function useAvailableMediaInventory(): MediaInventory | null {
   const [inv, setInv] = useState<MediaInventory | null>(cachedMediaInventory);
   useEffect(() => {
-    if (cachedMediaInventory?.ready) {
+    if (cachedMediaInventory?.ready || cachedMediaInventory?.checked) {
       setInv(cachedMediaInventory);
       return;
     }
     let mounted = true;
     fetchAvailableMediaInventory().then((res) => {
-      if (mounted && res.ready) setInv(res);
+      if (mounted && (res.ready || res.checked)) setInv(res);
     });
     return () => {
       mounted = false;
     };
   }, []);
   return inv;
+}
+
+export function shouldDeferLocalMediaUrl(
+  url?: string | null,
+  inventory: MediaInventory | null = cachedMediaInventory
+): boolean {
+  const normalized = normalizeImageUrl(url);
+  if (!normalized || !normalized.startsWith('/products/')) return false;
+  return !inventory?.checked && !inventory?.ready;
 }
 
 export function isKnownMissingMediaUrl(

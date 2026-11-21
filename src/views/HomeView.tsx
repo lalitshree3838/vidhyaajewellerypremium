@@ -17,8 +17,13 @@ import { Product, ProductVariation, Category } from '../types';
 import { ProductCard } from '../components/ProductCard';
 import { MetadataManager } from '../components/MetadataManager';
 import { ShopByVideoSection } from '../components/ShopByVideoSection';
-import { isGenuineProduct, isGenuineImageUrl } from '../lib/sampleData';
-import { hasRenderableProductImage, useAvailableMediaInventory } from '../lib/storageService';
+import { isGenuineProduct, isGenuineImageUrl, resolveCategoryCoverImage } from '../lib/sampleData';
+import {
+  JEWELLERY_PLACEHOLDER_IMAGE,
+  hasRenderableProductImage,
+  resolveSafeProductImageUrl,
+  useAvailableMediaInventory
+} from '../lib/storageService';
 import { formatPrice } from '../lib/priceUtils';
 
 const LotusOrnament: React.FC<{ className?: string }> = ({ className = "w-6 h-5 text-[#DFB982]" }) => (
@@ -145,6 +150,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
             alt="VIDHYAA Jewellery Studio - Timeless Jewellery"
             className="w-full h-auto block select-none"
             loading="eager"
+            onError={(e) => {
+              const img = e.currentTarget;
+              if (img.dataset.fallbackApplied === '1') return;
+              img.dataset.fallbackApplied = '1';
+              img.src = '/vidhyaa-home-hero.jpg';
+            }}
           />
 
           {/* Button 1: SHOP NOW directly over the original SHOP NOW button */}
@@ -256,13 +267,23 @@ export const HomeView: React.FC<HomeViewProps> = ({
                   >
                     <div className="w-28 h-28 xl:w-32 xl:h-32 rounded-full p-1.5 border-2 border-[#DFB982]/80 bg-gradient-to-b from-[#FFFDF9] via-[#FAF6F0] to-[#F5ECE0] shadow-sm group-hover:border-[#802336] group-hover:shadow-xl group-hover:scale-105 transition-all duration-300 flex items-center justify-center">
                       <div className="w-full h-full rounded-full overflow-hidden bg-[#FAF7F2] relative aspect-square">
-                        <img
-                          src={cat.image}
-                          alt={cat.name}
-                          className="w-full h-full object-cover object-center group-hover:scale-110 transition-transform duration-500 ease-out"
-                          loading="eager"
-                          onError={() => handleImageError(cat.image)}
-                        />
+                        {(() => {
+                          const catImgUrl = resolveSafeProductImageUrl(cat.image, mediaInventory);
+                          const effectiveCatImg =
+                            failedImageUrls.has(cat.image) || catImgUrl === JEWELLERY_PLACEHOLDER_IMAGE
+                              ? resolveCategoryCoverImage(cat.slug, cat.slug)
+                              : catImgUrl;
+                          return (
+                            <img
+                              src={failedImageUrls.has(effectiveCatImg) ? JEWELLERY_PLACEHOLDER_IMAGE : effectiveCatImg}
+                              alt={cat.name}
+                              className="w-full h-full object-cover object-center group-hover:scale-110 transition-transform duration-500 ease-out"
+                              loading="eager"
+                              referrerPolicy={effectiveCatImg.startsWith('http') ? 'no-referrer' : undefined}
+                              onError={() => handleImageError(effectiveCatImg)}
+                            />
+                          );
+                        })()}
                       </div>
                     </div>
                     <span className="font-serif text-sm xl:text-[15px] font-semibold text-[#241C1A] group-hover:text-[#802336] transition-colors text-center leading-snug mt-3">
@@ -284,13 +305,23 @@ export const HomeView: React.FC<HomeViewProps> = ({
                   >
                     <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full p-1 sm:p-1.5 border-2 border-[#DFB982]/80 bg-gradient-to-b from-[#FFFDF9] via-[#FAF6F0] to-[#F5ECE0] shadow-sm group-hover:border-[#802336] group-hover:shadow-md transition-all duration-300 flex items-center justify-center">
                       <div className="w-full h-full rounded-full overflow-hidden bg-[#FAF7F2] relative aspect-square">
-                        <img
-                          src={cat.image}
-                          alt={cat.name}
-                          className="w-full h-full object-cover object-center group-hover:scale-110 transition-transform duration-500 ease-out"
-                          loading="eager"
-                          onError={() => handleImageError(cat.image)}
-                        />
+                        {(() => {
+                          const catImgUrl = resolveSafeProductImageUrl(cat.image, mediaInventory);
+                          const effectiveCatImg =
+                            failedImageUrls.has(cat.image) || catImgUrl === JEWELLERY_PLACEHOLDER_IMAGE
+                              ? resolveCategoryCoverImage(cat.slug, cat.slug)
+                              : catImgUrl;
+                          return (
+                            <img
+                              src={failedImageUrls.has(effectiveCatImg) ? JEWELLERY_PLACEHOLDER_IMAGE : effectiveCatImg}
+                              alt={cat.name}
+                              className="w-full h-full object-cover object-center group-hover:scale-110 transition-transform duration-500 ease-out"
+                              loading="eager"
+                              referrerPolicy={effectiveCatImg.startsWith('http') ? 'no-referrer' : undefined}
+                              onError={() => handleImageError(effectiveCatImg)}
+                            />
+                          );
+                        })()}
                       </div>
                     </div>
                     <span className="font-serif text-xs sm:text-sm font-semibold text-[#241C1A] group-hover:text-[#802336] transition-colors text-center leading-tight mt-2.5">
@@ -432,6 +463,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
             src="/categories/necklaces_category.jpg"
             alt="Necklaces & Bridal Sets"
             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
+            onError={(e) => {
+              const img = e.currentTarget;
+              if (img.dataset.fallbackApplied === '1') return;
+              img.dataset.fallbackApplied = '1';
+              img.src = JEWELLERY_PLACEHOLDER_IMAGE;
+            }}
           />
           <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent pointer-events-none" />
           <div className="absolute inset-x-0 bottom-0 p-8 text-white space-y-2 pointer-events-none">
@@ -459,6 +496,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
             src="/categories/kada_bangles_category.jpg"
             alt="Royal Kangan & Kadas"
             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
+            onError={(e) => {
+              const img = e.currentTarget;
+              if (img.dataset.fallbackApplied === '1') return;
+              img.dataset.fallbackApplied = '1';
+              img.src = JEWELLERY_PLACEHOLDER_IMAGE;
+            }}
           />
           <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent pointer-events-none" />
           <div className="absolute inset-x-0 bottom-0 p-8 text-white space-y-2 pointer-events-none">

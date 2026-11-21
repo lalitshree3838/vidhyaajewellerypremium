@@ -167,66 +167,89 @@ async function loadProductsFromIdb(): Promise<Product[]> {
   }
 }
 
+let __idbWriteChain: Promise<void> = Promise.resolve();
+
+function hasAnyRenderableMediaFields(p?: Product | null): boolean {
+  if (!p || typeof p !== 'object') return false;
+  if (Array.isArray(p.images) && p.images.some((img) => typeof img === 'string' && img.trim().length > 0)) {
+    return true;
+  }
+  if (
+    Array.isArray(p.variations) &&
+    p.variations.some((v) => v && typeof v.image === 'string' && v.image.trim().length > 0)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 async function saveProductsToIdb(products: Product[]): Promise<void> {
   if (!Array.isArray(products) || products.length === 0) return;
-  try {
-    const dbInst = await openCatalogIdb();
-    if (!dbInst) return;
-    const hasIncomingStripped = products.some(
-      (p) => p && (p as any)._strippedImg === true && !p._imagesCleared && (!Array.isArray(p.images) || p.images.length === 0)
-    );
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
+  const runWrite = async () => {
+    try {
+      const dbInst = await openCatalogIdb();
+      if (!dbInst) return;
+      const needsExistingMediaProtection = products.some(
+        (p) =>
+          p &&
+          !p._imagesCleared &&
+          ((p as any)._strippedImg === true || !Array.isArray(p.images) || p.images.length === 0)
+      );
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          try {
+            dbInst.close();
+          } catch {}
+          resolve();
+        };
+        const timer = setTimeout(finish, 2000);
         try {
-          dbInst.close();
-        } catch {}
-        resolve();
-      };
-      const timer = setTimeout(finish, 2000);
-      try {
-        const tx = dbInst.transaction(PRODUCTS_IDB_STORE, 'readwrite');
-        const store = tx.objectStore(PRODUCTS_IDB_STORE);
-        tx.oncomplete = finish;
-        tx.onerror = finish;
-        tx.onabort = finish;
-        if (hasIncomingStripped) {
-          const existingReq = store.get(PRODUCTS_IDB_KEY);
-          existingReq.onsuccess = () => {
-            try {
-              const existingList = Array.isArray(existingReq.result) ? (existingReq.result as Product[]) : [];
-              const existingMap = new Map<string, Product>();
-              existingList.forEach((ep) => {
-                if (ep && ep.id) existingMap.set(ep.id, ep);
-              });
-              const protectedList = products.map((p) => {
-                if (!p || !p.id) return p;
-                const existing = existingMap.get(p.id);
-                return existing ? __mergeProductMedia(p, existing) : p;
-              });
-              store.put(protectedList, PRODUCTS_IDB_KEY);
-            } catch {
+          const tx = dbInst.transaction(PRODUCTS_IDB_STORE, 'readwrite');
+          const store = tx.objectStore(PRODUCTS_IDB_STORE);
+          tx.oncomplete = finish;
+          tx.onerror = finish;
+          tx.onabort = finish;
+          if (needsExistingMediaProtection) {
+            const existingReq = store.get(PRODUCTS_IDB_KEY);
+            existingReq.onsuccess = () => {
+              try {
+                const existingList = Array.isArray(existingReq.result) ? (existingReq.result as Product[]) : [];
+                const existingMap = new Map<string, Product>();
+                existingList.forEach((ep) => {
+                  if (ep && ep.id) existingMap.set(ep.id, ep);
+                });
+                const protectedList = products.map((p) => {
+                  if (!p || !p.id) return p;
+                  const existing = existingMap.get(p.id);
+                  return existing ? __mergeProductMedia(p, existing) : p;
+                });
+                store.put(protectedList, PRODUCTS_IDB_KEY);
+              } catch {
+                try {
+                  store.put(products, PRODUCTS_IDB_KEY);
+                } catch {}
+              }
+            };
+            existingReq.onerror = () => {
               try {
                 store.put(products, PRODUCTS_IDB_KEY);
               } catch {}
-            }
-          };
-          existingReq.onerror = () => {
-            try {
-              store.put(products, PRODUCTS_IDB_KEY);
-            } catch {}
-          };
-        } else {
-          store.put(products, PRODUCTS_IDB_KEY);
+            };
+          } else {
+            store.put(products, PRODUCTS_IDB_KEY);
+          }
+        } catch {
+          finish();
         }
-      } catch {
-        finish();
-      }
-    });
-  } catch {}
+      });
+    } catch {}
+  };
+  __idbWriteChain = __idbWriteChain.then(runWrite, runWrite);
+  return __idbWriteChain;
 }
 
 export function __normVidUrl(u?: string): string {
@@ -350,11 +373,13 @@ export function getCachedProducts(): Product[] {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return sortCatalogProducts(
-      parsed.map((p: Product) => {
-        if (!p || !p.id) return p;
-        const fb = baseMap.get(p.id);
-        return __mergeProductMedia(p, fb);
-      })
+      parsed
+        .map((p: Product) => {
+          if (!p || !p.id) return p;
+          const fb = baseMap.get(p.id);
+          return __mergeProductMedia(p, fb);
+        })
+        .filter((p: Product) => Boolean(p && p.id && (!p._strippedImg || hasAnyRenderableMediaFields(p))))
     );
   } catch {
     return [];
@@ -381,13 +406,20 @@ export async function getCachedProductsAsync(): Promise<Product[]> {
   }
   idbList.forEach((p) => {
     if (p && p.id && isGenuineProduct(p)) {
-      baseMap.set(p.id, __mergeProductMedia(p, baseMap.get(p.id)));
+      const existing = baseMap.get(p.id);
+      if (existing || !p._strippedImg || hasAnyRenderableMediaFields(p)) {
+        baseMap.set(p.id, __mergeProductMedia(p, existing));
+      }
     }
   });
   lsList.forEach((p) => {
     if (p && p.id && isGenuineProduct(p)) {
       const existing = baseMap.get(p.id);
-      baseMap.set(p.id, existing ? __mergeProductMedia(p, existing) : p);
+      if (existing) {
+        baseMap.set(p.id, __mergeProductMedia(p, existing));
+      } else if (!p._strippedImg || hasAnyRenderableMediaFields(p)) {
+        baseMap.set(p.id, p);
+      }
     }
   });
   const deletedIds = getDeletedProductIds();
@@ -787,7 +819,9 @@ export async function fetchProducts(): Promise<Product[]> {
       if (isGenuineProduct(cp) && !deletedIds.has(cp.id)) {
         const existing = catalogMap.get(cp.id);
         if (!existing) {
-          catalogMap.set(cp.id, __mergeProductMedia(cp, null));
+          if (!cp._strippedImg || hasAnyRenderableMediaFields(cp)) {
+            catalogMap.set(cp.id, __mergeProductMedia(cp, null));
+          }
         } else if (!cp._strippedImg) {
           const timeExisting = getEffectiveCatalogSortTimestamp(existing);
           const timeCached = getEffectiveCatalogSortTimestamp(cp);
@@ -1286,6 +1320,16 @@ export function saveCachedCategories(cats: Category[]): void {
 }
 
 // Categories
+const normalizeCategoryMediaFields = (c: Category): Category => {
+  const image = resolveCategoryCoverImage(c.id, c.slug, c.image);
+  const heroBannerUrl = resolveCategoryCoverImage(c.id, c.slug, c.heroBannerUrl || image);
+  return {
+    ...c,
+    image,
+    heroBannerUrl
+  };
+};
+
 export async function fetchCategories(): Promise<Category[]> {
   const cached = getCachedCategories();
   const deletedCatIds = getDeletedCategoryIds();
@@ -1311,15 +1355,17 @@ export async function fetchCategories(): Promise<Category[]> {
             }
           }
         });
-        const mergedCached = Array.from(cachedMap.values()).filter(
-          (c) => !LEGACY_CATEGORY_IDS.has(c.id) && !deletedCatIds.has(c.id)
-        );
+        const mergedCached = Array.from(cachedMap.values())
+          .filter((c) => !LEGACY_CATEGORY_IDS.has(c.id) && !deletedCatIds.has(c.id))
+          .map(normalizeCategoryMediaFields);
         if (hasNew) {
           saveCachedCategories(mergedCached);
         }
         return mergedCached;
       }
-      const initialAllowed = INITIAL_CATEGORIES.filter((c) => !deletedCatIds.has(c.id));
+      const initialAllowed = INITIAL_CATEGORIES.filter((c) => !deletedCatIds.has(c.id)).map(
+        normalizeCategoryMediaFields
+      );
       saveCachedCategories(initialAllowed);
       return initialAllowed;
     }
@@ -1358,7 +1404,7 @@ export async function fetchCategories(): Promise<Category[]> {
     // Retain all dynamic categories, filtering out only deleted or legacy sample ids
     const merged = Array.from(map.values())
       .filter((c) => !LEGACY_CATEGORY_IDS.has(c.id) && !deletedCatIds.has(c.id))
-      .map((c) => ({ ...c, image: resolveCategoryCoverImage(c.id, c.slug, c.image) }))
+      .map(normalizeCategoryMediaFields)
       .sort((a, b) => (a.order || 0) - (b.order || 0));
     saveCachedCategories(merged);
     return merged.length > 0 ? merged : INITIAL_CATEGORIES;
@@ -1366,8 +1412,10 @@ export async function fetchCategories(): Promise<Category[]> {
     console.warn('Error fetching categories from Firestore, using cached or initial:', error);
     const validCached = cached
       .filter((c) => !LEGACY_CATEGORY_IDS.has(c.id) && !deletedCatIds.has(c.id))
-      .map((c) => ({ ...c, image: resolveCategoryCoverImage(c.id, c.slug, c.image) }));
-    return validCached.length > 0 ? validCached : INITIAL_CATEGORIES.filter((c) => !deletedCatIds.has(c.id));
+      .map(normalizeCategoryMediaFields);
+    return validCached.length > 0
+      ? validCached
+      : INITIAL_CATEGORIES.filter((c) => !deletedCatIds.has(c.id)).map(normalizeCategoryMediaFields);
   }
 }
 
