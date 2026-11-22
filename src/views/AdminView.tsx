@@ -655,16 +655,22 @@ export const AdminView: React.FC<AdminViewProps> = ({
   };
 
   const handleDuplicateProduct = async (prod: Product) => {
-    const copy: Product = {
-      ...prod,
-      id: `prod_${Date.now()}`,
-      name: `${prod.name} (Copy)`,
-      slug: `${prod.slug}-copy-${Math.floor(Math.random() * 1000)}`,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    await saveProduct(copy);
-    await onRefreshData();
+    try {
+      const copy: Product = {
+        ...prod,
+        id: `prod_${Date.now()}`,
+        name: `${prod.name} (Copy)`,
+        slug: `${prod.slug}-copy-${Math.floor(Math.random() * 1000)}`,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      await saveProduct(copy);
+      await onRefreshData();
+      setAdminNotice({ type: 'success', text: `Duplicated "${prod.name}" into catalog.` });
+    } catch (err: any) {
+      console.error('Failed to duplicate product:', err);
+      setAdminNotice({ type: 'error', text: err?.message || 'Failed to duplicate product.' });
+    }
   };
 
   const handleRequestDeleteProduct = (prod: Product) => {
@@ -706,25 +712,39 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
   // Quick inline stock adjustment (+ / -)
   const handleAdjustStock = async (prod: Product, delta: number) => {
-    const newStock = Math.max(0, prod.stock + delta);
-    const updated: Product = {
-      ...prod,
-      stock: newStock,
-      inStock: newStock > 0,
-      updatedAt: new Date().toISOString()
-    };
-    await saveProduct(updated);
-    await onRefreshData();
+    try {
+      const newStock = Math.max(0, prod.stock + delta);
+      const updated: Product = {
+        ...prod,
+        stock: newStock,
+        inStock: newStock > 0,
+        updatedAt: new Date().toISOString()
+      };
+      await saveProduct(updated);
+      await onRefreshData();
+    } catch (err: any) {
+      console.error('Failed to adjust stock:', err);
+      setAdminNotice({ type: 'error', text: err?.message || 'Failed to update product stock.' });
+    }
   };
 
   const handleToggleProductActive = async (prod: Product) => {
-    const updated: Product = {
-      ...prod,
-      active: !prod.active,
-      updatedAt: new Date().toISOString()
-    };
-    await saveProduct(updated);
-    await onRefreshData();
+    try {
+      const updated: Product = {
+        ...prod,
+        active: !prod.active,
+        updatedAt: new Date().toISOString()
+      };
+      await saveProduct(updated);
+      await onRefreshData();
+      setAdminNotice({
+        type: 'success',
+        text: `"${prod.name}" is now ${updated.active ? 'visible in storefront' : 'hidden (draft)'}.`
+      });
+    } catch (err: any) {
+      console.error('Failed to toggle product visibility:', err);
+      setAdminNotice({ type: 'error', text: err?.message || 'Failed to update product visibility.' });
+    }
   };
 
   // Variation helper within edit product
@@ -954,7 +974,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
     const imgs = editingProduct.images.filter((_, i) => i !== index);
     const newPrimary = imgs[0] || '';
     const updatedVariations = (editingProduct.variations || []).map((v, i) => {
-      if (i === 0 && (!v.image || v.image === removedUrl)) {
+      if (v.image === removedUrl || (i === 0 && !v.image)) {
         return { ...v, image: newPrimary };
       }
       return v;
@@ -3531,7 +3551,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                             <button
                               type="button"
                               onClick={() => handleSetPrimaryImage(idx)}
-                              className="absolute top-1.5 left-1.5 bg-black/70 hover:bg-[#0F5B46] text-white text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                              className="absolute top-1.5 left-1.5 bg-black/75 hover:bg-[#0F5B46] text-white text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity cursor-pointer"
                               title="Set as primary thumbnail"
                             >
                               Set Main
@@ -3542,13 +3562,13 @@ export const AdminView: React.FC<AdminViewProps> = ({
                           <button
                             type="button"
                             onClick={() => handleRemoveImageFromProduct(idx)}
-                            className="absolute top-1.5 right-1.5 bg-red-600 hover:bg-red-700 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shadow-md"
+                            className="absolute top-1.5 right-1.5 bg-red-600 hover:bg-red-700 text-white rounded-full p-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity cursor-pointer shadow-md"
                             title="Remove image from product"
                           >
                             <Trash2 className="w-3 h-3" />
                           </button>
 
-                          <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[9px] px-1 rounded opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[9px] px-1 rounded opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                             #{idx + 1}
                           </div>
                         </div>
@@ -3719,8 +3739,8 @@ export const AdminView: React.FC<AdminViewProps> = ({
                               {v.image ? 'Custom Variation Image (Select gallery photo to replace)' : 'Select from product gallery...'}
                             </option>
                             {(editingProduct.images || []).map((gImg, gIdx) => (
-                              <option key={`${gImg}_${gIdx}`} value={gImg}>
-                                Gallery Image #{gIdx + 1} ({gImg.split('/').pop()?.slice(0, 28) || 'photo'})
+                              <option key={`${gIdx}_${gImg.slice(0, 32)}`} value={gImg}>
+                                Gallery Image #{gIdx + 1} ({gImg.startsWith('data:') ? 'Embedded photo' : gImg.split('/').pop()?.slice(0, 28) || 'photo'})
                               </option>
                             ))}
                           </select>

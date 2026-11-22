@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { X, Search, Star, ArrowRight, ShoppingBag } from 'lucide-react';
 import { Product } from '../types';
 import { isGenuineProduct } from '../lib/sampleData';
@@ -27,8 +27,19 @@ export const SearchModal: React.FC<SearchModalProps> = ({
   const mediaInventory = useAvailableMediaInventory();
 
   const genuineProducts = useMemo(() => {
-    return products.filter((p) => isGenuineProduct(p));
+    return products.filter(
+      (p) => isGenuineProduct(p) && p.active !== false && (p as any).status !== 'draft'
+    );
   }, [products]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   const filteredProducts = useMemo(() => {
     let list = genuineProducts;
@@ -62,7 +73,10 @@ export const SearchModal: React.FC<SearchModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 sm:pt-24 p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center pt-16 sm:pt-24 p-4 bg-black/60 backdrop-blur-sm animate-fadeIn"
+      onClick={onClose}
+    >
       <div
         className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden border border-[#E8DCCF] flex flex-col max-h-[80vh]"
         onClick={(e) => e.stopPropagation()}

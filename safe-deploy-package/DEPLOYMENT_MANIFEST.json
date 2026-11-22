@@ -1,21 +1,21 @@
 {
-  "package": "VIDHYAA Jewellery Studio Safe Production Deploy Package",
-  "generatedAt": "2026-11-22T15:58:57.853Z",
-  "bundle": {
-    "js": "assets/index-CnpYfDWz.js",
-    "css": "assets/index-BWx_T1nj.css"
-  },
-  "fileCount": 26,
-  "excludedOnPurpose": [
-    ".backups/",
-    ".admin-secrets/",
-    ".env",
-    ".env.*",
+  "project": "Vidhyaa Jewellery Studio",
+  "domain": "https://vidhyaajewellerystudio.com",
+  "generatedAt": "2026-11-22T19:32:56.098Z",
+  "deploymentMode": "ADDITIVE_SAFE_ONLY",
+  "excludedFromPackage": [
     "data/",
     "products/",
     "categories/",
-    "videos/uploads/"
+    "videos/",
+    "uploads/",
+    "api/products",
+    "api/orders",
+    ".backups/",
+    ".admin-secrets/",
+    ".env*"
   ],
+  "fileCount": 26,
   "files": [
     {
       "path": ".htaccess",
@@ -24,8 +24,8 @@
     },
     {
       "path": "api/admin/_auth.php",
-      "bytes": 53317,
-      "sha256": "c528529c6ffac486b30e02b9fd019f4500359a87b702e79782a0f68ff7d30a70"
+      "bytes": 54203,
+      "sha256": "270823c29792c36582e44d2c68a650c947408ebe6cbb298246d6debbbc255f3a"
     },
     {
       "path": "api/admin/auth-status.php",
@@ -34,8 +34,8 @@
     },
     {
       "path": "api/admin/login.php",
-      "bytes": 5674,
-      "sha256": "2087164762e1d023f56b5abbba734914e81269740de8630acf3512e8970d85d2"
+      "bytes": 5724,
+      "sha256": "ad5dc90b79406cdad0b17974d28a3acf1685e1fe98b48059d027e0b97535b2e2"
     },
     {
       "path": "api/admin/logout.php",
@@ -44,8 +44,8 @@
     },
     {
       "path": "api/admin/setup-password.php",
-      "bytes": 6033,
-      "sha256": "ff928e7c05bf0218abb87f5048d653a30f62ab51f39ec39796291d41a70bc7cf"
+      "bytes": 6060,
+      "sha256": "eee54484619bac14590041328a64f57d4ae497a134e807958f74baa0e74ab125"
     },
     {
       "path": "api/admin/sms-config.php",
@@ -84,8 +84,8 @@
     },
     {
       "path": "api/payments/cashfree.php",
-      "bytes": 46520,
-      "sha256": "bcd5f8d53c41eea0ea097def80242f502bcabbdb73bb8f7a37c50ca2837461fb"
+      "bytes": 51941,
+      "sha256": "73146fba371fef2f0d67873aad44d9843833bedc1acc8a4b23e3acbb6f79da62"
     },
     {
       "path": "api/products.php",
@@ -99,8 +99,8 @@
     },
     {
       "path": "api/videos/upload.php",
-      "bytes": 6407,
-      "sha256": "07ffe026bd739b69479ba4611ded5df749d29b9d028589cf7cba173249f5d2ba"
+      "bytes": 7703,
+      "sha256": "2723d3ea8a24a8e09bcb21d736487b1c43352d1742e22a94a79609912d7b94f1"
     },
     {
       "path": "assets/hero section image.png",
@@ -108,14 +108,14 @@
       "sha256": "192a10f7d637ee20e4d6a9a0f5a5e13802e1674d71e443cf06cb2e1a7f46768f"
     },
     {
-      "path": "assets/index-BWx_T1nj.css",
-      "bytes": 124205,
-      "sha256": "50c7ad64f1b8ed1218301873d2fe9b80bb5e2491ca2a19f5bc1ffc067dba6fb8"
+      "path": "assets/index-D4xP2FD6.css",
+      "bytes": 157339,
+      "sha256": "d7659f7c0d21caf3445c026026638c1aa2ed49423fac7369b77f8c55c05e9bda"
     },
     {
-      "path": "assets/index-CnpYfDWz.js",
-      "bytes": 9748174,
-      "sha256": "575b740f1be4fe53461048fa31b4dda38b4c78aa6824a0e013e0c7a20b9c24b1"
+      "path": "assets/index-Dt-nujYR.js",
+      "bytes": 11075300,
+      "sha256": "3df5c934e09e6e6de38d06e0df0a8c2160aeaab512a154dff18c17961158bb6d"
     },
     {
       "path": "assets/vidhyaa-home-hero.jpg",
@@ -140,7 +140,7 @@
     {
       "path": "index.html",
       "bytes": 1861,
-      "sha256": "b54b551e90dc5e0c85a2d8849e6d6f36233801316086b4cb63f72f7dbfdc2ec1"
+      "sha256": "2eeda804f954b46730942f848ed0bbff16534bd7c43a4cc71843c600aadd317f"
     },
     {
       "path": "vidhyaa-home-hero.jpg",

@@ -17,18 +17,22 @@ import {
 import { MetadataManager } from '../components/MetadataManager';
 
 interface PolicyViewProps {
-  type: 'about' | 'contact' | 'shipping' | 'returns' | 'care' | 'privacy' | 'terms';
+  type: 'about' | 'contact' | 'shipping' | 'returns' | 'care' | 'care-guide' | 'privacy' | 'terms';
   onNavigateShop: () => void;
 }
 
 export const PolicyViews: React.FC<PolicyViewProps> = ({ type, onNavigateShop }) => {
+  const normalizedType = type === 'care-guide' ? 'care' : type;
   const [contactName, setContactName] = useState('');
   const [contactEmail, setContactEmail] = useState('');
   const [contactMessage, setContactMessage] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  const [lastInquiryText, setLastInquiryText] = useState('');
 
   const handleContactSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const msg = `Namaste VIDHYAA Jewellery Studio! Inquiry from ${contactName.trim()} (${contactEmail.trim()}): ${contactMessage.trim()}`;
+    setLastInquiryText(msg);
     setSubmitted(true);
     setContactName('');
     setContactEmail('');
@@ -58,15 +62,15 @@ export const PolicyViews: React.FC<PolicyViewProps> = ({ type, onNavigateShop })
     },
     privacy: {
       title: 'Privacy Policy',
-      desc: 'How VIDHYAA Jewellery Studio protects patron privacy, confidential records, and encrypted UPI payments.'
+      desc: 'How VIDHYAA Jewellery Studio protects patron privacy, confidential records, and encrypted UPI, Credit Card, and Debit Card payments.'
     },
     terms: {
       title: 'Terms & Conditions',
-      desc: 'Terms of sale, certified authentic jewellery guarantees, and UPI transaction protocols at VIDHYAA.'
+      desc: 'Terms of sale, certified authentic jewellery guarantees, and secure Cashfree UPI and Card transaction protocols at VIDHYAA.'
     }
   };
 
-  const currentPolicy = policyTitles[type] || {
+  const currentPolicy = policyTitles[normalizedType] || {
     title: 'Customer Information',
     desc: 'Customer policies and service guidelines for VIDHYAA Jewellery Studio.'
   };
@@ -269,9 +273,29 @@ export const PolicyViews: React.FC<PolicyViewProps> = ({ type, onNavigateShop })
             <div className="bg-white rounded-3xl border border-[#E8DCCF] p-8 shadow-sm space-y-4 text-xs">
               <h3 className="font-serif text-xl font-bold text-[#3B1E22]">Send Us an Inquiry</h3>
               {submitted ? (
-                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 flex items-center gap-2">
-                  <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0" />
-                  <span>Thank you! Your message has reached our concierge. We will respond within 4 hours.</span>
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 space-y-3">
+                  <div className="flex items-start gap-2">
+                    <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
+                    <span>Thank you! Your inquiry is ready. For the fastest response from our Roorkee studio concierge, tap below to send it directly on WhatsApp.</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <a
+                      href={`https://wa.me/917302187770?text=${encodeURIComponent(lastInquiryText || 'Namaste VIDHYAA Jewellery Studio!')}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 bg-[#25D366] hover:bg-[#20ba59] text-white px-4 py-2 rounded-lg font-bold text-xs transition-colors shadow-xs"
+                    >
+                      <MessageCircle className="w-3.5 h-3.5" />
+                      <span>Send Directly on WhatsApp</span>
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => setSubmitted(false)}
+                      className="px-3 py-2 rounded-lg border border-emerald-300 text-emerald-800 hover:bg-emerald-100 text-xs font-semibold cursor-pointer"
+                    >
+                      Send Another Inquiry
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <form onSubmit={handleContactSubmit} className="space-y-3">
@@ -381,7 +405,7 @@ export const PolicyViews: React.FC<PolicyViewProps> = ({ type, onNavigateShop })
             <div className="space-y-3">
               <h3 className="font-serif text-lg font-bold text-[#3B1E22]">Dispatch & Transit Timelines</h3>
               <p>
-                All orders are dispatched directly from our Roorkee atelier (Vidhya Villa, 152/9, Solani Puram West, Near IIT Roorkee, Roorkee, District Haridwar, Uttarakhand 247667) within 24 to 48 hours of verified UPI payment confirmation. We partner exclusively with premier express courier networks including <strong>BlueDart Express, Delhivery, DTDC, and Speed Post</strong>.
+                All orders are dispatched directly from our Roorkee atelier (Vidhya Villa, 152/9, Solani Puram West, Near IIT Roorkee, Roorkee, District Haridwar, Uttarakhand 247667) within 24 to 48 hours of verified payment confirmation (UPI, Credit Card, or Debit Card). We partner exclusively with premier express courier networks including <strong>BlueDart Express, Delhivery, DTDC, and Speed Post</strong>.
               </p>
               <ul className="list-disc list-inside space-y-1.5 text-xs text-gray-600 pl-2">
                 <li><strong>Metro Cities (Mumbai, Delhi NCR, Bangalore, Kolkata, Hyderabad, Chennai):</strong> 2 to 3 business days.</li>
@@ -425,14 +449,14 @@ export const PolicyViews: React.FC<PolicyViewProps> = ({ type, onNavigateShop })
               </ul>
             </div>
             <p className="text-xs text-gray-600 pt-2 border-t">
-              Refunds are processed back directly to the patron's originating UPI ID or bank account within 48 hours of quality inspection.
+              Refunds are processed back directly to the patron's original payment method (UPI ID, Credit/Debit Card, or bank account) within 48 hours of quality inspection.
             </p>
           </div>
         </div>
       )}
 
       {/* 5. Jewellery Care Guide */}
-      {type === 'care' && (
+      {normalizedType === 'care' && (
         <div className="space-y-6">
           <div className="text-center max-w-xl mx-auto space-y-2">
             <span className="text-xs font-bold tracking-[0.25em] text-[#802336] uppercase">
@@ -493,7 +517,7 @@ export const PolicyViews: React.FC<PolicyViewProps> = ({ type, onNavigateShop })
               VIDHYAA Jewellery Studio is committed to safeguarding patron privacy. All patron data, including delivery coordinates, transaction references, and contact records, are encrypted and never disclosed to unauthorized third parties.
             </p>
             <p>
-              All online payments are conducted via verified UPI gateways. We never ask for or store UPI PINs, passwords, or bank credentials.
+              All online payments are conducted via verified Cashfree payment gateways supporting UPI (Google Pay, PhonePe, Paytm, BHIM), Credit Cards, and Debit Cards. We never ask for or store UPI PINs, card CVVs, passwords, or bank credentials.
             </p>
           </div>
         </div>

@@ -21,6 +21,7 @@ interface ShopViewProps {
   initialCategory?: string;
   onSelectProduct: (product: Product) => void;
   onOpenQuickView: (product: Product, variation?: ProductVariation) => void;
+  onNavigate?: (view: string, param?: string) => void;
 }
 
 export const COLLECTION_SLUG_MAP: Record<string, { label: string; keywords: string[]; categoryId?: string }> = {
@@ -84,7 +85,8 @@ export const ShopView: React.FC<ShopViewProps> = ({
   categories,
   initialCategory = 'all',
   onSelectProduct,
-  onOpenQuickView
+  onOpenQuickView,
+  onNavigate
 }) => {
   const [navSlug, setNavSlug] = useState<string>(initialCategory || 'all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -128,9 +130,11 @@ export const ShopView: React.FC<ShopViewProps> = ({
     }
   }, [initialCategory]);
 
-  // Include all authentic catalog products
+  // Include all active, authentic catalog products
   const genuineProducts = useMemo(() => {
-    return products.filter((p) => isGenuineProduct(p));
+    return products.filter(
+      (p) => isGenuineProduct(p) && p.active !== false && (p as any).status !== 'draft'
+    );
   }, [products]);
 
   const maxCatalogPrice = useMemo(() => {
@@ -265,14 +269,32 @@ export const ShopView: React.FC<ShopViewProps> = ({
 
       {/* Page Title & Breadcrumb */}
       <div className="mb-6">
-        <div className="text-xs text-gray-500 mb-1 flex items-center gap-1.5">
-          <span>Home</span>
+        <div className="text-xs text-gray-500 mb-1 flex items-center gap-1.5 flex-wrap">
+          <button
+            type="button"
+            onClick={() => (onNavigate ? onNavigate('home') : window.history.pushState({}, '', '/'))}
+            className="hover:text-[#802336] hover:underline cursor-pointer"
+          >
+            Home
+          </button>
           <span>/</span>
-          <span className="text-[#802336] font-medium">{navInfo.isCategory ? 'Category' : 'Collections'}</span>
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="text-[#802336] font-medium hover:underline cursor-pointer"
+          >
+            {navInfo.isCategory ? 'Category' : 'Collections'}
+          </button>
           {navSlug !== 'all' && (
             <>
               <span>/</span>
               <span className="font-semibold text-gray-800">{navInfo.title}</span>
+            </>
+          )}
+          {selectedCategory !== 'all' && activeCatObj && (
+            <>
+              <span>/</span>
+              <span className="font-semibold text-gray-800">{activeCatObj.name}</span>
             </>
           )}
         </div>
@@ -343,23 +365,27 @@ export const ShopView: React.FC<ShopViewProps> = ({
             <div className="space-y-1 text-xs">
               <button
                 onClick={() => {
+                  setNavSlug('all');
                   setSelectedCategory('all');
                   setSelectedSubcategory('all');
+                  window.history.pushState({}, '', '/shop');
                 }}
                 className={`w-full text-left py-1 px-2 rounded-md transition-colors cursor-pointer ${
-                  selectedCategory === 'all'
+                  selectedCategory === 'all' && navSlug === 'all'
                     ? 'bg-[#802336] text-white font-semibold'
                     : 'text-gray-700 hover:bg-[#FAF7F2]'
                 }`}
               >
-                All Categories ({products.length})
+                All Categories ({genuineProducts.length})
               </button>
               {categories.map((c) => (
                 <button
                   key={c.id}
                   onClick={() => {
+                    setNavSlug('all');
                     setSelectedCategory(c.id);
                     setSelectedSubcategory('all');
+                    window.history.pushState({}, '', `/shop?category=${encodeURIComponent(c.id)}`);
                   }}
                   className={`w-full text-left py-1 px-2 rounded-md transition-colors cursor-pointer ${
                     selectedCategory === c.id
@@ -628,21 +654,25 @@ export const ShopView: React.FC<ShopViewProps> = ({
               <div className="space-y-1 text-xs">
                 <button
                   onClick={() => {
+                    setNavSlug('all');
                     setSelectedCategory('all');
                     setSelectedSubcategory('all');
+                    window.history.pushState({}, '', '/shop');
                   }}
                   className={`w-full text-left py-1.5 px-2 rounded ${
-                    selectedCategory === 'all' ? 'bg-[#802336] text-white font-bold' : 'text-gray-700'
+                    selectedCategory === 'all' && navSlug === 'all' ? 'bg-[#802336] text-white font-bold' : 'text-gray-700'
                   }`}
                 >
-                  All Categories
+                  All Categories ({genuineProducts.length})
                 </button>
                 {categories.map((c) => (
                   <button
                     key={c.id}
                     onClick={() => {
+                      setNavSlug('all');
                       setSelectedCategory(c.id);
                       setSelectedSubcategory('all');
+                      window.history.pushState({}, '', `/shop?category=${encodeURIComponent(c.id)}`);
                     }}
                     className={`w-full text-left py-1.5 px-2 rounded ${
                       selectedCategory === c.id ? 'bg-[#802336] text-white font-bold' : 'text-gray-700'
@@ -653,6 +683,36 @@ export const ShopView: React.FC<ShopViewProps> = ({
                 ))}
               </div>
             </div>
+
+            {/* Mobile Subcategories */}
+            {availableSubcategories.length > 0 && (
+              <div className="space-y-2 pt-3 border-t">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-700">
+                  Style / Subcategory
+                </h4>
+                <div className="space-y-1 text-xs max-h-36 overflow-y-auto pr-1">
+                  <button
+                    onClick={() => setSelectedSubcategory('all')}
+                    className={`w-full text-left py-1 px-2 rounded ${
+                      selectedSubcategory === 'all' ? 'bg-[#F4EBE1] text-[#802336] font-bold' : 'text-gray-700'
+                    }`}
+                  >
+                    All Styles
+                  </button>
+                  {availableSubcategories.map((sub) => (
+                    <button
+                      key={sub}
+                      onClick={() => setSelectedSubcategory(sub)}
+                      className={`w-full text-left py-1 px-2 rounded ${
+                        selectedSubcategory === sub ? 'bg-[#F4EBE1] text-[#802336] font-bold' : 'text-gray-700'
+                      }`}
+                    >
+                      {sub}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Mobile Finishes */}
             <div className="space-y-2 pt-3 border-t">
@@ -691,6 +751,39 @@ export const ShopView: React.FC<ShopViewProps> = ({
                 onChange={(e) => setUserMaxPrice(Number(e.target.value))}
                 className="w-full accent-[#802336]"
               />
+            </div>
+
+            {/* Mobile In Stock & Rating */}
+            <div className="space-y-3 pt-3 border-t text-xs">
+              <label className="flex items-center gap-2 text-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={inStockOnly}
+                  onChange={(e) => setInStockOnly(e.target.checked)}
+                  className="rounded accent-[#802336]"
+                />
+                <span className="font-medium">In Stock Only</span>
+              </label>
+              <div>
+                <span className="text-xs font-bold text-gray-700 uppercase tracking-wider block mb-1">
+                  Minimum Rating
+                </span>
+                <div className="flex items-center gap-1.5">
+                  {[0, 4, 4.5].map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => setMinRating(r)}
+                      className={`px-2.5 py-1 rounded text-xs border cursor-pointer ${
+                        minRating === r
+                          ? 'bg-[#FAF7F2] border-[#802336] text-[#802336] font-bold'
+                          : 'border-gray-200 text-gray-600'
+                      }`}
+                    >
+                      {r === 0 ? 'All' : `${r}★+`}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             <div className="pt-4 border-t flex gap-2">

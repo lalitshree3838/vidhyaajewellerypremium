@@ -17,7 +17,12 @@ import {
   Play,
   X,
   Volume2,
-  VolumeX
+  VolumeX,
+  ZoomIn,
+  ZoomOut,
+  ChevronLeft,
+  ChevronRight,
+  Maximize2
 } from 'lucide-react';
 import { Product, ProductVariation, Review } from '../types';
 import { useCart } from '../context/CartContext';
@@ -44,6 +49,7 @@ interface ProductDetailViewProps {
   onSelectProduct: (product: Product) => void;
   onOpenQuickView: (product: Product, variation?: ProductVariation) => void;
   onBuyNowDirect: () => void;
+  onNavigate?: (view: string, param?: string) => void;
 }
 
 export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
@@ -52,7 +58,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   initialVariation,
   onSelectProduct,
   onOpenQuickView,
-  onBuyNowDirect
+  onBuyNowDirect,
+  onNavigate
 }) => {
   const { addToCart } = useCart();
   const { isInWishlist, toggleWishlist } = useWishlist();
@@ -83,6 +90,18 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const [videoModalOpen, setVideoModalOpen] = useState(false);
   const [videoMuted, setVideoMuted] = useState(true);
   const [activeMedia, setActiveMedia] = useState<'image' | 'video'>('image');
+  const [isHoverZooming, setIsHoverZooming] = useState(false);
+  const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 50 });
+  const [zoomModalOpen, setZoomModalOpen] = useState(false);
+  const [lightboxZoomed, setLightboxZoomed] = useState(false);
+  const [lightboxOrigin, setLightboxOrigin] = useState({ x: 50, y: 50 });
+  const [shareCopied, setShareCopied] = useState(false);
+
+  // Precompute gallery candidates before hooks so keyboard navigation stays hook-order safe
+  const validGallery = isValidProduct
+    ? getProductImageCandidates(product, selectedVariation, mediaInventory)
+    : [];
+  const galleryImages = validGallery.length > 0 ? validGallery : [JEWELLERY_PLACEHOLDER_IMAGE];
 
   useEffect(() => {
     if (!isValidProduct) return;
@@ -95,11 +114,34 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     setImageError(false);
     setActiveMedia('image');
     setQuantity(1);
+    setZoomModalOpen(false);
+    setLightboxZoomed(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
     // Load reviews
     fetchProductReviews(product.id).then(setReviews);
   }, [product, initialVariation, isValidProduct]);
+
+  useEffect(() => {
+    if (!zoomModalOpen && !videoModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setZoomModalOpen(false);
+        setLightboxZoomed(false);
+        setVideoModalOpen(false);
+      } else if (zoomModalOpen && galleryImages.length > 1) {
+        if (e.key === 'ArrowRight') {
+          setActiveImageIndex((prev) => (prev + 1) % galleryImages.length);
+          setLightboxZoomed(false);
+        } else if (e.key === 'ArrowLeft') {
+          setActiveImageIndex((prev) => (prev - 1 + galleryImages.length) % galleryImages.length);
+          setLightboxZoomed(false);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [zoomModalOpen, videoModalOpen, galleryImages.length]);
 
   if (!isValidProduct) {
     return (
@@ -109,7 +151,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
           This piece is currently being updated with verified studio imagery.
         </p>
         <button
-          onClick={() => window.location.assign('/#shop')}
+          onClick={() => (onNavigate ? onNavigate('shop', 'all') : window.location.assign('/shop'))}
           className="mt-6 bg-[#0F4C4A] hover:bg-[#0A3635] text-white px-8 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer shadow-md"
         >
           Explore Verified Catalog
@@ -117,10 +159,6 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       </div>
     );
   }
-
-  // When variation changes, prioritize variation image as index 0!
-  const validGallery = getProductImageCandidates(product, selectedVariation, mediaInventory);
-  const galleryImages = validGallery.length > 0 ? validGallery : [JEWELLERY_PLACEHOLDER_IMAGE];
 
   const safeActiveIdx = activeImageIndex < galleryImages.length ? activeImageIndex : 0;
   const currentDisplayImage = galleryImages[safeActiveIdx] || galleryImages[0];
@@ -154,9 +192,32 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     setActiveImageIndex(0); // Immediately displays that variation's photo!
     setImageError(false);
     setActiveMedia('image');
+    setQuantity(1);
+  };
+
+  const handleShareProduct = async () => {
+    const shareUrl = window.location.href;
+    const shareTitle = `${product.name} | VIDHYAA Jewellery Studio`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: shareTitle, text: product.shortDescription || product.name, url: shareUrl });
+        return;
+      }
+    } catch {
+      // User canceled or Web Share unavailable; fall back to clipboard copy
+    }
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2200);
+    } catch {
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2200);
+    }
   };
 
   const handleAddToCart = () => {
+    if (currentStock <= 0) return;
     const varToUse = selectedVariation || {
       id: 'default',
       name: 'Standard',
@@ -167,12 +228,13 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       image: product.images[0],
       active: true
     };
-    addToCart(product, varToUse, quantity);
+    addToCart(product, varToUse, Math.min(quantity, Math.max(1, currentStock)));
     setAddedToast(true);
     setTimeout(() => setAddedToast(false), 2000);
   };
 
   const handleBuyNow = () => {
+    if (currentStock <= 0) return;
     handleAddToCart();
     onBuyNowDirect();
   };
@@ -240,10 +302,26 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       />
 
       {/* Breadcrumb */}
-      <div className="text-xs text-gray-500 flex items-center gap-1.5">
-        <span>Home</span>
+      <div className="text-xs text-gray-500 flex items-center gap-1.5 flex-wrap">
+        <button
+          type="button"
+          onClick={() => (onNavigate ? onNavigate('home') : window.location.assign('/'))}
+          className="hover:text-[#802336] hover:underline cursor-pointer"
+        >
+          Home
+        </button>
         <span>/</span>
-        <span className="text-[#802336] font-medium">{product.categoryName}</span>
+        <button
+          type="button"
+          onClick={() =>
+            onNavigate
+              ? onNavigate('shop', product.categoryId || 'all')
+              : window.location.assign(`/shop?category=${encodeURIComponent(product.categoryId || 'all')}`)
+          }
+          className="text-[#802336] font-medium hover:underline cursor-pointer"
+        >
+          {product.categoryName}
+        </button>
         <span>/</span>
         <span className="text-gray-400 truncate max-w-xs">{product.name}</span>
       </div>
@@ -252,8 +330,33 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-14 items-start">
         {/* Left Column: Image Gallery & Swatches */}
         <div className="space-y-4 lg:sticky lg:top-28">
-          {/* Main Large Media Container with Consistent 4:5 Aspect Ratio & Object-Contain */}
-          <div className="relative aspect-[4/5] rounded-2xl overflow-hidden bg-white border border-[#E8DCCF] shadow-md group flex items-center justify-center p-4">
+          {/* Main Large Media Container with Consistent 4:5 Aspect Ratio, Hover Zoom & Fullscreen Lightbox */}
+          <div
+            className={`relative aspect-[4/5] rounded-2xl overflow-hidden bg-white border border-[#E8DCCF] shadow-md group flex items-center justify-center p-4 ${
+              activeMedia === 'image' && !imageError && !isDeferredMainImage && isGenuineImageUrl(currentDisplayImage)
+                ? 'cursor-zoom-in'
+                : ''
+            }`}
+            onMouseEnter={() => {
+              if (activeMedia === 'image' && !imageError && !isDeferredMainImage && isGenuineImageUrl(currentDisplayImage)) {
+                setIsHoverZooming(true);
+              }
+            }}
+            onMouseLeave={() => setIsHoverZooming(false)}
+            onMouseMove={(e) => {
+              if (activeMedia !== 'image') return;
+              const rect = e.currentTarget.getBoundingClientRect();
+              const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+              const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+              setZoomOrigin({ x, y });
+            }}
+            onClick={() => {
+              if (activeMedia === 'image' && !imageError && !isDeferredMainImage && isGenuineImageUrl(currentDisplayImage)) {
+                setZoomModalOpen(true);
+                setLightboxZoomed(false);
+              }
+            }}
+          >
             {activeMedia === 'video' && videoData ? (
               <div className="relative w-full h-full flex items-center justify-center bg-white overflow-hidden">
                 <SeamlessLoopVideo
@@ -305,7 +408,11 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               <img
                 src={currentDisplayImage}
                 alt={product.name}
-                className="w-full h-full object-contain object-center transition-transform duration-500 group-hover:scale-105"
+                style={{
+                  transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
+                  transform: isHoverZooming ? 'scale(2.1)' : 'scale(1)'
+                }}
+                className="w-full h-full object-contain object-center transition-transform duration-150 ease-out will-change-transform select-none"
                 referrerPolicy={currentDisplayImage.startsWith('http') ? 'no-referrer' : undefined}
                 onError={() => {
                   if (safeActiveIdx + 1 < galleryImages.length) {
@@ -319,14 +426,39 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
             {/* Discount Badge */}
             {discountPercent > 0 && activeMedia !== 'video' && (
-              <span className="absolute top-4 left-4 bg-[#802336] text-white text-xs font-bold px-2.5 py-1 rounded shadow-md uppercase tracking-wider">
+              <span className="absolute top-4 left-4 bg-[#802336] text-white text-xs font-bold px-2.5 py-1 rounded shadow-md uppercase tracking-wider pointer-events-none">
                 {discountPercent}% OFF
               </span>
             )}
 
+            {/* Zoom & Fullscreen Expand Controls */}
+            {activeMedia === 'image' && !imageError && !isDeferredMainImage && isGenuineImageUrl(currentDisplayImage) && (
+              <>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setZoomModalOpen(true);
+                    setLightboxZoomed(false);
+                  }}
+                  className="absolute top-4 right-4 z-10 bg-white/90 hover:bg-white text-[#3B1E22] border border-[#E8DCCF] px-2.5 py-1.5 rounded-full shadow-sm flex items-center gap-1.5 text-[11px] font-semibold transition-all cursor-pointer"
+                  title="Open Fullscreen Zoom"
+                  aria-label="Open Fullscreen Zoom"
+                >
+                  <Maximize2 className="w-3.5 h-3.5 text-[#802336]" />
+                  <span className="hidden sm:inline">Zoom</span>
+                </button>
+                <div className="absolute bottom-4 right-4 z-10 bg-black/60 text-white text-[10px] font-medium px-2.5 py-1 rounded-full backdrop-blur-xs pointer-events-none flex items-center gap-1 opacity-90 group-hover:opacity-100">
+                  <ZoomIn className="w-3 h-3 text-[#DFB982]" />
+                  <span className="hidden sm:inline">Hover to zoom • Click to expand</span>
+                  <span className="sm:hidden">Tap to zoom</span>
+                </div>
+              </>
+            )}
+
             {/* Selected Finish Indicator */}
             {selectedVariation && (
-              <div className="absolute bottom-4 left-4 bg-white/90 backdrop-blur-md px-3 py-1 rounded-full border border-[#E8DCCF] flex items-center gap-2 text-xs font-semibold text-[#3B1E22] shadow">
+              <div className="absolute bottom-4 left-4 bg-white/90 backdrop-blur-md px-3 py-1 rounded-full border border-[#E8DCCF] flex items-center gap-2 text-xs font-semibold text-[#3B1E22] shadow pointer-events-none">
                 <span
                   className="w-3.5 h-3.5 rounded-full border border-gray-300"
                   style={{ backgroundColor: selectedVariation.hexCode }}
@@ -583,11 +715,13 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
           {/* Quantity Selector & Action Buttons */}
           <div className="space-y-3 pt-2">
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3">
               <div className="flex items-center border border-[#E8DCCF] rounded-xl bg-[#FAF7F2]">
                 <button
+                  type="button"
+                  disabled={currentStock <= 0 || quantity <= 1}
                   onClick={() => setQuantity(Math.max(1, quantity - 1))}
-                  className="px-4 py-2.5 text-sm font-bold text-[#3B1E22] hover:bg-[#F4EBE1] rounded-l-xl cursor-pointer"
+                  className="px-4 py-2.5 text-sm font-bold text-[#3B1E22] hover:bg-[#F4EBE1] rounded-l-xl cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   -
                 </button>
@@ -595,8 +729,10 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                   {quantity}
                 </span>
                 <button
-                  onClick={() => setQuantity(quantity + 1)}
-                  className="px-4 py-2.5 text-sm font-bold text-[#3B1E22] hover:bg-[#F4EBE1] rounded-r-xl cursor-pointer"
+                  type="button"
+                  disabled={currentStock <= 0 || quantity >= Math.max(1, currentStock)}
+                  onClick={() => setQuantity(Math.min(Math.max(1, currentStock), quantity + 1))}
+                  className="px-4 py-2.5 text-sm font-bold text-[#3B1E22] hover:bg-[#F4EBE1] rounded-r-xl cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   +
                 </button>
@@ -604,10 +740,14 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
               {/* Add to Cart Button */}
               <button
+                type="button"
+                disabled={currentStock <= 0}
                 onClick={handleAddToCart}
-                className="flex-1 btn-teak-green py-3.5 px-6 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md hover:shadow-lg active:scale-98"
+                className="flex-1 btn-teak-green py-3.5 px-5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md hover:shadow-lg active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {addedToast ? (
+                {currentStock <= 0 ? (
+                  <span>Out of Stock</span>
+                ) : addedToast ? (
                   <>
                     <Check className="w-4 h-4 text-white" />
                     <span>Added to Bag!</span>
@@ -622,6 +762,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
               {/* Wishlist Button */}
               <button
+                type="button"
                 onClick={() => toggleWishlist(product.id)}
                 className={`p-3.5 rounded-xl border border-[#E8DCCF] transition-colors cursor-pointer ${
                   isInWishlist(product.id)
@@ -629,20 +770,38 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                     : 'bg-[#FAF7F2] text-[#3B2F2A] hover:bg-[#3B2F2A] hover:text-[#FAF7F2]'
                 }`}
                 title="Save to Wishlist"
+                aria-label="Save to Wishlist"
               >
                 <Heart
                   className={`w-5 h-5 ${isInWishlist(product.id) ? 'fill-[#DFB982]' : ''}`}
                 />
               </button>
+
+              {/* Share Button */}
+              <button
+                type="button"
+                onClick={handleShareProduct}
+                className={`p-3.5 rounded-xl border border-[#E8DCCF] transition-colors cursor-pointer ${
+                  shareCopied
+                    ? 'bg-emerald-700 text-white border-emerald-700'
+                    : 'bg-[#FAF7F2] text-[#3B2F2A] hover:bg-[#3B2F2A] hover:text-[#FAF7F2]'
+                }`}
+                title={shareCopied ? 'Product Link Copied!' : 'Share Product'}
+                aria-label="Share Product"
+              >
+                {shareCopied ? <Check className="w-5 h-5" /> : <Share2 className="w-5 h-5" />}
+              </button>
             </div>
 
             {/* Buy Now Direct Button */}
             <button
+              type="button"
+              disabled={currentStock <= 0}
               onClick={handleBuyNow}
-              className="w-full btn-teak-green py-3.5 px-6 rounded-xl text-xs font-bold uppercase tracking-widest transition-all cursor-pointer shadow-md hover:shadow-lg flex items-center justify-center gap-2 active:scale-98"
+              className="w-full btn-teak-green py-3.5 px-6 rounded-xl text-xs font-bold uppercase tracking-widest transition-all cursor-pointer shadow-md hover:shadow-lg flex items-center justify-center gap-2 active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <span>Instant Buy with UPI</span>
-              <ArrowRight className="w-4 h-4 text-white" />
+              <span>{currentStock <= 0 ? 'Currently Out of Stock' : 'Buy Now'}</span>
+              {currentStock > 0 && <ArrowRight className="w-4 h-4 text-white" />}
             </button>
           </div>
 
@@ -696,7 +855,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             </div>
             <div className="p-3 bg-[#FAF7F2] rounded-xl border border-[#E8DCCF]">
               <Sparkles className="w-5 h-5 mx-auto text-[#802336] mb-1" />
-              <span className="font-semibold text-[#241C1A] block">UPI Checkout</span>
+              <span className="font-semibold text-[#241C1A] block">UPI & Cards</span>
               <span className="text-[10px] text-gray-500">Zero Extra Fee</span>
             </div>
           </div>
@@ -1024,16 +1183,154 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                 )}
               </div>
               <button
+                disabled={currentStock <= 0}
                 onClick={() => {
                   setVideoModalOpen(false);
                   handleAddToCart();
                 }}
-                className="px-5 py-2 rounded-xl bg-[#802336] hover:bg-[#9B2C43] text-white text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow"
+                className="px-5 py-2 rounded-xl bg-[#802336] hover:bg-[#9B2C43] text-white text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow disabled:opacity-50"
               >
-                Add To Cart
+                {currentStock <= 0 ? 'Out of Stock' : 'Add To Cart'}
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Fullscreen Interactive Image Zoom Lightbox Modal */}
+      {zoomModalOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/92 backdrop-blur-md flex flex-col items-center justify-between p-4 sm:p-6 animate-fadeIn"
+          onClick={() => {
+            setZoomModalOpen(false);
+            setLightboxZoomed(false);
+          }}
+        >
+          {/* Top Bar */}
+          <div
+            className="w-full max-w-5xl flex items-center justify-between text-white gap-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="min-w-0">
+              <p className="text-[11px] uppercase tracking-widest text-[#DFB982] font-bold">
+                Studio Zoom Preview {galleryImages.length > 1 ? `• ${safeActiveIdx + 1} / ${galleryImages.length}` : ''}
+              </p>
+              <h3 className="font-serif text-sm sm:text-base font-bold truncate">
+                {product.name}
+              </h3>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setLightboxZoomed((z) => !z)}
+                className="px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer border border-white/15"
+                title={lightboxZoomed ? 'Reset Zoom (1x)' : 'Zoom In (2.2x)'}
+              >
+                {lightboxZoomed ? <ZoomOut className="w-4 h-4 text-[#DFB982]" /> : <ZoomIn className="w-4 h-4 text-[#DFB982]" />}
+                <span>{lightboxZoomed ? '1x Fit' : '2.2x Zoom'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setZoomModalOpen(false);
+                  setLightboxZoomed(false);
+                }}
+                className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center cursor-pointer border border-white/15"
+                aria-label="Close zoom preview"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Center Zoomable Stage */}
+          <div
+            className="relative flex-1 w-full max-w-5xl my-4 flex items-center justify-center overflow-hidden rounded-2xl bg-white/5 border border-white/10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {galleryImages.length > 1 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveImageIndex((safeActiveIdx - 1 + galleryImages.length) % galleryImages.length);
+                  setLightboxZoomed(false);
+                }}
+                className="absolute left-3 sm:left-5 z-20 w-10 h-10 rounded-full bg-black/60 hover:bg-black/85 text-white flex items-center justify-center border border-white/20 cursor-pointer"
+                aria-label="Previous image"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+            )}
+
+            <div
+              className={`w-full h-full max-h-[72vh] flex items-center justify-center overflow-hidden p-4 ${
+                lightboxZoomed ? 'cursor-zoom-out' : 'cursor-zoom-in'
+              }`}
+              onClick={() => setLightboxZoomed((z) => !z)}
+              onMouseMove={(e) => {
+                if (!lightboxZoomed) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+                const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+                setLightboxOrigin({ x, y });
+              }}
+            >
+              <img
+                src={currentDisplayImage}
+                alt={product.name}
+                style={{
+                  transformOrigin: `${lightboxOrigin.x}% ${lightboxOrigin.y}%`,
+                  transform: lightboxZoomed ? 'scale(2.2)' : 'scale(1)'
+                }}
+                className="max-h-[68vh] max-w-full object-contain transition-transform duration-200 ease-out select-none rounded-xl bg-white p-2"
+                referrerPolicy={currentDisplayImage.startsWith('http') ? 'no-referrer' : undefined}
+              />
+            </div>
+
+            {galleryImages.length > 1 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveImageIndex((safeActiveIdx + 1) % galleryImages.length);
+                  setLightboxZoomed(false);
+                }}
+                className="absolute right-3 sm:right-5 z-20 w-10 h-10 rounded-full bg-black/60 hover:bg-black/85 text-white flex items-center justify-center border border-white/20 cursor-pointer"
+                aria-label="Next image"
+              >
+                <ChevronRight className="w-5 h-5" />
+              </button>
+            )}
+          </div>
+
+          {/* Thumbnail Strip */}
+          {galleryImages.length > 1 && (
+            <div
+              className="flex items-center gap-2.5 overflow-x-auto max-w-full pb-1"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {galleryImages.map((img, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => {
+                    setActiveImageIndex(idx);
+                    setLightboxZoomed(false);
+                  }}
+                  className={`w-14 h-14 rounded-lg overflow-hidden border-2 bg-white p-0.5 shrink-0 cursor-pointer transition-all ${
+                    safeActiveIdx === idx
+                      ? 'border-[#DFB982] scale-105 opacity-100'
+                      : 'border-white/20 opacity-60 hover:opacity-100'
+                  }`}
+                >
+                  <img
+                    src={shouldDeferLocalMediaUrl(img, mediaInventory) ? JEWELLERY_PLACEHOLDER_IMAGE : img}
+                    alt=""
+                    className="w-full h-full object-contain"
+                  />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

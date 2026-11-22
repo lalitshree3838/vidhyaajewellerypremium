@@ -441,7 +441,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             onClick={() => onNavigate('shop', 'all')}
             className="inline-flex items-center gap-2 bg-transparent hover:bg-[#0F4C4A] text-[#0F4C4A] hover:text-white border-2 border-[#0F4C4A] px-8 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer shadow-xs hover:shadow-md"
           >
-            <span>Explore All {products.length} Designs</span>
+            <span>Explore All {genuineProducts.length} Designs</span>
             <ArrowRight className="w-4 h-4" />
           </button>
         </div>
@@ -564,10 +564,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 <Sparkles className="w-7 h-7" />
               </div>
               <h3 className="font-serif text-lg font-bold text-[#3B1E22]">
-                Instant UPI Secure Verification
+                Instant UPI & Card Verification
               </h3>
               <p className="text-xs text-gray-600 leading-relaxed">
-                Pay frictionlessly with Google Pay, PhonePe, Paytm, or BHIM with zero transaction surcharges and bank-level safety.
+                Pay seamlessly via UPI (Google Pay, PhonePe, Paytm, BHIM), Credit Cards, or Debit Cards with zero transaction surcharges and bank-level safety.
               </p>
             </div>
           </div>

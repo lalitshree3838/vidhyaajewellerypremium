@@ -89,6 +89,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   }, [isOpen, initialMode]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   // Translate Firebase Auth error codes into polite, human-readable explanations
@@ -365,7 +374,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fadeIn">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fadeIn"
+      onClick={onClose}
+    >
       <div
         className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-[#E8DCCF] relative"
         onClick={(e) => e.stopPropagation()}

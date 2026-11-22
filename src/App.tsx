@@ -173,7 +173,7 @@ const parseLocationRoute = () => {
   }
 
   const catParam = params.get('category') || params.get('collection') || params.get('filter');
-  if (pathname.startsWith('/shop') || catParam) {
+  if (pathname.startsWith('/shop') || catParam || hash.toLowerCase() === '#shop') {
     return { view: 'shop', param: catParam || 'all', productId: null, trackingOrder: '' };
   }
 
@@ -468,8 +468,7 @@ function MainApp() {
   };
 
   const handleBuyNowDirect = () => {
-    setCurrentView('checkout');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    handleNavigate('checkout');
   };
 
   const handleOrderSuccess = (order: Order) => {
@@ -581,6 +580,7 @@ function MainApp() {
                 initialCategory={currentParam || 'all'}
                 onSelectProduct={handleSelectProduct}
                 onOpenQuickView={handleOpenQuickView}
+                onNavigate={handleNavigate}
               />
             )}
 
@@ -592,6 +592,7 @@ function MainApp() {
                 onSelectProduct={handleSelectProduct}
                 onOpenQuickView={handleOpenQuickView}
                 onBuyNowDirect={handleBuyNowDirect}
+                onNavigate={handleNavigate}
               />
             )}
 
@@ -655,7 +656,7 @@ function MainApp() {
 
             {['about', 'contact', 'shipping', 'returns', 'care-guide', 'privacy', 'terms'].includes(currentView) && (
               <PolicyViews
-                type={currentView as any}
+                type={(currentView === 'care-guide' ? 'care' : currentView) as any}
                 onNavigateShop={() => handleNavigate('shop', 'all')}
               />
             )}

@@ -116,12 +116,48 @@ if ($sizeBytes <= 0 || $sizeBytes > $effectiveMaxBytes) {
     ]);
 }
 
+function vdhDetectVideoMagic(string $bytes): ?array {
+    if (strlen($bytes) < 12) return null;
+    // WebM / Matroska EBML header: 1A 45 DF A3
+    if (substr($bytes, 0, 4) === "\x1A\x45\xDF\xA3") {
+        return ['ext' => 'webm', 'mime' => 'video/webm'];
+    }
+    // MP4 / MOV ISO BMFF box types at bytes 4..7
+    $box = substr($bytes, 4, 4);
+    if (in_array($box, ['ftyp', 'moov', 'mdat', 'wide', 'free'], true)) {
+        $brand = strtolower(substr($bytes, 8, 4));
+        if ($box === 'ftyp' && str_starts_with($brand, 'qt')) {
+            return ['ext' => 'mov', 'mime' => 'video/quicktime'];
+        }
+        return ['ext' => 'mp4', 'mime' => 'video/mp4'];
+    }
+    return null;
+}
+
+if (!empty($_FILES)) {
+    $fileField = $_FILES['video'] ?? $_FILES['file'] ?? reset($_FILES);
+    $headBytes = (string)@file_get_contents($fileField['tmp_name'], false, null, 0, 32);
+    $videoMagic = vdhDetectVideoMagic($headBytes);
+} else {
+    $videoMagic = vdhDetectVideoMagic(substr((string)$rawData, 0, 32));
+}
+
+if ($videoMagic === null) {
+    vdhSendJson(400, [
+        'success' => false,
+        'error' => 'Unsupported or invalid video file. Only genuine MP4, MOV, and WebM videos are allowed.'
+    ]);
+}
+
 $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
 if (!in_array($ext, $allowedExts, true)) {
-    if (str_contains(strtolower($mimeType), 'quicktime')) $ext = 'mov';
-    elseif (str_contains(strtolower($mimeType), 'webm')) $ext = 'webm';
-    else $ext = 'mp4';
+    $ext = $videoMagic['ext'];
+} elseif ($videoMagic['ext'] === 'webm') {
+    $ext = 'webm';
+} elseif ($ext === 'webm' && $videoMagic['ext'] !== 'webm') {
+    $ext = $videoMagic['ext'];
 }
+$mimeType = $videoMagic['mime'];
 
 $baseName = strtolower(pathinfo($originalName, PATHINFO_FILENAME));
 $baseName = preg_replace('/[^a-z0-9]+/', '_', $baseName);
@@ -137,10 +173,11 @@ if (!empty($_FILES)) {
         vdhSendJson(500, ['success' => false, 'error' => 'Failed to save uploaded video to persistent storage.']);
     }
 } else {
-    if (file_put_contents($destPath, $rawData) === false) {
+    if (file_put_contents($destPath, $rawData, LOCK_EX) === false) {
         vdhSendJson(500, ['success' => false, 'error' => 'Failed to write uploaded video to persistent storage.']);
     }
 }
+@chmod($destPath, 0644);
 
 $publicUrl = '/videos/uploads/' . $finalFileName;
 vdhSendJson(200, [

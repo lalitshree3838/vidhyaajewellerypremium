@@ -69,10 +69,14 @@ const VIDEOS_UPLOAD_DIR = process.env.VIDHYAA_VIDEOS_DIR
   ? path.resolve(process.env.VIDHYAA_VIDEOS_DIR)
   : path.resolve(__dirname, 'videos', 'uploads');
 const DIST_VIDEOS_UPLOAD_DIR = path.resolve(__dirname, 'dist', 'videos', 'uploads');
-const PRODUCTS_MEDIA_DIR = path.resolve(__dirname, 'products');
-const PRODUCTS_UPLOAD_MEDIA_DIR = path.resolve(__dirname, 'products', 'uploads');
-const DIST_PRODUCTS_MEDIA_DIR = path.resolve(__dirname, 'dist', 'products');
-const DIST_PRODUCTS_UPLOAD_MEDIA_DIR = path.resolve(__dirname, 'dist', 'products', 'uploads');
+const PRODUCTS_MEDIA_DIR = process.env.VIDHYAA_PRODUCTS_DIR
+  ? path.resolve(process.env.VIDHYAA_PRODUCTS_DIR)
+  : path.resolve(__dirname, 'products');
+const PRODUCTS_UPLOAD_MEDIA_DIR = path.join(PRODUCTS_MEDIA_DIR, 'uploads');
+const DIST_PRODUCTS_MEDIA_DIR = process.env.VIDHYAA_PRODUCTS_DIR
+  ? path.resolve(process.env.VIDHYAA_PRODUCTS_DIR)
+  : path.resolve(__dirname, 'dist', 'products');
+const DIST_PRODUCTS_UPLOAD_MEDIA_DIR = path.join(DIST_PRODUCTS_MEDIA_DIR, 'uploads');
 const CATEGORIES_MEDIA_DIR = path.resolve(__dirname, 'categories');
 const DIST_CATEGORIES_MEDIA_DIR = path.resolve(__dirname, 'dist', 'categories');
 const MAX_VIDEO_UPLOAD_BYTES = 250 * 1024 * 1024; // 250 MB
@@ -2985,23 +2989,41 @@ export function handleApiMiddleware(req, res, next) {
           fileData = rawBuffer;
         }
 
+        const detectVideoMagic = (buf) => {
+          if (!Buffer.isBuffer(buf) || buf.length < 12) return null;
+          if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) {
+            return { ext: '.webm', mime: 'video/webm' };
+          }
+          const box = buf.subarray(4, 8).toString('ascii');
+          if (['ftyp', 'moov', 'mdat', 'wide', 'free'].includes(box)) {
+            const brand = buf.subarray(8, 12).toString('ascii').toLowerCase();
+            if (box === 'ftyp' && brand.startsWith('qt')) {
+              return { ext: '.mov', mime: 'video/quicktime' };
+            }
+            return { ext: '.mp4', mime: 'video/mp4' };
+          }
+          return null;
+        };
+
+        const videoMagic = detectVideoMagic(fileData);
+        if (!videoMagic) {
+          return sendJson(res, 400, {
+            success: false,
+            error: 'Unsupported or invalid video file. Only genuine MP4, MOV, and WebM videos are allowed.'
+          });
+        }
+
         const allowedExts = ['.mp4', '.mov', '.webm'];
-        const allowedMimes = ['video/mp4', 'video/quicktime', 'video/webm', 'application/octet-stream'];
         const extMatch = /\.([a-z0-9]+)$/i.exec(originalName);
         let ext = extMatch ? `.${extMatch[1].toLowerCase()}` : '';
         if (!allowedExts.includes(ext)) {
-          if (mimeType === 'video/quicktime') ext = '.mov';
-          else if (mimeType === 'video/webm') ext = '.webm';
-          else if (mimeType === 'video/mp4') ext = '.mp4';
+          ext = videoMagic.ext;
+        } else if (videoMagic.ext === '.webm') {
+          ext = '.webm';
+        } else if (ext === '.webm' && videoMagic.ext !== '.webm') {
+          ext = videoMagic.ext;
         }
-
-        if (!allowedExts.includes(ext) && !allowedMimes.includes(mimeType)) {
-          return sendJson(res, 400, {
-            success: false,
-            error: 'Unsupported video format. Please upload an MP4, MOV, or WebM file.'
-          });
-        }
-        if (!allowedExts.includes(ext)) ext = '.mp4';
+        mimeType = videoMagic.mime;
 
         const baseName = path.basename(originalName, path.extname(originalName))
           .toLowerCase()

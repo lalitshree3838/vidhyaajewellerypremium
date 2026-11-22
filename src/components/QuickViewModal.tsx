@@ -54,6 +54,15 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
     setShowVideo(false);
   }, [product, initialVariation]);
 
+  useEffect(() => {
+    if (!product) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [product, onClose]);
+
   if (!product || !isGenuineProduct(product)) return null;
 
   const hasVideo = Boolean(
@@ -71,10 +80,12 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
 
   const currentPrice = product.price;
   const currentMrp = product.mrp > 0 ? product.mrp : product.price;
+  const currentStock = selectedVariation?.stock !== undefined ? selectedVariation.stock : product.stock;
   const discountPercent = calculateDiscountPercent(currentMrp, currentPrice);
   const hasDiscount = currentMrp > currentPrice && discountPercent > 0;
 
   const handleAddToCart = () => {
+    if (currentStock <= 0) return;
     const variationToUse = selectedVariation || {
       id: 'default',
       name: 'Standard',
@@ -85,7 +96,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
       image: product.images[0],
       active: true
     };
-    addToCart(product, variationToUse, quantity);
+    addToCart(product, variationToUse, Math.min(quantity, Math.max(1, currentStock)));
     setAdded(true);
     setTimeout(() => {
       setAdded(false);
@@ -94,7 +105,10 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn"
+      onClick={onClose}
+    >
       <div
         className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden border border-[#E8DCCF] relative max-h-[90vh] flex flex-col md:flex-row"
         onClick={(e) => e.stopPropagation()}
@@ -318,8 +332,10 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
             <div className="flex items-center gap-3 mb-4">
               <div className="flex items-center border border-[#E8DCCF] rounded-lg bg-[#FAF7F2]">
                 <button
+                  type="button"
+                  disabled={currentStock <= 0 || quantity <= 1}
                   onClick={() => setQuantity(Math.max(1, quantity - 1))}
-                  className="px-3 py-2 text-sm font-semibold text-[#3B1E22] hover:bg-[#F4EBE1] rounded-l-lg cursor-pointer"
+                  className="px-3 py-2 text-sm font-semibold text-[#3B1E22] hover:bg-[#F4EBE1] rounded-l-lg cursor-pointer disabled:opacity-40"
                 >
                   -
                 </button>
@@ -327,19 +343,24 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
                   {quantity}
                 </span>
                 <button
-                  onClick={() => setQuantity(quantity + 1)}
-                  className="px-3 py-2 text-sm font-semibold text-[#3B1E22] hover:bg-[#F4EBE1] rounded-r-lg cursor-pointer"
+                  type="button"
+                  disabled={currentStock <= 0 || quantity >= Math.max(1, currentStock)}
+                  onClick={() => setQuantity(Math.min(Math.max(1, currentStock), quantity + 1))}
+                  className="px-3 py-2 text-sm font-semibold text-[#3B1E22] hover:bg-[#F4EBE1] rounded-r-lg cursor-pointer disabled:opacity-40"
                 >
                   +
                 </button>
               </div>
 
               <button
+                type="button"
                 onClick={handleAddToCart}
-                disabled={added}
-                className="flex-1 btn-teak-green py-2.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md active:scale-98"
+                disabled={added || currentStock <= 0}
+                className="flex-1 btn-teak-green py-2.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {added ? (
+                {currentStock <= 0 ? (
+                  <span>Out of Stock</span>
+                ) : added ? (
                   <>
                     <Check className="w-4 h-4 text-white" />
                     <span>Added to Cart!</span>

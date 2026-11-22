@@ -247,7 +247,7 @@ function vdhIsAllowedOriginValue(string $origin): bool {
     if (preg_match('#^https?://(?:localhost|127\.0\.0\.1)(?::\d+)?$#i', $clean)) {
         return true;
     }
-    if (preg_match('#^https://[a-z0-9-]+\.run\.app$#i', $clean)) {
+    if (preg_match('#^https://[a-z0-9-]+(?:\.[a-z0-9-]+)*\.run\.app$#i', $clean)) {
         return true;
     }
 
@@ -286,13 +286,40 @@ function vdhIsHttpsRequest(): bool {
     $fwdProto = strtolower(trim((string)explode(',', (string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0]));
     if ($fwdProto === 'https') return true;
     if (strtolower(trim((string)($_SERVER['HTTP_X_FORWARDED_SSL'] ?? ''))) === 'on') return true;
+    $cfVisitor = strtolower(trim((string)($_SERVER['HTTP_CF_VISITOR'] ?? '')));
+    if ($cfVisitor !== '' && str_contains($cfVisitor, '"https"')) return true;
+    $origin = strtolower(trim((string)($_SERVER['HTTP_ORIGIN'] ?? '')));
+    if (str_starts_with($origin, 'https://')) return true;
+    $referer = strtolower(trim((string)($_SERVER['HTTP_REFERER'] ?? '')));
+    if (str_starts_with($referer, 'https://')) return true;
+    return false;
+}
+
+function vdhIsRunAppPreviewRequest(): bool {
+    $hosts = [
+        vdhNormalizeHostname((string)($_SERVER['HTTP_X_FORWARDED_HOST'] ?? '')),
+        vdhNormalizeHostname((string)($_SERVER['HTTP_HOST'] ?? '')),
+    ];
+    foreach (['HTTP_ORIGIN', 'HTTP_REFERER'] as $hdrKey) {
+        $raw = trim((string)($_SERVER[$hdrKey] ?? ''));
+        if ($raw !== '') {
+            $parsed = @parse_url($raw);
+            if (is_array($parsed) && !empty($parsed['host'])) {
+                $hosts[] = vdhNormalizeHostname((string)$parsed['host']);
+            }
+        }
+    }
+    foreach ($hosts as $h) {
+        if ($h !== '' && (bool)preg_match('/\.run\.app$/i', $h)) {
+            return true;
+        }
+    }
     return false;
 }
 
 function vdhSetAdminSessionCookie(string $token, int $ttlSeconds = VDH_ADMIN_TTL_SECONDS): void {
-    $https = vdhIsHttpsRequest();
-    $host = vdhNormalizeHostname((string)($_SERVER['HTTP_X_FORWARDED_HOST'] ?? ($_SERVER['HTTP_HOST'] ?? '')));
-    $isRunApp = $https && ($host !== '') && (bool)preg_match('/\.run\.app$/i', $host);
+    $isRunApp = vdhIsRunAppPreviewRequest();
+    $https = vdhIsHttpsRequest() || $isRunApp;
     $maxAge = max(0, $ttlSeconds);
     $parts = [
         VDH_ADMIN_SESSION_COOKIE . '=' . rawurlencode($token),
@@ -315,9 +342,8 @@ function vdhSetAdminSessionCookie(string $token, int $ttlSeconds = VDH_ADMIN_TTL
 }
 
 function vdhClearAdminSessionCookie(): void {
-    $https = vdhIsHttpsRequest();
-    $host = vdhNormalizeHostname((string)($_SERVER['HTTP_X_FORWARDED_HOST'] ?? ($_SERVER['HTTP_HOST'] ?? '')));
-    $isRunApp = $https && ($host !== '') && (bool)preg_match('/\.run\.app$/i', $host);
+    $isRunApp = vdhIsRunAppPreviewRequest();
+    $https = vdhIsHttpsRequest() || $isRunApp;
     $parts = [
         VDH_ADMIN_SESSION_COOKIE . '=',
         'Path=/',

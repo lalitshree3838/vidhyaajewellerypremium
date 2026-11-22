@@ -56,6 +56,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   const categoryDropdownRef = useRef<HTMLDivElement>(null);
   const collectionDropdownRef = useRef<HTMLDivElement>(null);
+  const userDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -65,6 +66,9 @@ export const Header: React.FC<HeaderProps> = ({
       }
       if (collectionDropdownRef.current && !collectionDropdownRef.current.contains(target)) {
         setCollectionDropdownOpen(false);
+      }
+      if (userDropdownRef.current && !userDropdownRef.current.contains(target)) {
+        setUserDropdownOpen(false);
       }
     };
 
@@ -383,7 +387,7 @@ export const Header: React.FC<HeaderProps> = ({
                       </span>
                     </div>
                     <span className="text-[10px] text-gray-500 lowercase">
-                      8 collections
+                      {SHOP_BY_COLLECTION_ITEMS.length} collections
                     </span>
                   </div>
 
@@ -429,6 +433,13 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
               )}
             </div>
+
+            <button
+              onClick={() => handleNav('shop', 'new-arrivals')}
+              className="hover:text-[#802336] transition-colors pb-1 cursor-pointer"
+            >
+              New Arrivals
+            </button>
 
             <button
               onClick={() => handleNav('shop', 'best-sellers')}
@@ -499,7 +510,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             {/* Customer Account / Sign In */}
-            <div className="relative">
+            <div ref={userDropdownRef} className="relative">
               <button
                 onClick={() => {
                   if (!activeCustomer) {
@@ -723,6 +734,12 @@ export const Header: React.FC<HeaderProps> = ({
               )}
             </div>
 
+            <button
+              onClick={() => handleNav('shop', 'new-arrivals')}
+              className="text-left py-2 px-3 rounded-lg hover:bg-[#F4EBE1] text-[#3B2F2A] cursor-pointer"
+            >
+              New Arrivals
+            </button>
             <button
               onClick={() => handleNav('shop', 'best-sellers')}
               className="text-left py-2 px-3 rounded-lg hover:bg-[#F4EBE1] text-[#3B2F2A] cursor-pointer"

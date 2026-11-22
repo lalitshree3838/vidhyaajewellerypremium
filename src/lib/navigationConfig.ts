@@ -29,6 +29,8 @@ export const SHOP_BY_CATEGORY_ITEMS: NavDropdownItem[] = [
 
 export const SHOP_BY_COLLECTION_ITEMS: NavDropdownItem[] = [
   { id: 'all', name: 'Shop All', type: 'collection', subtitle: 'Complete Handcrafted Catalogue' },
+  { id: 'new-arrivals', name: 'New Arrivals', type: 'collection', subtitle: 'Latest Handcrafted Studio Releases' },
+  { id: 'trending', name: 'Trending Now', type: 'collection', subtitle: 'Most Coveted & Featured Pieces' },
   { id: 'diamond-necklace-sett', name: 'Diamond Necklace Sett', type: 'collection', subtitle: 'VVS American Diamond Collars' },
   { id: 'diamond-pendant-set', name: 'Diamond Pendant Set', type: 'collection', subtitle: 'Baguette & Solitaire Pendants' },
   { id: 'gold-finish-jewellery', name: 'Gold Finish Jewellery', type: 'collection', subtitle: '22K Micro Micron Gold Electroplating' },
@@ -43,7 +45,7 @@ export const SHOP_BY_COLLECTION_ITEMS: NavDropdownItem[] = [
  */
 export function filterProductsByNavSlug(products: Product[], slug: string): Product[] {
   const f = (slug || 'all').toLowerCase().trim();
-  if (f === 'all') return products;
+  if (f === 'all' || f === 'new-arrivals' || f === 'new') return products;
 
   return products.filter((p) => {
     const text = `${p.name} ${p.description} ${p.shortDescription || ''} ${p.subcategory || ''} ${p.categoryName || ''} ${p.material}`.toLowerCase();
@@ -55,7 +57,15 @@ export function filterProductsByNavSlug(products: Product[], slug: string): Prod
       return true;
     }
 
-    // 2. Categories with specialized mapping
+    // 2. Curated collections (Trending / Best Sellers)
+    if (f === 'trending') {
+      return !!p.isFeatured || !!p.isBestseller || (p.rating || 0) >= 4.8;
+    }
+    if (f === 'best-sellers' || f === 'bestsellers' || f === 'bestseller') {
+      return !!p.isBestseller || (p.rating || 0) >= 4.8;
+    }
+
+    // 3. Categories with specialized mapping
     if (f === 'necklace' || f === 'necklaces') {
       return (
         pCatId === 'necklaces' ||
@@ -65,14 +75,21 @@ export function filterProductsByNavSlug(products: Product[], slug: string): Prod
         text.includes('haar')
       );
     }
-    if (f === 'chocker-set' || f === 'choker-set' || f === 'choker' || f === 'chokers') {
+    if (f === 'chocker-set' || f === 'choker-set' || f === 'choker-sets' || f === 'choker' || f === 'chokers') {
       return text.includes('choker') || pCatId === 'chocker-set' || pCatId === 'choker-set';
     }
-    if (f === 'chains' || f === 'chain') {
-      return pCatId === 'chains' || text.includes('chain') || text.includes('matar mala');
+    if (f === 'chains' || f === 'chain' || f === 'chain-collection') {
+      return (
+        pCatId === 'chains' ||
+        pCatId === 'mangalsutra' ||
+        text.includes('chain') ||
+        text.includes('matar mala') ||
+        text.includes('mangalsutra') ||
+        text.includes('haar')
+      );
     }
     if (f === 'pendant-set' || f === 'pendant-sets' || f === 'pendants' || f === 'pendant') {
-      return pCatId === 'pendant-set' || pCatId === 'pendants' || text.includes('pendant');
+      return pCatId === 'pendant-set' || pCatId === 'pendants' || text.includes('pendant') || text.includes('necklace') || text.includes('haar');
     }
     if (f === 'mangalsutra') {
       return pCatId === 'mangalsutra' || text.includes('mangalsutra');
@@ -127,51 +144,115 @@ export function filterProductsByNavSlug(products: Product[], slug: string): Prod
         text.includes('german silver')
       );
     }
-    if (f === 'mla-jewellery' || f === 'mala' || f === 'mala-jewellery') {
-      return text.includes('mala') || text.includes('haar') || text.includes('pearl');
+    if (f === 'mla-jewellery' || f === 'mala' || f === 'mala-jewellery' || f === 'pearl-stone-mala-collection') {
+      return text.includes('mala') || text.includes('haar') || text.includes('pearl') || text.includes('moti');
     }
     if (f === 'elegent-everyday' || f === 'elegant-everyday' || f === 'everyday') {
       return pCatId === 'elegent-everyday' || text.includes('daily') || text.includes('everyday') || text.includes('waterproof');
-    }
-    if (f === 'best-sellers' || f === 'bestsellers' || f === 'bestseller') {
-      return !!p.isBestseller || (p.rating || 0) >= 4.8;
     }
     if (f === 'watches' || f === 'watch') {
       return pCatId === 'watches' || text.includes('watch') || text.includes('timepiece');
     }
 
-    // 3. Collections
+    // 4. Collections & Footer Curations
     if (
       f === 'diamond-necklace-sett' ||
       f === 'diamond-necklace-sets' ||
       f === 'diamond-necklace-set'
     ) {
       return (
-        (text.includes('diamond') || text.includes(' ad ') || text.includes('ad ')) &&
+        (text.includes('diamond') || text.includes(' ad ') || text.includes('ad ') || text.includes('cz') || text.includes('cubic')) &&
         (text.includes('necklace') || text.includes('choker') || text.includes('set'))
       );
     }
     if (f === 'diamond-pendant-set' || f === 'diamond-pendant-sets') {
-      return (text.includes('diamond') || text.includes('ad')) && text.includes('pendant');
+      return (text.includes('diamond') || text.includes('ad') || text.includes('solitaire')) && (text.includes('pendant') || text.includes('mangalsutra') || text.includes('necklace'));
     }
     if (f === 'gold-finish-jewellery') {
-      return text.includes('gold');
+      return text.includes('gold') || text.includes('22k') || text.includes('24k');
     }
-    if (f === 'kundan-polki-necklace-set' || f === 'kundan-and-polki-necklace-set') {
+    if (
+      f === 'kundan-polki-necklace-set' ||
+      f === 'kundan-polki-necklace-sets' ||
+      f === 'kundan-and-polki-necklace-set'
+    ) {
       return (
-        (text.includes('kundan') || text.includes('polki')) &&
+        (text.includes('kundan') || text.includes('polki') || text.includes('jadau')) &&
         (text.includes('necklace') || text.includes('choker') || text.includes('set') || text.includes('haar'))
       );
     }
+    if (f === 'kundan-polki-pendant-sets' || f === 'kundan-polki-pendant-set') {
+      return text.includes('kundan') || text.includes('polki') || text.includes('jadau');
+    }
     if (f === 'temple-jewellery' || f === 'temple-jewellery-sets' || f === 'temple-sets') {
-      return text.includes('temple');
+      return text.includes('temple') || text.includes('ganesha') || text.includes('antique') || text.includes('lakshmi');
     }
     if (
       f === 'rajwada-collection' ||
       f === 'rajwada-collections' ||
       f === 'ragwada-collections'
     ) {
-      return text.includes('rajwada');
+      return text.includes('rajwada') || text.includes('royal') || text.includes('polki') || text.includes('heritage');
+    }
+    if (f === 'moissanite-collection') {
+      return text.includes('moissanite') || text.includes('diamond') || text.includes('solitaire') || text.includes('ad ') || text.includes('crystal');
+    }
+    if (f === 'emerald-jewellery') {
+      return text.includes('emerald') || text.includes('green') || text.includes('panna');
+    }
+    if (f === 'ruby-jewellery-collection') {
+      return text.includes('ruby') || text.includes('pink') || text.includes('maroon') || text.includes('red') || text.includes('rose');
+    }
+    if (f === 'wedding-guest-jewellery') {
+      return (
+        pCatId === 'necklaces' ||
+        text.includes('wedding') ||
+        text.includes('bridal') ||
+        text.includes('choker') ||
+        text.includes('kundan') ||
+        text.includes('polki') ||
+        text.includes('haar')
+      );
+    }
+    if (f === 'festive-jewellery-collection') {
+      return (
+        text.includes('festive') ||
+        text.includes('traditional') ||
+        text.includes('temple') ||
+        text.includes('kundan') ||
+        text.includes('bangle') ||
+        text.includes('kada') ||
+        text.includes('choker')
+      );
+    }
+    if (f === 'sangeet-jewellery-collection') {
+      return (
+        pCatId === 'rings' ||
+        text.includes('sangeet') ||
+        text.includes('cocktail') ||
+        text.includes('statement') ||
+        text.includes('diamond') ||
+        text.includes('choker')
+      );
+    }
+    if (f === 'rhodium-plating') {
+      return text.includes('rhodium') || text.includes('silver') || text.includes('platinum') || text.includes('micro gold') || text.includes('gold');
+    }
+    if (f === 'hasli-sets') {
+      return text.includes('hasli') || text.includes('choker') || text.includes('collar') || text.includes('temple');
+    }
+    if (f === '925-silver-jewellery') {
+      return (
+        pCatId === 'oxidised-jewellery' ||
+        text.includes('92.5') ||
+        text.includes('925') ||
+        text.includes('sterling') ||
+        text.includes('silver') ||
+        text.includes('oxidised')
+      );
+    }
+    if (f === 'anklets-collection') {
+      return text.includes('anklet') || text.includes('payal') || text.includes('temple') || text.includes('oxidised') || text.includes('traditional');
     }
 
     return false;
@@ -183,6 +264,109 @@ export function filterProductsByNavSlug(products: Product[], slug: string): Prod
  */
 export function getNavHeadingInfo(slug: string): { title: string; subtitle: string; isCategory: boolean } {
   const f = (slug || 'all').toLowerCase();
+
+  // Explicit handling for curated & footer collections
+  const CURATED_HEADINGS: Record<string, { title: string; subtitle: string; isCategory: boolean }> = {
+    'new-arrivals': {
+      title: 'New Arrivals',
+      subtitle: 'Discover the latest handcrafted releases from our Roorkee jewellery atelier.',
+      isCategory: false,
+    },
+    'new': {
+      title: 'New Arrivals',
+      subtitle: 'Discover the latest handcrafted releases from our Roorkee jewellery atelier.',
+      isCategory: false,
+    },
+    'trending': {
+      title: 'Trending Now',
+      subtitle: 'Our most coveted bridal chokers, statement rings, and patron-favourite designs.',
+      isCategory: false,
+    },
+    'kundan-polki-necklace-sets': {
+      title: 'Kundan & Polki Necklace Sets',
+      subtitle: 'Handcrafted Jadau, uncut polki, and royal Rajasthani bridal necklace sets.',
+      isCategory: false,
+    },
+    'kundan-polki-pendant-sets': {
+      title: 'Kundan & Polki Pendant Sets',
+      subtitle: 'Artisanal kundan and polki pendant sets crafted with 22K micro gold finishes.',
+      isCategory: false,
+    },
+    'moissanite-collection': {
+      title: 'Moissanite & American Diamond Collection',
+      subtitle: 'Brilliant-cut solitaire, moissanite, and VVS American Diamond luxury designs.',
+      isCategory: false,
+    },
+    'emerald-jewellery': {
+      title: 'Emerald & Green Stone Jewellery',
+      subtitle: 'Lush emerald-toned statement rings, chokers, and regal green stone heirlooms.',
+      isCategory: false,
+    },
+    'ruby-jewellery-collection': {
+      title: 'Ruby & Pink Stone Collection',
+      subtitle: 'Vibrant ruby and rose-hued handcrafted jewellery crafted for celebrations.',
+      isCategory: false,
+    },
+    'pearl-stone-mala-collection': {
+      title: 'Pearl & Stone Mala Collection',
+      subtitle: 'Multi-strand freshwater pearl malas, rani haars, and heritage stone necklaces.',
+      isCategory: false,
+    },
+    'wedding-guest-jewellery': {
+      title: 'Wedding Guest Jewellery Collection',
+      subtitle: 'Regal chokers, kundan sets, and statement pieces curated for weddings.',
+      isCategory: false,
+    },
+    'festive-jewellery-collection': {
+      title: 'Festive Jewellery Collection',
+      subtitle: 'Timeless temple, kundan, and 22K gold-finish designs for Indian festivities.',
+      isCategory: false,
+    },
+    'sangeet-jewellery-collection': {
+      title: 'Sangeet & Cocktail Jewellery',
+      subtitle: 'Dazzling cocktail rings, diamond chokers, and glamour-ready statement sets.',
+      isCategory: false,
+    },
+    'rhodium-plating': {
+      title: 'Rhodium & Micro Plated Jewellery',
+      subtitle: 'High-lustre rhodium, silver, and 22K micro-plated anti-tarnish designs.',
+      isCategory: false,
+    },
+    'choker-sets': {
+      title: 'Choker Sets',
+      subtitle: 'Handcrafted royal bridal chokers with matching statement earrings.',
+      isCategory: false,
+    },
+    'hasli-sets': {
+      title: 'Hasli & Collar Sets',
+      subtitle: 'Sculpted traditional hasli, collar necklaces, and antique temple sets.',
+      isCategory: false,
+    },
+    'chain-collection': {
+      title: 'Chain & Mangalsutra Collection',
+      subtitle: 'Delicate gold-finish chains, matar malas, and handcrafted mangalsutras.',
+      isCategory: false,
+    },
+    '925-silver-jewellery': {
+      title: '92.5 Silver & Oxidised Jewellery',
+      subtitle: 'Certified sterling silver finishes and artisanal antique oxidised designs.',
+      isCategory: false,
+    },
+    'anklets-collection': {
+      title: 'Traditional Anklets & Heirlooms',
+      subtitle: 'Heritage temple and ethnic silver-tone accents crafted for festive grace.',
+      isCategory: false,
+    },
+    'ragwada-collections': {
+      title: 'Rajwada Heritage Collection',
+      subtitle: 'Royal Rajputana craftsmanship with antique gold and polki silhouettes.',
+      isCategory: false,
+    },
+  };
+
+  if (CURATED_HEADINGS[f]) {
+    return CURATED_HEADINGS[f];
+  }
 
   // Explicit handling for the 7 primary storefront categories
   if (f === 'necklaces' || f === 'necklace') {

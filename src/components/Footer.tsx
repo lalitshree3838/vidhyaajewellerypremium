@@ -103,9 +103,9 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
             </div>
             <div>
               <h4 className="text-xs font-bold text-white uppercase tracking-wider">
-                UPI-Only Fast Checkout
+                UPI, Credit & Debit Cards
               </h4>
-              <p className="text-[11px] text-white/95 font-medium">Zero fee instant verified payments</p>
+              <p className="text-[11px] text-white/95 font-medium">Zero fee instant Cashfree checkout</p>
             </div>
           </div>
 
@@ -440,6 +440,12 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
           </span>
           <span className="bg-white/15 px-2.5 py-1 rounded text-[11px] font-semibold text-white border border-white/20">
             UPI
+          </span>
+          <span className="bg-white/15 px-2.5 py-1 rounded text-[11px] font-semibold text-white border border-white/20">
+            Credit Card
+          </span>
+          <span className="bg-white/15 px-2.5 py-1 rounded text-[11px] font-semibold text-white border border-white/20">
+            Debit Card
           </span>
           <span className="bg-white/15 px-2.5 py-1 rounded text-[11px] font-semibold text-white border border-white/20">
             Google Pay

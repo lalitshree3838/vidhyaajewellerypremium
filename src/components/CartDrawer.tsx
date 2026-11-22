@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   ShoppingBag,
@@ -49,6 +49,15 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onCheckout, onViewShop }
   const [promoInput, setPromoInput] = useState('');
   const [promoMessage, setPromoMessage] = useState<{ text: string; error?: boolean } | null>(null);
   const mediaInventory = useAvailableMediaInventory();
+
+  useEffect(() => {
+    if (!isCartOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeCart();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isCartOpen, closeCart]);
 
   if (!isCartOpen) return null;
 
@@ -389,13 +398,13 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onCheckout, onViewShop }
                 }}
                 className="w-full btn-teak-green text-white py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg hover:shadow-xl active:scale-98"
               >
-                <span>Proceed to UPI Checkout</span>
+                <span>Proceed to Secure Checkout</span>
                 <ArrowRight className="w-4 h-4 text-white" />
               </button>
 
               <div className="flex items-center justify-center gap-2 text-[10px] text-gray-500 pt-1">
                 <ShieldCheck className="w-3.5 h-3.5 text-[#B8860B]" />
-                <span>UPI Fast Checkout • 100% Secure & Encrypted</span>
+                <span>UPI, Credit & Debit Cards • 100% Secure & Encrypted</span>
               </div>
             </div>
           )}

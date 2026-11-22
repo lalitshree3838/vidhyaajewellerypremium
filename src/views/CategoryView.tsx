@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Category,
   Product,
@@ -71,6 +71,18 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
   const mediaInventory = useAvailableMediaInventory();
   const [failedBannerUrls, setFailedBannerUrls] = useState<Record<string, boolean>>({});
   const [failedGalleryIds, setFailedGalleryIds] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (!activeLightboxImage && !activeVideo) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setActiveLightboxImage(null);
+        setActiveVideo(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeLightboxImage, activeVideo]);
 
   // Products belonging to this category with normalized ID and keyword fallback
   const categoryProducts = useMemo(() => {
@@ -149,8 +161,11 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
         (p) => (category.newArrivalProductIds || []).includes(p.id) || p.isNewArrival
       );
     } else if (curationFilter === 'trending') {
-      result = result.filter(
-        (p) => (category.trendingProductIds || []).includes(p.id)
+      const explicitTrending = category.trendingProductIds || [];
+      result = result.filter((p) =>
+        explicitTrending.length > 0
+          ? explicitTrending.includes(p.id)
+          : p.isFeatured || p.isBestseller || (p.rating || 0) >= 4.8
       );
     }
 

@@ -77,25 +77,68 @@ function cfSanitizeOrderId($raw) {
     return substr(preg_replace('/[^a-zA-Z0-9_-]/', '_', trim((string)$raw)), 0, 45);
 }
 
-function cfFormatPaymentMethodLabel($methodObj): string {
-    if (!is_array($methodObj)) return 'Cashfree Online Payment';
-    if (!empty($methodObj['upi']) && is_array($methodObj['upi'])) {
-        $channel = !empty($methodObj['upi']['channel']) ? ' (' . strtoupper((string)$methodObj['upi']['channel']) . ')' : '';
-        return 'UPI via Cashfree' . $channel;
+function cfNormalizeIndianMobile10($raw): ?string {
+    $digits = preg_replace('/\D+/', '', (string)$raw);
+    if (strlen($digits) === 12 && strpos($digits, '91') === 0) {
+        $digits = substr($digits, 2);
+    } elseif (strlen($digits) === 11 && strpos($digits, '0') === 0) {
+        $digits = substr($digits, 1);
     }
-    if (!empty($methodObj['card']) && is_array($methodObj['card'])) {
-        $net = (string)($methodObj['card']['card_network'] ?? 'Credit/Debit');
-        $type = !empty($methodObj['card']['card_type']) ? ' (' . (string)$methodObj['card']['card_type'] . ')' : ' Card';
-        return $net . $type;
+    if (!preg_match('/^[6-9]\d{9}$/', $digits)) {
+        return null;
     }
-    if (!empty($methodObj['netbanking']) && is_array($methodObj['netbanking'])) {
-        $bank = (string)($methodObj['netbanking']['netbanking_bank_name'] ?? 'Bank');
-        return 'Netbanking (' . $bank . ')';
+    return $digits;
+}
+
+function cfSanitizePaymentMethods($raw): string {
+    $allowed = ['cc', 'dc', 'upi', 'nb', 'app', 'emi', 'paylater'];
+    $parts = array_map('trim', explode(',', strtolower((string)$raw)));
+    $valid = [];
+    foreach ($parts as $p) {
+        if (in_array($p, $allowed, true) && !in_array($p, $valid, true)) {
+            $valid[] = $p;
+        }
     }
-    if (!empty($methodObj['app']) && is_array($methodObj['app'])) {
-        $prov = (string)($methodObj['app']['provider'] ?? 'App');
-        return 'Wallet (' . $prov . ')';
+    return !empty($valid) ? implode(',', $valid) : 'upi,cc,dc';
+}
+
+function cfFormatPaymentMethodLabel($methodObj, $paymentGroup = ''): string {
+    $groupLower = strtolower(trim((string)$paymentGroup));
+    if (is_array($methodObj)) {
+        if (!empty($methodObj['upi']) && is_array($methodObj['upi'])) {
+            $rawCh = strtolower(trim((string)($methodObj['upi']['channel'] ?? '')));
+            $map = [
+                'intent' => 'UPI App Intent',
+                'link' => 'UPI App Intent',
+                'qrcode' => 'UPI QR Code',
+                'qr' => 'UPI QR Code',
+                'collect' => 'UPI ID / Collect'
+            ];
+            $suffix = $map[$rawCh] ?? ($rawCh !== '' ? strtoupper($rawCh) : 'Cashfree');
+            return 'UPI (' . $suffix . ')';
+        }
+        if (!empty($methodObj['card']) && is_array($methodObj['card'])) {
+            $rawType = strtolower(trim((string)($methodObj['card']['card_type'] ?? $groupLower)));
+            $typeLabel = strpos($rawType, 'credit') !== false
+                ? 'Credit Card'
+                : (strpos($rawType, 'debit') !== false ? 'Debit Card' : 'Card');
+            $rawNet = trim((string)($methodObj['card']['card_network'] ?? ''));
+            $netLabel = $rawNet !== '' ? ucfirst($rawNet) : '';
+            return $netLabel !== '' ? ($typeLabel . ' (' . $netLabel . ')') : $typeLabel;
+        }
+        if (!empty($methodObj['netbanking']) && is_array($methodObj['netbanking'])) {
+            $bank = (string)($methodObj['netbanking']['netbanking_bank_name'] ?? 'Bank');
+            return 'Netbanking (' . $bank . ')';
+        }
+        if (!empty($methodObj['app']) && is_array($methodObj['app'])) {
+            $prov = (string)($methodObj['app']['provider'] ?? 'App');
+            return 'Wallet (' . $prov . ')';
+        }
     }
+    if ($groupLower === 'credit_card') return 'Credit Card (Cashfree)';
+    if ($groupLower === 'debit_card') return 'Debit Card (Cashfree)';
+    if ($groupLower === 'upi') return 'UPI (Cashfree)';
+    if ($groupLower === 'net_banking' || $groupLower === 'netbanking') return 'Netbanking (Cashfree)';
     return 'Cashfree Online Payment';
 }
 
@@ -230,10 +273,15 @@ function cfResolveValidatedReturnUrl(?string $rawReturnUrl, bool $isLiveHost): a
     }
 
     $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-        || strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https';
+        || strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https'
+        || stripos((string)($_SERVER['HTTP_CF_VISITOR'] ?? ''), '"https"') !== false;
+    $fwdHost = trim(explode(',', (string)($_SERVER['HTTP_X_FORWARDED_HOST'] ?? ''))[0]);
+    $rawHost = $fwdHost !== '' ? $fwdHost : trim((string)($_SERVER['HTTP_HOST'] ?? 'localhost'));
+    $allowedHosts = array_filter(array_unique([
+        vdhNormalizeHostname((string)($_SERVER['HTTP_HOST'] ?? '')),
+        vdhNormalizeHostname($fwdHost)
+    ]));
     $scheme = $isHttps ? 'https' : 'http';
-    $rawHost = trim((string)($_SERVER['HTTP_HOST'] ?? 'localhost'));
-    $reqHostName = vdhNormalizeHostname($rawHost);
     $defaultUrl = $scheme . '://' . $rawHost . '/?view=checkout&cf_order_id={order_id}';
 
     $trimmed = trim((string)($rawReturnUrl ?? ''));
@@ -243,7 +291,7 @@ function cfResolveValidatedReturnUrl(?string $rawReturnUrl, bool $isLiveHost): a
     $parsed = @parse_url($trimmed);
     $rScheme = strtolower((string)($parsed['scheme'] ?? ''));
     $rHost = strtolower((string)($parsed['host'] ?? ''));
-    if (!in_array($rScheme, ['http', 'https'], true) || $rHost === '' || ($reqHostName !== '' && $rHost !== $reqHostName)) {
+    if (!in_array($rScheme, ['http', 'https'], true) || $rHost === '' || (!empty($allowedHosts) && !in_array($rHost, $allowedHosts, true))) {
         return [false, null, 'Invalid returnUrl: must use http(s) and match the active host origin.'];
     }
     return [true, $trimmed, null];
@@ -394,14 +442,24 @@ if ($action === 'create-order' && $method === 'POST') {
         }
     };
 
+    $cleanPhone = cfNormalizeIndianMobile10($body['customerPhone'] ?? ($body['shippingAddress']['phone'] ?? ''));
+    if ($cleanPhone === null) {
+        $cleanupInflight();
+        vdhSendJson(400, [
+            'success' => false,
+            'configured' => true,
+            'code' => 'INVALID_MOBILE_NUMBER',
+            'error' => 'Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.'
+        ]);
+    }
+    $normalizedMethods = cfSanitizePaymentMethods($body['paymentMethods'] ?? 'upi,cc,dc');
+
     try {
-        $rawPhone = preg_replace('/\D+/', '', (string)($body['customerPhone'] ?? ''));
-        $cleanPhone = strlen($rawPhone) >= 10 ? substr($rawPhone, -10) : '9758350524';
         $canonicalHost = $isLiveHost ? cfCanonicalLiveHost() : vdhNormalizeHostname((string)($_SERVER['HTTP_HOST'] ?? 'localhost'));
 
         $orderMeta = [
             'return_url' => $returnUrl,
-            'payment_methods' => $body['paymentMethods'] ?? 'upi,cc,dc,nb'
+            'payment_methods' => $normalizedMethods
         ];
         $candidateNotify = trim((string)($body['notifyUrl'] ?? $creds['notifyUrl']));
         if ($candidateNotify === '' && $isLiveHost) {
@@ -455,7 +513,13 @@ if ($action === 'create-order' && $method === 'POST') {
         }
 
         $isSandbox = ($creds['env'] === 'SANDBOX');
-        $saveResult = vdhWithFileLock('orders', function () use ($dataOrdersFile, $apiOrdersFile, $body, $respData, $rawOrderId, $safeOrderId, $amount, $pricing, $creds, $isSandbox, $resolvedUserId) {
+        $defaultMethodLabel = $normalizedMethods === 'cc'
+            ? 'Credit Card (Cashfree)'
+            : ($normalizedMethods === 'dc'
+                ? 'Debit Card (Cashfree)'
+                : ($normalizedMethods === 'upi' ? 'UPI (Cashfree)' : 'Cashfree Online Payment'));
+
+        $saveResult = vdhWithFileLock('orders', function () use ($dataOrdersFile, $apiOrdersFile, $body, $respData, $rawOrderId, $safeOrderId, $amount, $pricing, $creds, $isSandbox, $resolvedUserId, $cleanPhone, $normalizedMethods, $defaultMethodLabel) {
             $orders = cfReadOrders($dataOrdersFile, $apiOrdersFile);
             [$existingByRaw] = cfFindOrder($orders, $rawOrderId);
             [$existingBySafe] = cfFindOrder($orders, $safeOrderId);
@@ -471,7 +535,7 @@ if ($action === 'create-order' && $method === 'POST') {
                 'userId' => $resolvedUserId,
                 'customerName' => (string)($body['customerName'] ?? ''),
                 'customerEmail' => (string)($body['customerEmail'] ?? ''),
-                'customerPhone' => (string)($body['customerPhone'] ?? ''),
+                'customerPhone' => '+91 ' . $cleanPhone,
                 'shippingAddress' => is_array($body['shippingAddress'] ?? null) ? $body['shippingAddress'] : [],
                 'items' => is_array($body['items'] ?? null) ? $body['items'] : [],
                 'subtotal' => (float)$pricing['subtotal'],
@@ -480,7 +544,8 @@ if ($action === 'create-order' && $method === 'POST') {
                 'totalAmount' => $amount,
                 'total' => $amount,
                 'giftItem' => $body['giftItem'] ?? null,
-                'paymentMethod' => (string)($body['paymentMethod'] ?? 'Cashfree Online Payment'),
+                'paymentMethod' => (string)($body['paymentMethod'] ?? $defaultMethodLabel),
+                'selectedPaymentChannel' => $normalizedMethods,
                 'paymentStatus' => 'pending',
                 'isPaid' => false,
                 'orderStatus' => 'Pending',
@@ -632,12 +697,15 @@ if ($action === 'verify-order' && $method === 'POST') {
         $methodObj = is_array($latestPay['payment_method'] ?? null) ? $latestPay['payment_method'] : [];
         $paymentDetails = [
             'cfPaymentId' => $latestPay['cf_payment_id'] ?? null,
+            'bankReference' => isset($latestPay['bank_reference']) ? (string)$latestPay['bank_reference'] : null,
+            'paymentGroup' => isset($latestPay['payment_group']) ? (string)$latestPay['payment_group'] : null,
             'paymentStatus' => $latestPayStatus,
             'paymentAmount' => $paidAmount,
             'paymentCurrency' => $paidCurrency,
-            'paymentMethod' => cfFormatPaymentMethodLabel($methodObj),
+            'paymentMethod' => cfFormatPaymentMethodLabel($methodObj, $latestPay['payment_group'] ?? ''),
             'cardNetwork' => $methodObj['card']['card_network'] ?? null,
             'cardType' => $methodObj['card']['card_type'] ?? null,
+            'upiChannel' => $methodObj['upi']['channel'] ?? null,
             'paymentTime' => $latestPay['payment_completion_time'] ?? ($latestPay['payment_time'] ?? null),
             'paymentMessage' => $latestPay['payment_message'] ?? null
         ];
@@ -726,6 +794,7 @@ if ($action === 'verify-order' && $method === 'POST') {
                 'createdAt' => $now
             ]);
             $resolvedMethodLabel = $paymentDetails['paymentMethod'] ?? ($base['paymentMethod'] ?? 'Cashfree Online Payment');
+            $bankRef = $paymentDetails['bankReference'] ?? ($base['bankReference'] ?? null);
             $paidOrder = array_merge($base, [
                 'paymentStatus' => 'paid',
                 'isPaid' => true,
@@ -735,6 +804,11 @@ if ($action === 'verify-order' && $method === 'POST') {
                 'cfOrderId' => $ordData['cf_order_id'] ?? ($base['cfOrderId'] ?? null),
                 'cardNetwork' => $paymentDetails['cardNetwork'] ?? ($base['cardNetwork'] ?? null),
                 'cardType' => $paymentDetails['cardType'] ?? ($base['cardType'] ?? null),
+                'bankReference' => $bankRef,
+                'paymentGroup' => $paymentDetails['paymentGroup'] ?? ($base['paymentGroup'] ?? null),
+                'upiReference' => !empty($base['upiReference'])
+                    ? $base['upiReference']
+                    : ((!empty($paymentDetails['upiChannel']) || strtolower((string)($paymentDetails['paymentGroup'] ?? '')) === 'upi') ? (string)($bankRef ?? '') : ''),
                 'verifiedAmount' => $paidAmount,
                 'currency' => $paidCurrency,
                 'paidAt' => $latestPay['payment_completion_time'] ?? ($latestPay['payment_time'] ?? ($base['paidAt'] ?? $now)),
@@ -759,6 +833,9 @@ if ($action === 'verify-order' && $method === 'POST') {
             return [200, array_merge([
                 'success' => true,
                 'isPaid' => true,
+                'isFailed' => false,
+                'isCancelled' => false,
+                'isPending' => false,
                 'orderId' => $safeOrderId,
                 'orderStatus' => $rawStatus,
                 'orderAmount' => $paidAmount,
@@ -766,6 +843,7 @@ if ($action === 'verify-order' && $method === 'POST') {
                 'paymentMethod' => $paidOrder['paymentMethod'],
                 'cardNetwork' => $paidOrder['cardNetwork'],
                 'cardType' => $paidOrder['cardType'],
+                'bankReference' => $paidOrder['bankReference'],
                 'env' => $creds['env'],
                 'mode' => strtolower($creds['env']),
                 'isTestOrder' => $isSandbox,
@@ -774,12 +852,23 @@ if ($action === 'verify-order' && $method === 'POST') {
             ], $canViewFull ? ['receiptToken' => vdhOrderReceiptToken($paidOrder)] : [])];
         }
 
-        $isFailed = $hasPaidStatus || in_array($rawStatus, ['FAILED', 'CANCELLED', 'TERMINATED', 'EXPIRED', 'VOID'], true) || in_array($latestPayStatus, ['FAILED', 'CANCELLED', 'VOID'], true);
+        $isCancelled = !$hasPaidStatus && (in_array($latestPayStatus, ['USER_DROPPED', 'CANCELLED'], true) || in_array($rawStatus, ['USER_DROPPED', 'CANCELLED'], true));
+        $isFailed = $hasPaidStatus || (!$isCancelled && (in_array($rawStatus, ['FAILED', 'TERMINATED', 'EXPIRED', 'VOID'], true) || in_array($latestPayStatus, ['FAILED', 'TERMINATED', 'EXPIRED', 'VOID'], true)));
+        $isPending = !$isFailed && !$isCancelled;
+
         if ($target && $isFailed) {
             $target['paymentStatus'] = 'failed';
             $target['isPaid'] = false;
             $target['orderStatus'] = 'Pending';
-            $target['failureReason'] = $hasPaidStatus ? 'Amount or currency mismatch.' : "Gateway status: $rawStatus";
+            $target['failureReason'] = $hasPaidStatus ? 'Amount or currency mismatch.' : ($paymentDetails['paymentMessage'] ?? "Gateway status: $rawStatus");
+            $target['updatedAt'] = $now;
+            $orders[$idx] = $target;
+            cfWriteOrders($orders, $dataOrdersFile, $apiOrdersFile);
+        } elseif ($target && $isCancelled && ($target['paymentStatus'] ?? '') !== 'paid') {
+            $target['paymentStatus'] = 'pending';
+            $target['isPaid'] = false;
+            $target['orderStatus'] = 'Pending';
+            $target['failureReason'] = 'Payment was cancelled before completion.';
             $target['updatedAt'] = $now;
             $orders[$idx] = $target;
             cfWriteOrders($orders, $dataOrdersFile, $apiOrdersFile);
@@ -795,6 +884,8 @@ if ($action === 'verify-order' && $method === 'POST') {
             'success' => true,
             'isPaid' => false,
             'isFailed' => $isFailed,
+            'isCancelled' => $isCancelled,
+            'isPending' => $isPending,
             'orderId' => $safeOrderId,
             'orderStatus' => $hasPaidStatus ? 'AMOUNT_OR_CURRENCY_MISMATCH' : ($latestPayStatus ?: $rawStatus),
             'cfOrderId' => $ordData['cf_order_id'] ?? null,
@@ -805,6 +896,7 @@ if ($action === 'verify-order' && $method === 'POST') {
             'mode' => strtolower($creds['env']),
             'isTestOrder' => $isSandbox,
             'paymentDetails' => $paymentDetails,
+            'error' => $paymentDetails['paymentMessage'] ?? ($isCancelled ? 'Payment was cancelled before completion. No amount was confirmed.' : ($isFailed ? "Payment $rawStatus" : null)),
             'order' => $target ? ($canViewTarget ? $target : vdhSanitizePublicOrderTracking($target)) : null
         ]];
     });
@@ -874,14 +966,19 @@ if ($action === 'webhook' && $method === 'POST') {
                 cfWriteOrders($orders, $dataOrdersFile, $apiOrdersFile);
                 return [200, ['success' => false, 'rejected' => true, 'isPaid' => false, 'order' => $target]];
             }
-            if (!empty($payObj['payment_method']) && is_array($payObj['payment_method'])) {
-                $target['paymentMethod'] = cfFormatPaymentMethodLabel($payObj['payment_method']);
-                if (!empty($payObj['payment_method']['card'])) {
-                    $target['cardNetwork'] = $payObj['payment_method']['card']['card_network'] ?? ($target['cardNetwork'] ?? null);
-                    $target['cardType'] = $payObj['payment_method']['card']['card_type'] ?? ($target['cardType'] ?? null);
+            $payMethodArr = (!empty($payObj['payment_method']) && is_array($payObj['payment_method'])) ? $payObj['payment_method'] : null;
+            if ($payMethodArr !== null || !empty($payObj['payment_group'])) {
+                $target['paymentMethod'] = cfFormatPaymentMethodLabel($payMethodArr, $payObj['payment_group'] ?? '');
+                if (!empty($payMethodArr['card'])) {
+                    $target['cardNetwork'] = $payMethodArr['card']['card_network'] ?? ($target['cardNetwork'] ?? null);
+                    $target['cardType'] = $payMethodArr['card']['card_type'] ?? ($target['cardType'] ?? null);
                 }
-            } elseif (!empty($payObj['payment_group'])) {
-                $target['paymentMethod'] = 'Cashfree (' . strtoupper((string)$payObj['payment_group']) . ')';
+            }
+            $bankRef = isset($payObj['bank_reference']) ? (string)$payObj['bank_reference'] : ($target['bankReference'] ?? null);
+            $target['bankReference'] = $bankRef;
+            $target['paymentGroup'] = isset($payObj['payment_group']) ? (string)$payObj['payment_group'] : ($target['paymentGroup'] ?? null);
+            if (empty($target['upiReference']) && ($bankRef !== null && $bankRef !== '') && (!empty($payMethodArr['upi']) || strtolower((string)($payObj['payment_group'] ?? '')) === 'upi')) {
+                $target['upiReference'] = $bankRef;
             }
             $target['paymentStatus'] = 'paid';
             $target['isPaid'] = true;
