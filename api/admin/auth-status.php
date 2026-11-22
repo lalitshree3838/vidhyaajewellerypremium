@@ -22,5 +22,10 @@ vdhSendJson(200, [
     'totpRequired' => ((string)$creds['totpSecret'] !== ''),
     'canFirstRunSetup' => (!$creds['hasPasswordAuth']) && (!$liveProd || $admin !== null),
     'isAuthenticatedAdmin' => ($admin !== null),
+    'admin' => $admin ? [
+        'email' => $admin['email'],
+        'role' => 'admin',
+        'name' => $admin['name']
+    ] : null,
     'googleSsoEnabled' => true,
 ]);

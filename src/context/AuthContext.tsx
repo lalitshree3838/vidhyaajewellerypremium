@@ -65,7 +65,6 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const ADMIN_EMAIL = 'anavneeraj2003@gmail.com';
-const ADMIN_SESSION_STORAGE_KEY = 'vidhyaa_admin_token';
 const PATRON_PROFILE_PREFIX = 'vidhyaa_patron_profile_';
 
 const loadPatronProfileFromStorage = (patron: PatronSessionUser): UserProfile => {
@@ -118,13 +117,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   });
   const [isAdminState, setIsAdminState] = useState<boolean>(false);
-  const [adminSessionActive, setAdminSessionActive] = useState<boolean>(() => {
-    try {
-      return Boolean(sessionStorage.getItem(ADMIN_SESSION_STORAGE_KEY) || localStorage.getItem(ADMIN_SESSION_STORAGE_KEY));
-    } catch {
-      return false;
-    }
-  });
+  const [adminSessionActive, setAdminSessionActive] = useState<boolean>(false);
+  const adminSessionActiveRef = useRef<boolean>(false);
+  const adminStatusCheckedRef = useRef<boolean>(false);
   const [adminUser, setAdminUser] = useState<AdminSessionData | null>(null);
   const [lastAdminAuthError, setLastAdminAuthError] = useState<string | null>(null);
   const lastAdminAuthErrorRef = useRef<string | null>(null);
@@ -134,6 +129,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
   const [loading, setLoading] = useState<boolean>(true);
   const exchangeInFlightRef = useRef<{ uid: string; promise: Promise<boolean> } | null>(null);
+
+  const updateAdminSessionState = (active: boolean, userData: AdminSessionData | null) => {
+    adminSessionActiveRef.current = active;
+    setAdminSessionActive(active);
+    setAdminUser(userData);
+  };
 
   useEffect(() => {
     const syncPatronSession = () => {
@@ -152,42 +153,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  // Validate existing stored admin session token on mount
+  // Purge any legacy client-stored admin session tokens and verify HttpOnly cookie session on mount
   useEffect(() => {
-    const verifyStoredAdminSession = async () => {
-      const storedToken = sessionStorage.getItem(ADMIN_SESSION_STORAGE_KEY) || localStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
-      if (!storedToken) return;
+    try {
+      sessionStorage.removeItem('vidhyaa_admin_token');
+      localStorage.removeItem('vidhyaa_admin_token');
+      sessionStorage.removeItem('admin_session_token');
+      localStorage.removeItem('admin_session_token');
+    } catch {}
 
+    const verifyStoredAdminSession = async () => {
       try {
-        const res = await fetch('/api/admin/verify-session', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${storedToken}`
-          },
-          body: JSON.stringify({ token: storedToken })
+        const res = await fetch('/api/admin/auth-status', {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-store'
         });
         if (res.ok) {
-          const data = await res.json();
-          if (data.valid) {
-            setAdminSessionActive(true);
-            setAdminUser({
-              email: data.email || ADMIN_EMAIL,
-              role: 'admin',
-              name: data.name || 'Executive Administrator'
-            });
+          const data = await res.json().catch(() => null);
+          if (data?.isAuthenticatedAdmin) {
+            updateAdminSessionState(
+              true,
+              data.admin || {
+                email: ADMIN_EMAIL,
+                role: 'admin',
+                name: 'Executive Administrator'
+              }
+            );
           } else {
-            sessionStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
-            localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
-            setAdminSessionActive(false);
+            updateAdminSessionState(false, null);
           }
-        } else if (res.status === 401 || res.status === 403) {
-          sessionStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
-          localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
-          setAdminSessionActive(false);
         }
       } catch {
-        // network or offline — preserve stored session until confirmed invalid
+        // Offline / transient network error
+      } finally {
+        adminStatusCheckedRef.current = true;
       }
     };
 
@@ -215,15 +215,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         const res = await fetch('/api/admin/login', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ idToken })
         });
         const data = await res.json().catch(() => null);
-        if (res.ok && data?.success && data?.token) {
-          sessionStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
-          localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
-          setAdminSessionActive(true);
-          setAdminUser(
+        if (res.ok && data?.success) {
+          updateAdminSessionState(
+            true,
             data.admin || {
               email: targetUser.email || ADMIN_EMAIL,
               role: 'admin',
@@ -284,13 +283,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsAdminState(adminEligible);
         setUserProfile(profile);
 
-        if (isOfficialAdmin) {
-          const existingToken =
-            sessionStorage.getItem(ADMIN_SESSION_STORAGE_KEY) ||
-            localStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
-          if (!existingToken) {
-            await exchangeFirebaseAdminToken(currentUser);
-          }
+        if (isOfficialAdmin && !adminSessionActiveRef.current) {
+          await exchangeFirebaseAdminToken(currentUser);
         }
       } else {
         setIsAdminState(false);
@@ -319,10 +313,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     email: string,
     pass: string,
     totpCode?: string
-  ): Promise<{ success: boolean; requires2FA?: boolean; token?: string; admin?: AdminSessionData; error?: string }> => {
+  ): Promise<{ success: boolean; requires2FA?: boolean; admin?: AdminSessionData; error?: string }> => {
     try {
       const res = await fetch('/api/admin/login', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: email.trim(),
@@ -351,15 +346,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { success: false, error: data?.error || 'Authentication failed. Please verify credentials.' };
       }
 
-      if (data?.token) {
-        sessionStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
-        localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
-        setAdminSessionActive(true);
-        setAdminUser(data.admin || { email, role: 'admin', name: 'Executive Administrator' });
-        return { success: true, token: data.token, admin: data.admin };
+      if (data?.success) {
+        const nextAdmin = data.admin || { email, role: 'admin', name: 'Executive Administrator' };
+        updateAdminSessionState(true, nextAdmin);
+        return { success: true, admin: nextAdmin };
       }
 
-      return { success: false, error: 'Failed to obtain session token.' };
+      return { success: false, error: 'Failed to establish authenticated session.' };
     } catch (err: any) {
       return { success: false, error: err.message || 'Unable to connect to authentication gateway.' };
     }
@@ -369,19 +362,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     email: string,
     pass: string,
     confirmPass: string
-  ): Promise<{ success: boolean; token?: string; admin?: AdminSessionData; error?: string }> => {
+  ): Promise<{ success: boolean; admin?: AdminSessionData; error?: string }> => {
     try {
-      const storedToken =
-        sessionStorage.getItem(ADMIN_SESSION_STORAGE_KEY) ||
-        localStorage.getItem(ADMIN_SESSION_STORAGE_KEY) ||
-        '';
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (storedToken) {
-        headers['Authorization'] = `Bearer ${storedToken}`;
-      }
       const res = await fetch('/api/admin/setup-password', {
         method: 'POST',
-        headers,
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: email.trim(),
           password: pass,
@@ -401,40 +387,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { success: false, error: data?.error || 'Failed to configure administrator password.' };
       }
 
-      if (data?.token) {
-        sessionStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
-        localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, data.token);
-        setAdminSessionActive(true);
-        setAdminUser(data.admin || { email, role: 'admin', name: 'Neeraj Chauhan (Owner)' });
-        return { success: true, token: data.token, admin: data.admin };
+      if (data?.success) {
+        const nextAdmin = data.admin || { email, role: 'admin', name: 'Neeraj Chauhan (Owner)' };
+        updateAdminSessionState(true, nextAdmin);
+        return { success: true, admin: nextAdmin };
       }
 
-      return { success: false, error: 'Failed to obtain session token after password setup.' };
+      return { success: false, error: 'Failed to establish administrator session after password setup.' };
     } catch (err: any) {
       return { success: false, error: err.message || 'Unable to connect to setup endpoint.' };
     }
   };
 
   const logoutAdminSession = async () => {
-    const storedToken = sessionStorage.getItem(ADMIN_SESSION_STORAGE_KEY) || localStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
-    if (storedToken) {
-      try {
-        await fetch('/api/admin/logout', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${storedToken}`,
-            'x-admin-token': storedToken
-          }
-        });
-      } catch {}
-    }
-    sessionStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
-    localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
-    sessionStorage.removeItem('admin_session_token');
-    localStorage.removeItem('admin_session_token');
-    setAdminSessionActive(false);
-    setAdminUser(null);
+    try {
+      await fetch('/api/admin/logout', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch {}
+    try {
+      sessionStorage.removeItem('vidhyaa_admin_token');
+      localStorage.removeItem('vidhyaa_admin_token');
+      sessionStorage.removeItem('admin_session_token');
+      localStorage.removeItem('admin_session_token');
+    } catch {}
+    updateAdminSessionState(false, null);
   };
 
   const signInWithGoogle = async (): Promise<User | null> => {

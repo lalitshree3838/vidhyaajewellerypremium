@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Heart, Star, ShoppingBag, Eye, Check, Volume2, VolumeX, Play, Sparkles } from 'lucide-react';
+import { Heart, Star, ShoppingBag, Eye, Check, Sparkles } from 'lucide-react';
 import { Product, ProductVariation } from '../types';
 import { useCart } from '../context/CartContext';
 import { useWishlist } from '../context/WishlistContext';
-import { isGenuineImageUrl, isGenuineProduct, isGenuineVideoUrl } from '../lib/sampleData';
+import { isGenuineProduct, isGenuineVideoUrl } from '../lib/sampleData';
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 import {
   JEWELLERY_PLACEHOLDER_IMAGE,
@@ -11,8 +11,6 @@ import {
   shouldDeferLocalMediaUrl,
   useAvailableMediaInventory
 } from '../lib/storageService';
-import { SeamlessLoopVideo } from './SeamlessLoopVideo';
-import { useResolvedProductVideo } from '../lib/videoFallback';
 
 interface ProductCardProps {
   product: Product;
@@ -88,14 +86,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
   const [imageLoaded, setImageLoaded] = useState<boolean>(() => isInstantImg);
   const [imageError, setImageError] = useState(false);
-  const [videoError, setVideoError] = useState(false);
-  const [isSoundMuted, setIsSoundMuted] = useState(true);
-  const [showVideo, setShowVideo] = useState(true);
-  const resolvedVideo = useResolvedProductVideo(product);
 
   useEffect(() => {
     setImageError(false);
-    setVideoError(false);
     if (!displayImage || displayImage.startsWith('data:image/') || displayImage.startsWith('blob:')) {
       setImageLoaded(true);
       return;
@@ -118,22 +111,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     }
   }, [imageLoaded, displayImage, imageError, hasRealImg, isDeferredLocalImage]);
 
-  const hasVideo = Boolean(
-    product?.videoUrl &&
-      isGenuineVideoUrl(product.videoUrl) &&
-      (!resolvedVideo.ready || resolvedVideo.hasPlayableVideo)
-  );
-  const isDisplayingVideo = hasVideo && resolvedVideo.ready && resolvedVideo.hasPlayableVideo && showVideo && !videoError;
-
-  useEffect(() => {
-    if (!isDisplayingVideo) return;
-    if (hasRealImg) {
-      setImageLoaded(true);
-      return;
-    }
-    const timer = setTimeout(() => setImageLoaded(true), 2500);
-    return () => clearTimeout(timer);
-  }, [isDisplayingVideo, hasRealImg]);
+  const hasVideo = Boolean(product?.videoUrl && isGenuineVideoUrl(product.videoUrl));
 
   if (!isValidProduct) {
     return null;
@@ -185,9 +163,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     setImageError(false);
     setImgIdx(0);
     setRetryCount(0);
-    if (variation.image && isGenuineImageUrl(variation.image)) {
-      setShowVideo(false);
-    }
   };
 
   const handleImgError = () => {
@@ -215,49 +190,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       onClick={() => onSelectProduct(product)}
       className="group bg-white rounded-xl overflow-hidden border border-[#E8DCCF]/70 hover:border-[#D4AF37]/60 hover:shadow-xl transition-all duration-300 flex flex-col cursor-pointer"
     >
-      {/* Image / Video Container with Consistent 4:5 Aspect Ratio & Object-Contain */}
+      {/* Product Image Container with Consistent 4:5 Aspect Ratio & Object-Contain */}
       <div className="relative aspect-[4/5] bg-white overflow-hidden flex items-center justify-center p-3 border-b border-[#F4EBE1]/60">
-        {isDisplayingVideo ? (
-          <div className="relative w-full h-full flex items-center justify-center overflow-hidden bg-white">
-            <SeamlessLoopVideo
-              src={resolvedVideo.videoUrl || product.videoUrl!}
-              fallbackUrls={resolvedVideo.fallbackUrls}
-              poster={hasRealImg && !imageError && displayImage ? displayImage : undefined}
-              title={product.name}
-              autoPlay={true}
-              isMuted={isSoundMuted}
-              enableObserver={true}
-              observerThreshold={0.05}
-              onError={() => {
-                setVideoError(true);
-                setImageLoaded(true);
-              }}
-              onLoadedData={() => setImageLoaded(true)}
-              onCanPlay={() => setImageLoaded(true)}
-              className="w-full h-full object-contain object-center group-hover:scale-105 transition-transform duration-500 ease-out"
-              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-            />
-
-            {/* User-controlled Sound Toggle Button */}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsSoundMuted((prev) => !prev);
-              }}
-              className="absolute top-12 right-3 z-20 w-7 h-7 rounded-full bg-black/60 hover:bg-black/85 backdrop-blur-md text-white border border-white/20 transition-all cursor-pointer shadow-md flex items-center justify-center active:scale-90"
-              style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
-              title={isSoundMuted ? 'Click to Unmute video' : 'Click to Mute video'}
-              aria-label={isSoundMuted ? 'Unmute video audio' : 'Mute video audio'}
-            >
-              {isSoundMuted ? (
-                <VolumeX className="w-3.5 h-3.5 text-white/90" />
-              ) : (
-                <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
-              )}
-            </button>
-          </div>
-        ) : isDeferredLocalImage ? (
+        {isDeferredLocalImage ? (
           <div className="w-full h-full bg-[#FAF7F2] rounded-lg animate-pulse" aria-hidden="true" />
         ) : (
           <>
@@ -302,21 +237,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           )}
         </div>
 
-        {/* Video / Photo Switcher if user switched to variation image */}
-        {hasVideo && !showVideo && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowVideo(true);
-            }}
-            className="absolute top-12 left-3 z-10 bg-black/70 hover:bg-black text-[#DFB982] text-[10px] font-semibold px-2 py-0.5 rounded-md backdrop-blur-xs flex items-center gap-1 shadow cursor-pointer transition-all"
-            title="Resume 360° Video Demonstration"
-          >
-            <Play className="w-2.5 h-2.5 fill-[#DFB982]" />
-            <span>Play Video</span>
-          </button>
-        )}
+        {/* Badges & Wishlist */}
 
         {/* Wishlist Button */}
         <button

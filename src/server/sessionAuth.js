@@ -14,6 +14,7 @@ const ADMIN_TTL_SECONDS = 12 * 3600;
 const PATRON_TTL_SECONDS = 30 * 24 * 3600;
 const RATE_LIMIT_MAX_ATTEMPTS = 5;
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+export const ADMIN_SESSION_COOKIE_NAME = 'vidhyaa_admin_session';
 
 let cachedDotEnv = null;
 let cachedSessionSecret = null;
@@ -351,6 +352,95 @@ export async function verifyFirebaseIdToken(idToken) {
   }
 }
 
+export function parseCookies(req) {
+  const raw = String(req?.headers?.cookie || '');
+  const out = {};
+  if (!raw) return out;
+  for (const part of raw.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim();
+    const val = part.slice(idx + 1).trim();
+    if (!key) continue;
+    try {
+      out[key] = decodeURIComponent(val);
+    } catch {
+      out[key] = val;
+    }
+  }
+  return out;
+}
+
+export function isHttpsRequest(req) {
+  if (req?.socket?.encrypted) return true;
+  const proto = String(req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  if (proto === 'https') return true;
+  if (String(req?.headers?.['x-forwarded-ssl'] || '').toLowerCase() === 'on') return true;
+  return false;
+}
+
+export function isAllowedOriginValue(origin) {
+  const clean = String(origin || '').trim();
+  if (!clean) return false;
+  if (/^https:\/\/(?:www\.)?vidhyaajewellerystudio\.com$/i.test(clean)) return true;
+  if (/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/i.test(clean)) return true;
+  if (/^https:\/\/[a-z0-9-]+\.run\.app$/i.test(clean)) return true;
+  const extra = String(process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return extra.includes(clean);
+}
+
+export function buildAdminSessionCookie(token, req, maxAgeSeconds = ADMIN_TTL_SECONDS) {
+  const https = isHttpsRequest(req);
+  const host = normalizeHostname(req?.headers?.['x-forwarded-host'] || req?.headers?.host || '');
+  const isRunApp = https && /\.run\.app$/i.test(host);
+  const parts = [
+    `${ADMIN_SESSION_COOKIE_NAME}=${encodeURIComponent(String(token || ''))}`,
+    'Path=/',
+    `Max-Age=${Math.max(0, Number(maxAgeSeconds) || 0)}`,
+    'HttpOnly'
+  ];
+  if (https) {
+    parts.push('Secure');
+    if (isRunApp) {
+      parts.push('SameSite=None');
+      parts.push('Partitioned');
+    } else {
+      parts.push('SameSite=Lax');
+    }
+  } else {
+    parts.push('SameSite=Lax');
+  }
+  return parts.join('; ');
+}
+
+export function clearAdminSessionCookie(req) {
+  const https = isHttpsRequest(req);
+  const host = normalizeHostname(req?.headers?.['x-forwarded-host'] || req?.headers?.host || '');
+  const isRunApp = https && /\.run\.app$/i.test(host);
+  const parts = [
+    `${ADMIN_SESSION_COOKIE_NAME}=`,
+    'Path=/',
+    'Max-Age=0',
+    'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+    'HttpOnly'
+  ];
+  if (https) {
+    parts.push('Secure');
+    if (isRunApp) {
+      parts.push('SameSite=None');
+      parts.push('Partitioned');
+    } else {
+      parts.push('SameSite=Lax');
+    }
+  } else {
+    parts.push('SameSite=Lax');
+  }
+  return parts.join('; ');
+}
+
 export function extractTokenFromHeaders(req, customHeader = 'x-admin-token') {
   const hdrVal = String(req.headers?.[customHeader] || '').trim();
   if (hdrVal) return hdrVal;
@@ -358,12 +448,77 @@ export function extractTokenFromHeaders(req, customHeader = 'x-admin-token') {
   if (/^Bearer\s+/i.test(auth)) {
     return auth.replace(/^Bearer\s+/i, '').trim();
   }
+  if (customHeader === 'x-admin-token') {
+    const cookies = parseCookies(req);
+    if (cookies[ADMIN_SESSION_COOKIE_NAME]) {
+      return String(cookies[ADMIN_SESSION_COOKIE_NAME]).trim();
+    }
+  }
   return '';
 }
 
+export function hasExplicitAdminAuthHeader(req) {
+  const hdrVal = String(req?.headers?.['x-admin-token'] || '').trim();
+  if (hdrVal) return true;
+  const auth = String(req?.headers?.authorization || '').trim();
+  return /^Bearer\s+/i.test(auth);
+}
+
+export function verifyCsrfOriginForCookieRequest(req) {
+  const method = String(req?.method || 'GET').toUpperCase();
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    return { ok: true };
+  }
+  const cookies = parseCookies(req);
+  const hasSessionCookie = Boolean(cookies[ADMIN_SESSION_COOKIE_NAME]);
+  if (!hasSessionCookie || hasExplicitAdminAuthHeader(req)) {
+    return { ok: true };
+  }
+
+  const originHeader = String(req?.headers?.origin || '').trim();
+  const refererHeader = String(req?.headers?.referer || '').trim();
+  const secFetchSite = String(req?.headers?.['sec-fetch-site'] || '').trim().toLowerCase();
+
+  let candidateOrigin = originHeader;
+  if (!candidateOrigin && refererHeader) {
+    try {
+      candidateOrigin = new URL(refererHeader).origin;
+    } catch {
+      return { ok: false, error: 'Forbidden: Malformed Referer header on cookie-authenticated request.' };
+    }
+  }
+
+  if (candidateOrigin) {
+    if (isAllowedOriginValue(candidateOrigin)) {
+      return { ok: true };
+    }
+    try {
+      const originHost = normalizeHostname(new URL(candidateOrigin).host);
+      const reqHost = normalizeHostname(req?.headers?.['x-forwarded-host'] || req?.headers?.host || '');
+      if (originHost && reqHost && originHost === reqHost) {
+        return { ok: true };
+      }
+    } catch {}
+    return { ok: false, error: 'Forbidden: Cross-origin state-changing request rejected.' };
+  }
+
+  if (secFetchSite === 'cross-site') {
+    return { ok: false, error: 'Forbidden: Cross-site mutation request rejected.' };
+  }
+
+  return { ok: true };
+}
+
 export async function authenticateAdminRequest(req) {
-  const token = extractTokenFromHeaders(req, 'x-admin-token');
+  const headerToken = String(req?.headers?.['x-admin-token'] || '').trim() ||
+    (/^Bearer\s+/i.test(String(req?.headers?.authorization || ''))
+      ? String(req.headers.authorization).replace(/^Bearer\s+/i, '').trim()
+      : '');
+  const cookieToken = parseCookies(req)[ADMIN_SESSION_COOKIE_NAME] || '';
+  const token = headerToken || cookieToken;
   if (!token) return null;
+
+  const authSource = headerToken ? 'header' : 'cookie';
 
   const session = verifySignedSessionToken(token, 'admin');
   if (session && getAllowedAdminEmails().has(String(session.email || '').toLowerCase())) {
@@ -372,6 +527,7 @@ export async function authenticateAdminRequest(req) {
       role: 'admin',
       name: session.name || 'Executive Administrator',
       authMethod: session.authMethod || 'session',
+      authSource,
       token
     };
   }
@@ -386,6 +542,7 @@ export async function authenticateAdminRequest(req) {
         uid: String(fb.sub),
         name: fb.name || 'Executive Administrator',
         authMethod: 'firebase',
+        authSource,
         token
       };
     }

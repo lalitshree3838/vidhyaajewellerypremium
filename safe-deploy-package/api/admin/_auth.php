@@ -14,6 +14,7 @@ define('VDH_ADMIN_TTL_SECONDS', 43200);   // 12 hours
 define('VDH_PATRON_TTL_SECONDS', 2592000); // 30 days
 define('VDH_RATE_LIMIT_MAX_ATTEMPTS', 5);
 define('VDH_RATE_LIMIT_WINDOW_SECONDS', 900); // 15 minutes
+define('VDH_ADMIN_SESSION_COOKIE', 'vidhyaa_admin_session');
 
 function vdhRootDir(): string {
     return dirname(__DIR__, 2);
@@ -236,39 +237,106 @@ function vdhGetSessionSecret(): string {
     return $secret;
 }
 
-function vdhAllowedCorsOrigin(): string {
-    $origin = trim((string)($_SERVER['HTTP_ORIGIN'] ?? ''));
-    if ($origin === '') return '';
+function vdhIsAllowedOriginValue(string $origin): bool {
+    $clean = trim($origin);
+    if ($clean === '') return false;
 
-    if (preg_match('#^https://(?:www\.)?vidhyaajewellerystudio\.com$#i', $origin)) {
-        return $origin;
+    if (preg_match('#^https://(?:www\.)?vidhyaajewellerystudio\.com$#i', $clean)) {
+        return true;
     }
-    if (preg_match('#^https?://(?:localhost|127\.0\.0\.1)(?::\d+)?$#i', $origin)) {
-        return $origin;
+    if (preg_match('#^https?://(?:localhost|127\.0\.0\.1)(?::\d+)?$#i', $clean)) {
+        return true;
     }
-    if (preg_match('#^https://[a-z0-9-]+\.run\.app$#i', $origin)) {
-        return $origin;
+    if (preg_match('#^https://[a-z0-9-]+\.run\.app$#i', $clean)) {
+        return true;
     }
 
     $extraRaw = vdhEnv('ALLOWED_ORIGINS');
     if ($extraRaw !== '') {
         foreach (explode(',', $extraRaw) as $cand) {
-            if (trim($cand) === $origin) {
-                return $origin;
+            if (trim($cand) === $clean) {
+                return true;
             }
         }
     }
-    return '';
+    return false;
 }
 
-function vdhApplyCorsHeaders(string $methods = 'GET, POST, PUT, DELETE, OPTIONS', string $headers = 'Content-Type, Authorization, x-admin-token, x-customer-token, x-order-token'): void {
+function vdhAllowedCorsOrigin(): string {
+    $origin = trim((string)($_SERVER['HTTP_ORIGIN'] ?? ''));
+    if ($origin === '') return '';
+    return vdhIsAllowedOriginValue($origin) ? $origin : '';
+}
+
+function vdhApplyCorsHeaders(string $methods = 'GET, POST, PUT, DELETE, OPTIONS', string $headers = 'Content-Type, Authorization, x-admin-token, x-customer-token, x-order-token, x-file-name, x-file-type'): void {
     header('Vary: Origin');
     $allowed = vdhAllowedCorsOrigin();
     if ($allowed !== '') {
         header('Access-Control-Allow-Origin: ' . $allowed);
+        header('Access-Control-Allow-Credentials: true');
     }
     header('Access-Control-Allow-Methods: ' . $methods);
     header('Access-Control-Allow-Headers: ' . $headers);
+}
+
+function vdhIsHttpsRequest(): bool {
+    $https = strtolower(trim((string)($_SERVER['HTTPS'] ?? '')));
+    if ($https !== '' && $https !== 'off') return true;
+    if ((int)($_SERVER['SERVER_PORT'] ?? 0) === 443) return true;
+    $fwdProto = strtolower(trim((string)explode(',', (string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0]));
+    if ($fwdProto === 'https') return true;
+    if (strtolower(trim((string)($_SERVER['HTTP_X_FORWARDED_SSL'] ?? ''))) === 'on') return true;
+    return false;
+}
+
+function vdhSetAdminSessionCookie(string $token, int $ttlSeconds = VDH_ADMIN_TTL_SECONDS): void {
+    $https = vdhIsHttpsRequest();
+    $host = vdhNormalizeHostname((string)($_SERVER['HTTP_X_FORWARDED_HOST'] ?? ($_SERVER['HTTP_HOST'] ?? '')));
+    $isRunApp = $https && ($host !== '') && (bool)preg_match('/\.run\.app$/i', $host);
+    $maxAge = max(0, $ttlSeconds);
+    $parts = [
+        VDH_ADMIN_SESSION_COOKIE . '=' . rawurlencode($token),
+        'Path=/',
+        'Max-Age=' . $maxAge,
+        'HttpOnly',
+    ];
+    if ($https) {
+        $parts[] = 'Secure';
+        if ($isRunApp) {
+            $parts[] = 'SameSite=None';
+            $parts[] = 'Partitioned';
+        } else {
+            $parts[] = 'SameSite=Lax';
+        }
+    } else {
+        $parts[] = 'SameSite=Lax';
+    }
+    header('Set-Cookie: ' . implode('; ', $parts), false);
+}
+
+function vdhClearAdminSessionCookie(): void {
+    $https = vdhIsHttpsRequest();
+    $host = vdhNormalizeHostname((string)($_SERVER['HTTP_X_FORWARDED_HOST'] ?? ($_SERVER['HTTP_HOST'] ?? '')));
+    $isRunApp = $https && ($host !== '') && (bool)preg_match('/\.run\.app$/i', $host);
+    $parts = [
+        VDH_ADMIN_SESSION_COOKIE . '=',
+        'Path=/',
+        'Max-Age=0',
+        'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+        'HttpOnly',
+    ];
+    if ($https) {
+        $parts[] = 'Secure';
+        if ($isRunApp) {
+            $parts[] = 'SameSite=None';
+            $parts[] = 'Partitioned';
+        } else {
+            $parts[] = 'SameSite=Lax';
+        }
+    } else {
+        $parts[] = 'SameSite=Lax';
+    }
+    header('Set-Cookie: ' . implode('; ', $parts), false);
 }
 
 function vdhComputePromoDiscount(float $subtotal, string $rawPromo): float {
@@ -488,8 +556,63 @@ function vdhExtractBearerOrHeader(string $customHeaderKey): string {
     return '';
 }
 
+function vdhHasExplicitAdminAuthHeader(): bool {
+    $headers = vdhGetAllHeadersLower();
+    $custom = trim((string)($_SERVER['HTTP_X_ADMIN_TOKEN'] ?? ($headers['x-admin-token'] ?? '')));
+    if ($custom !== '') return true;
+    $auth = trim((string)(
+        $_SERVER['HTTP_AUTHORIZATION']
+        ?? ($_SERVER['REDIRECT_HTTP_AUTHORIZATION']
+        ?? ($headers['authorization'] ?? ''))
+    ));
+    return $auth !== '' && stripos($auth, 'Bearer ') === 0;
+}
+
 function vdhExtractAdminToken(): string {
-    return vdhExtractBearerOrHeader('x-admin-token');
+    $hdr = vdhExtractBearerOrHeader('x-admin-token');
+    if ($hdr !== '') return $hdr;
+    return trim((string)($_COOKIE[VDH_ADMIN_SESSION_COOKIE] ?? ''));
+}
+
+function vdhRequireCsrfSameOrigin(): void {
+    $method = strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET'));
+    if (!in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
+        return;
+    }
+    $cookieToken = trim((string)($_COOKIE[VDH_ADMIN_SESSION_COOKIE] ?? ''));
+    if ($cookieToken === '' || vdhHasExplicitAdminAuthHeader()) {
+        return;
+    }
+
+    $originHeader = trim((string)($_SERVER['HTTP_ORIGIN'] ?? ''));
+    $refererHeader = trim((string)($_SERVER['HTTP_REFERER'] ?? ''));
+    $secFetchSite = strtolower(trim((string)($_SERVER['HTTP_SEC_FETCH_SITE'] ?? '')));
+
+    $candidateOrigin = $originHeader;
+    if ($candidateOrigin === '' && $refererHeader !== '') {
+        $parsed = @parse_url($refererHeader);
+        if (!is_array($parsed) || empty($parsed['scheme']) || empty($parsed['host'])) {
+            vdhSendJson(403, ['success' => false, 'error' => 'Forbidden: Malformed Referer header on cookie-authenticated request.']);
+        }
+        $candidateOrigin = $parsed['scheme'] . '://' . $parsed['host'] . (!empty($parsed['port']) ? ':' . $parsed['port'] : '');
+    }
+
+    if ($candidateOrigin !== '') {
+        if (vdhIsAllowedOriginValue($candidateOrigin)) {
+            return;
+        }
+        $parsedCand = @parse_url($candidateOrigin);
+        $originHost = vdhNormalizeHostname((string)($parsedCand['host'] ?? ''));
+        $reqHost = vdhNormalizeHostname((string)($_SERVER['HTTP_X_FORWARDED_HOST'] ?? ($_SERVER['HTTP_HOST'] ?? '')));
+        if ($originHost !== '' && $reqHost !== '' && $originHost === $reqHost) {
+            return;
+        }
+        vdhSendJson(403, ['success' => false, 'error' => 'Forbidden: Cross-origin state-changing request rejected.']);
+    }
+
+    if ($secFetchSite === 'cross-site') {
+        vdhSendJson(403, ['success' => false, 'error' => 'Forbidden: Cross-site mutation request rejected.']);
+    }
 }
 
 function vdhExtractCustomerToken(): string {
@@ -706,7 +829,10 @@ function vdhAuthenticateAdmin(): ?array {
     return null;
 }
 
-function vdhRequireAdmin(): array {
+function vdhRequireAdmin(bool $enforceCsrf = true): array {
+    if ($enforceCsrf) {
+        vdhRequireCsrfSameOrigin();
+    }
     $admin = vdhAuthenticateAdmin();
     if (!$admin) {
         vdhSendJson(401, [
@@ -1067,15 +1193,19 @@ function vdhLoadAdminCredentialsConfig(): array {
             }
         }
     }
-    $passwordHash = trim((string)($cfg['passwordHash'] ?? ($cfg['adminPasswordHash'] ?? '')));
-    if ($passwordHash === '') $passwordHash = vdhEnv('ADMIN_PASSWORD_HASH');
-    $plainPassword = trim((string)($cfg['password'] ?? ''));
-    if ($plainPassword === '') $plainPassword = vdhEnv('ADMIN_PASSWORD');
-    $totpSecret = trim((string)($cfg['totpSecret'] ?? ''));
-    if ($totpSecret === '' && is_array($cfg['totp'] ?? null)) {
-        $totpSecret = trim((string)($cfg['totp']['secretBase32'] ?? ''));
+    $envPasswordHash = vdhEnv('ADMIN_PASSWORD_HASH');
+    $envPlainPassword = vdhEnv('ADMIN_PASSWORD');
+    $envTotpSecret = vdhEnv('ADMIN_TOTP_SECRET');
+
+    $passwordHash = $envPasswordHash !== '' ? $envPasswordHash : trim((string)($cfg['passwordHash'] ?? ($cfg['adminPasswordHash'] ?? '')));
+    $plainPassword = $envPlainPassword !== '' ? $envPlainPassword : trim((string)($cfg['password'] ?? ''));
+    $totpSecret = $envTotpSecret;
+    if ($totpSecret === '') {
+        $totpSecret = trim((string)($cfg['totpSecret'] ?? ''));
+        if ($totpSecret === '' && is_array($cfg['totp'] ?? null)) {
+            $totpSecret = trim((string)($cfg['totp']['secretBase32'] ?? ''));
+        }
     }
-    if ($totpSecret === '') $totpSecret = vdhEnv('ADMIN_TOTP_SECRET');
     $backupCodes = is_array($cfg['backupCodes'] ?? null) ? $cfg['backupCodes'] : [];
     $backupPepper = trim((string)($cfg['backupPepper'] ?? ''));
     $backupCodeHashes = is_array($cfg['backupCodeHashes'] ?? null) ? $cfg['backupCodeHashes'] : [];
@@ -1088,6 +1218,7 @@ function vdhLoadAdminCredentialsConfig(): array {
         'backupPepper' => $backupPepper,
         'backupCodeHashes' => $backupCodeHashes,
         'sessionSigningSecret' => $sessionSigningSecret,
+        'hasEnvPasswordOverride' => ($envPasswordHash !== '' || $envPlainPassword !== ''),
         'hasPasswordAuth' => ($passwordHash !== '' || $plainPassword !== ''),
     ];
 }

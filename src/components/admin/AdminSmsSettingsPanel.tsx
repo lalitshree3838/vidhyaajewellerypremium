@@ -33,28 +33,12 @@ export const AdminSmsSettingsPanel: React.FC = () => {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
 
-  const getAdminToken = () => {
-    return (
-      sessionStorage.getItem('vidhyaa_admin_token') ||
-      localStorage.getItem('vidhyaa_admin_token') ||
-      ''
-    );
-  };
-
   const fetchStatus = async () => {
     setLoading(true);
     setError(null);
     try {
-      const token = getAdminToken();
-      if (!token) {
-        setLoading(false);
-        return;
-      }
       const res = await fetch('/api/admin/sms-config', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'x-admin-token': token,
-        },
+        credentials: 'include'
       });
       const rawText = await res.text();
       let data: any = null;
@@ -86,16 +70,11 @@ export const AdminSmsSettingsPanel: React.FC = () => {
     setSuccess(null);
 
     try {
-      const token = getAdminToken();
-      if (!token) {
-        throw new Error('Administrator session expired. Please sign in again.');
-      }
       const res = await fetch('/api/admin/sms-config', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-          'x-admin-token': token,
         },
         body: JSON.stringify({
           fast2smsApiKey: fast2smsKey || undefined,
@@ -145,16 +124,11 @@ export const AdminSmsSettingsPanel: React.FC = () => {
     setTestResult(null);
 
     try {
-      const token = getAdminToken();
-      if (!token) {
-        throw new Error('Administrator session expired. Please sign in again.');
-      }
       const res = await fetch('/api/admin/test-sms', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-          'x-admin-token': token,
         },
         body: JSON.stringify({ phoneNumber: clean, mobile: clean }),
       });

@@ -1,17 +1,3 @@
-export function getAdminSessionToken(): string {
-  try {
-    return (
-      sessionStorage.getItem('vidhyaa_admin_token') ||
-      localStorage.getItem('vidhyaa_admin_token') ||
-      sessionStorage.getItem('admin_session_token') ||
-      localStorage.getItem('admin_session_token') ||
-      ''
-    );
-  } catch {
-    return '';
-  }
-}
-
 export interface VideoUploadResult {
   url: string;
   storageType: 'firebase' | 'server';
@@ -133,20 +119,18 @@ export async function uploadJewelleryVideo(
     throw new Error(validation.error || 'Invalid video file.');
   }
 
-  const token = options?.adminToken || getAdminSessionToken();
-  if (!token) {
-    throw new Error('Administrator session expired. Please sign in again before uploading videos.');
-  }
-
-  // Upload to persistent server storage endpoint via XMLHttpRequest with real progress
+  // Upload to persistent server storage endpoint via XMLHttpRequest with HttpOnly admin cookie
   return new Promise<VideoUploadResult>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/videos/upload', true);
+    xhr.withCredentials = true;
 
     xhr.setRequestHeader('x-file-name', encodeURIComponent(file.name));
     xhr.setRequestHeader('x-file-type', file.type || 'video/mp4');
-    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-    xhr.setRequestHeader('x-admin-token', token);
+    if (options?.adminToken) {
+      xhr.setRequestHeader('Authorization', `Bearer ${options.adminToken}`);
+      xhr.setRequestHeader('x-admin-token', options.adminToken);
+    }
 
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable && options?.onProgress) {

@@ -866,12 +866,9 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
               <div
                 key={reel.id}
                 onClick={() => {
-                  if (activeSlide !== idx) {
-                    scrollToSlide(idx);
-                  } else {
-                    setModalPlaying(false);
-                    setModalIdx(idx);
-                  }
+                  scrollToSlide(idx);
+                  setModalPlaying(false);
+                  setModalIdx(idx);
                 }}
                 className={`vidhyaa-reel-card group relative flex-none w-[78vw] sm:w-[280px] lg:w-[285px] aspect-[9/16] snap-center rounded-3xl overflow-hidden cursor-pointer transition-all duration-300 ${
                   isCurrent

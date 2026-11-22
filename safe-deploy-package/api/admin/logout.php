@@ -9,6 +9,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
     exit;
 }
 
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+    vdhSendJson(405, ['success' => false, 'error' => 'Method not allowed.']);
+}
+
+vdhRequireCsrfSameOrigin();
+
 $rawInput = file_get_contents('php://input');
 $data = json_decode((string)$rawInput, true);
 $token = vdhExtractAdminToken();
@@ -20,4 +26,5 @@ if ($token !== '') {
     vdhRevokeSessionToken($token);
 }
 
+vdhClearAdminSessionCookie();
 vdhSendJson(200, ['success' => true]);

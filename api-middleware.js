@@ -41,7 +41,10 @@ import {
   isLiveProductionRequest,
   withResourceLock,
   atomicWriteFileSync,
-  getOutsideSecretsDir
+  getOutsideSecretsDir,
+  buildAdminSessionCookie,
+  clearAdminSessionCookie,
+  verifyCsrfOriginForCookieRequest
 } from './src/server/sessionAuth.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -66,9 +69,11 @@ const DIST_VIDEOS_UPLOAD_DIR = path.resolve(__dirname, 'dist', 'videos', 'upload
 const PRODUCTS_MEDIA_DIR = path.resolve(__dirname, 'products');
 const PRODUCTS_UPLOAD_MEDIA_DIR = path.resolve(__dirname, 'products', 'uploads');
 const DIST_PRODUCTS_MEDIA_DIR = path.resolve(__dirname, 'dist', 'products');
+const DIST_PRODUCTS_UPLOAD_MEDIA_DIR = path.resolve(__dirname, 'dist', 'products', 'uploads');
 const CATEGORIES_MEDIA_DIR = path.resolve(__dirname, 'categories');
 const DIST_CATEGORIES_MEDIA_DIR = path.resolve(__dirname, 'dist', 'categories');
 const MAX_VIDEO_UPLOAD_BYTES = 250 * 1024 * 1024; // 250 MB
+const MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
 const DEFAULT_JSON_BODY_LIMIT_BYTES = 2 * 1024 * 1024; // 2 MB
 const PRODUCT_JSON_BODY_LIMIT_BYTES = 8 * 1024 * 1024; // 8 MB (supports inline image uploads)
 
@@ -219,12 +224,47 @@ function readRawBody(req, maxBytes = MAX_VIDEO_UPLOAD_BYTES) {
   });
 }
 
-function parseMultipartVideo(buffer, contentTypeHeader) {
+function detectImageMagic(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 12) return null;
+  // JPEG
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return { ext: '.jpg', mime: 'image/jpeg' };
+  }
+  // PNG
+  if (
+    buf[0] === 0x89 &&
+    buf[1] === 0x50 &&
+    buf[2] === 0x4e &&
+    buf[3] === 0x47 &&
+    buf[4] === 0x0d &&
+    buf[5] === 0x0a &&
+    buf[6] === 0x1a &&
+    buf[7] === 0x0a
+  ) {
+    return { ext: '.png', mime: 'image/png' };
+  }
+  // WebP: RIFF....WEBP
+  if (
+    buf.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    buf.subarray(8, 12).toString('ascii') === 'WEBP'
+  ) {
+    return { ext: '.webp', mime: 'image/webp' };
+  }
+  // GIF87a / GIF89a
+  const gifSig = buf.subarray(0, 6).toString('ascii');
+  if (gifSig === 'GIF87a' || gifSig === 'GIF89a') {
+    return { ext: '.gif', mime: 'image/gif' };
+  }
+  return null;
+}
+
+function parseMultipartFiles(buffer, contentTypeHeader) {
   const boundaryMatch = /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(contentTypeHeader || '');
-  if (!boundaryMatch) return null;
+  if (!boundaryMatch) return [];
   const boundary = boundaryMatch[1] || boundaryMatch[2];
   const boundaryBuf = Buffer.from(`--${boundary}`);
   const headerSep = Buffer.from('\r\n\r\n');
+  const files = [];
 
   let pos = buffer.indexOf(boundaryBuf);
   while (pos !== -1) {
@@ -247,16 +287,26 @@ function parseMultipartVideo(buffer, contentTypeHeader) {
           bodyEnd -= 2;
         }
         const typeMatch = /Content-Type:\s*([^\r\n;]+)/i.exec(headersText);
-        return {
-          fileName: filenameMatch[1] || 'video.mp4',
-          mimeType: (typeMatch && typeMatch[1].trim()) || 'video/mp4',
+        files.push({
+          fileName: filenameMatch[1] || 'upload.bin',
+          mimeType: (typeMatch && typeMatch[1].trim()) || 'application/octet-stream',
           data: buffer.subarray(bodyStart, bodyEnd)
-        };
+        });
       }
     }
     pos = nextBoundary;
   }
-  return null;
+  return files;
+}
+
+function parseMultipartVideo(buffer, contentTypeHeader) {
+  const files = parseMultipartFiles(buffer, contentTypeHeader);
+  if (files.length === 0) return null;
+  return {
+    fileName: files[0].fileName || 'video.mp4',
+    mimeType: files[0].mimeType === 'application/octet-stream' ? 'video/mp4' : files[0].mimeType,
+    data: files[0].data
+  };
 }
 
 function getAllowedCorsOrigin(req) {
@@ -283,7 +333,7 @@ function getAllowedCorsOrigin(req) {
   return '';
 }
 
-function sendJson(res, statusCode, data, req = res?.__vdhReq || res?.req) {
+function sendJson(res, statusCode, data, req = res?.__vdhReq || res?.req, extraHeaders = {}) {
   const jsonStr = JSON.stringify(data);
   const allowedOrigin = getAllowedCorsOrigin(req);
   const headers = {
@@ -293,10 +343,12 @@ function sendJson(res, statusCode, data, req = res?.__vdhReq || res?.req) {
     'Pragma': 'no-cache',
     'Vary': 'Origin',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-file-name, x-file-type, x-admin-token, x-customer-token, x-order-token'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-file-name, x-file-type, x-admin-token, x-customer-token, x-order-token',
+    ...extraHeaders
   };
   if (allowedOrigin) {
     headers['Access-Control-Allow-Origin'] = allowedOrigin;
+    headers['Access-Control-Allow-Credentials'] = 'true';
   }
   res.writeHead(statusCode, headers);
   res.end(jsonStr);
@@ -825,6 +877,7 @@ export function handleApiMiddleware(req, res, next) {
     };
     if (allowedOrigin) {
       optHeaders['Access-Control-Allow-Origin'] = allowedOrigin;
+      optHeaders['Access-Control-Allow-Credentials'] = 'true';
     }
     res.writeHead(204, optHeaders);
     res.end();
@@ -856,12 +909,18 @@ export function handleApiMiddleware(req, res, next) {
           totpRequired: Boolean(creds.totpSecret),
           canFirstRunSetup: !creds.hasPasswordAuth && (!liveProd || Boolean(admin)),
           isAuthenticatedAdmin: Boolean(admin),
+          admin: admin ? { email: admin.email, role: 'admin', name: admin.name || 'Executive Administrator' } : null,
           googleSsoEnabled: true
         });
       }
 
       // 2c. Admin Password Setup (one-time bootstrap in preview, or verified Google Admin in any env)
       if ((pathname === '/api/admin/setup-password' || pathname === '/api/admin/setup-password.php') && req.method === 'POST') {
+        const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+        if (!csrfCheck.ok) {
+          return sendJson(res, 403, { success: false, error: csrfCheck.error });
+        }
+
         const rlKey = `admin_setup:${clientIp}`;
         const rl = checkRateLimit(rlKey);
         if (!rl.allowed) {
@@ -948,11 +1007,18 @@ export function handleApiMiddleware(req, res, next) {
             name: admin?.name || 'Neeraj Chauhan (Owner)'
           };
           const token = signAdminToken(email, { name: adminInfo.name, authMethod: 'password_setup' });
-          return sendJson(res, 200, {
-            success: true,
-            token,
-            admin: adminInfo
-          });
+          return sendJson(
+            res,
+            200,
+            {
+              success: true,
+              authenticated: true,
+              expiresIn: 12 * 3600,
+              admin: adminInfo
+            },
+            req,
+            { 'Set-Cookie': buildAdminSessionCookie(token, req) }
+          );
         });
       }
 
@@ -997,11 +1063,18 @@ export function handleApiMiddleware(req, res, next) {
             name: String(fb.name || 'Neeraj Chauhan (Owner)')
           };
           const token = signAdminToken(fbEmail, { name: adminInfo.name, authMethod: 'firebase' });
-          return sendJson(res, 200, {
-            success: true,
-            token,
-            admin: adminInfo
-          });
+          return sendJson(
+            res,
+            200,
+            {
+              success: true,
+              authenticated: true,
+              expiresIn: 12 * 3600,
+              admin: adminInfo
+            },
+            req,
+            { 'Set-Cookie': buildAdminSessionCookie(token, req) }
+          );
         }
 
         const email = String(body.email || '').trim().toLowerCase();
@@ -1096,11 +1169,18 @@ export function handleApiMiddleware(req, res, next) {
           name: 'Neeraj Chauhan (Owner)'
         };
         const token = signAdminToken(email, { name: adminInfo.name, authMethod: 'password' });
-        return sendJson(res, 200, {
-          success: true,
-          token,
-          admin: adminInfo
-        });
+        return sendJson(
+          res,
+          200,
+          {
+            success: true,
+            authenticated: true,
+            expiresIn: 12 * 3600,
+            admin: adminInfo
+          },
+          req,
+          { 'Set-Cookie': buildAdminSessionCookie(token, req) }
+        );
       }
 
       // 4. Admin Verify Session: POST/GET /api/admin/verify-session or /api/admin/verify-session.php
@@ -1148,11 +1228,15 @@ export function handleApiMiddleware(req, res, next) {
 
       // 5. Admin Logout: POST /api/admin/logout or /api/admin/logout.php
       if ((pathname === '/api/admin/logout' || pathname === '/api/admin/logout.php') && req.method === 'POST') {
+        const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+        if (!csrfCheck.ok) {
+          return sendJson(res, 403, { success: false, error: csrfCheck.error });
+        }
         const token = extractTokenFromHeaders(req, 'x-admin-token');
         if (token) {
           revokeSessionToken(token);
         }
-        return sendJson(res, 200, { success: true });
+        return sendJson(res, 200, { success: true }, req, { 'Set-Cookie': clearAdminSessionCookie(req) });
       }
 
       // 6. Customer Mobile Registration: POST /api/auth/mobile-register
@@ -1311,6 +1395,10 @@ export function handleApiMiddleware(req, res, next) {
               error: 'Unauthorized: Administrator authentication required to modify catalog products.'
             });
           }
+          const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+          if (!csrfCheck.ok) {
+            return sendJson(res, 403, { success: false, error: csrfCheck.error });
+          }
         }
 
         if (req.method === 'POST' || req.method === 'PUT') {
@@ -1461,6 +1549,10 @@ export function handleApiMiddleware(req, res, next) {
               success: false,
               error: 'Unauthorized: Manual payment confirmation requires an administrator session.'
             });
+          }
+          const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+          if (!csrfCheck.ok) {
+            return sendJson(res, 403, { success: false, error: csrfCheck.error });
           }
           const id = decodeURIComponent(pathname.replace('/api/orders/', '').replace('/confirm-payment', ''));
           return await withResourceLock('orders', async () => {
@@ -1645,6 +1737,10 @@ export function handleApiMiddleware(req, res, next) {
               error: 'Unauthorized: Administrator session required to update order status.'
             });
           }
+          const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+          if (!csrfCheck.ok) {
+            return sendJson(res, 403, { success: false, error: csrfCheck.error });
+          }
 
           const id = decodeURIComponent(pathname.replace('/api/orders/', ''));
           const updates = await parseBody(req);
@@ -1704,6 +1800,10 @@ export function handleApiMiddleware(req, res, next) {
           return sendJson(res, 200, getCashfreeStatusSummary(req));
         }
         if (req.method === 'POST') {
+          const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+          if (!csrfCheck.ok) {
+            return sendJson(res, 403, { success: false, error: csrfCheck.error });
+          }
           const body = await parseBody(req);
           if (body?.__tooLarge) {
             return sendJson(res, 413, { success: false, error: 'Configuration payload exceeds maximum allowed size.' });
@@ -2453,6 +2553,10 @@ export function handleApiMiddleware(req, res, next) {
             error: 'Unauthorized: Administrator session required.'
           });
         }
+        const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+        if (!csrfCheck.ok) {
+          return sendJson(res, 403, { success: false, error: csrfCheck.error });
+        }
         const dummyOrder = {
           id: 'test_order_001',
           orderNumber: 'VDH-TEST-001',
@@ -2493,6 +2597,10 @@ export function handleApiMiddleware(req, res, next) {
           return sendJson(res, 200, readSmsConfigSafe().summary);
         }
         if (req.method === 'POST') {
+          const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+          if (!csrfCheck.ok) {
+            return sendJson(res, 403, { success: false, error: csrfCheck.error });
+          }
           const body = await parseBody(req);
           if (!body || typeof body !== 'object') {
             return sendJson(res, 400, { success: false, error: 'Invalid SMS config payload.' });
@@ -2529,6 +2637,10 @@ export function handleApiMiddleware(req, res, next) {
             success: false,
             error: 'Unauthorized: Administrator session required.'
           });
+        }
+        const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+        if (!csrfCheck.ok) {
+          return sendJson(res, 403, { success: false, error: csrfCheck.error });
         }
         const cfg = readSmsConfigSafe().raw;
         const body = await parseBody(req);
@@ -2575,43 +2687,162 @@ export function handleApiMiddleware(req, res, next) {
       }
 
       // 11c. Read-only inventory of existing image assets on disk in /products and /categories
-      if (pathname === '/api/media/available' && req.method === 'GET') {
+      if ((pathname === '/api/media/available' || pathname === '/api/media/available.php') && req.method === 'GET') {
         const productImages = new Set();
         const categoryImages = new Set();
         const imgExtRe = /\.(?:jpg|jpeg|png|webp|gif|avif|svg)$/i;
 
-        for (const dir of [PRODUCTS_MEDIA_DIR, DIST_PRODUCTS_MEDIA_DIR]) {
-          if (fs.existsSync(dir)) {
-            for (const entry of fs.readdirSync(dir)) {
-              const full = path.join(dir, entry);
-              if (imgExtRe.test(entry) && fs.statSync(full).isFile()) {
-                productImages.add(`/products/${entry}`);
-              }
+        const scanDirSafe = (dirPath, urlPrefix, targetSet) => {
+          try {
+            if (!fs.existsSync(dirPath)) return;
+            for (const entry of fs.readdirSync(dirPath)) {
+              try {
+                const full = path.join(dirPath, entry);
+                if (imgExtRe.test(entry) && fs.statSync(full).isFile()) {
+                  targetSet.add(`${urlPrefix}${entry}`);
+                }
+              } catch {}
             }
-          }
-        }
-        if (fs.existsSync(PRODUCTS_UPLOAD_MEDIA_DIR)) {
-          for (const entry of fs.readdirSync(PRODUCTS_UPLOAD_MEDIA_DIR)) {
-            const full = path.join(PRODUCTS_UPLOAD_MEDIA_DIR, entry);
-            if (imgExtRe.test(entry) && fs.statSync(full).isFile()) {
-              productImages.add(`/products/uploads/${entry}`);
-            }
-          }
-        }
-        for (const dir of [CATEGORIES_MEDIA_DIR, DIST_CATEGORIES_MEDIA_DIR]) {
-          if (fs.existsSync(dir)) {
-            for (const entry of fs.readdirSync(dir)) {
-              const full = path.join(dir, entry);
-              if (imgExtRe.test(entry) && fs.statSync(full).isFile()) {
-                categoryImages.add(`/categories/${entry}`);
-              }
-            }
-          }
-        }
+          } catch {}
+        };
+
+        scanDirSafe(PRODUCTS_MEDIA_DIR, '/products/', productImages);
+        scanDirSafe(DIST_PRODUCTS_MEDIA_DIR, '/products/', productImages);
+        scanDirSafe(PRODUCTS_UPLOAD_MEDIA_DIR, '/products/uploads/', productImages);
+        scanDirSafe(DIST_PRODUCTS_UPLOAD_MEDIA_DIR, '/products/uploads/', productImages);
+        scanDirSafe(CATEGORIES_MEDIA_DIR, '/categories/', categoryImages);
+        scanDirSafe(DIST_CATEGORIES_MEDIA_DIR, '/categories/', categoryImages);
+
         return sendJson(res, 200, {
           success: true,
           productImages: Array.from(productImages).sort(),
           categoryImages: Array.from(categoryImages).sort()
+        });
+      }
+
+      // 11d. Persistent Product Image Upload: POST /api/media/upload or /api/media/upload.php
+      if ((pathname === '/api/media/upload' || pathname === '/api/media/upload.php') && req.method === 'POST') {
+        const admin = await authenticateAdminRequest(req);
+        if (!admin) {
+          return sendJson(res, 401, {
+            success: false,
+            error: 'Unauthorized: Administrator session required for product image uploads.'
+          });
+        }
+        const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+        if (!csrfCheck.ok) {
+          return sendJson(res, 403, { success: false, error: csrfCheck.error });
+        }
+
+        let rawBuffer;
+        try {
+          rawBuffer = await readRawBody(req, MAX_IMAGE_UPLOAD_BYTES * 5);
+        } catch (err) {
+          return sendJson(res, err?.statusCode || 413, {
+            success: false,
+            error: err?.message || 'Uploaded image payload exceeds size limit (10 MB per image).'
+          });
+        }
+
+        if (!rawBuffer || rawBuffer.length === 0) {
+          return sendJson(res, 400, {
+            success: false,
+            error: 'Empty image payload received. Please upload a valid JPG, PNG, WebP, or GIF image.'
+          });
+        }
+
+        const contentType = String(req.headers['content-type'] || '').toLowerCase();
+        let incomingFiles = [];
+
+        if (contentType.includes('multipart/form-data')) {
+          const parsedFiles = parseMultipartFiles(rawBuffer, String(req.headers['content-type'] || ''));
+          if (parsedFiles.length === 0) {
+            return sendJson(res, 400, {
+              success: false,
+              error: 'No image file field found in multipart/form-data upload.'
+            });
+          }
+          incomingFiles = parsedFiles;
+        } else {
+          const headerName = req.headers['x-file-name'] ? decodeURIComponent(String(req.headers['x-file-name'])) : '';
+          incomingFiles = [
+            {
+              fileName: headerName || `prod_image_${Date.now()}.jpg`,
+              mimeType: String(req.headers['x-file-type'] || contentType || 'application/octet-stream').split(';')[0].trim(),
+              data: rawBuffer
+            }
+          ];
+        }
+
+        fs.mkdirSync(PRODUCTS_UPLOAD_MEDIA_DIR, { recursive: true });
+        const distExists = fs.existsSync(path.resolve(__dirname, 'dist'));
+        if (distExists) {
+          try {
+            fs.mkdirSync(DIST_PRODUCTS_UPLOAD_MEDIA_DIR, { recursive: true });
+          } catch {}
+        }
+
+        const savedFiles = [];
+        for (const item of incomingFiles) {
+          if (!item.data || item.data.length === 0) {
+            return sendJson(res, 400, {
+              success: false,
+              error: `Uploaded file "${item.fileName}" is empty.`
+            });
+          }
+          if (item.data.length > MAX_IMAGE_UPLOAD_BYTES) {
+            return sendJson(res, 413, {
+              success: false,
+              error: `Image "${item.fileName}" exceeds the 10 MB per-image maximum size limit.`
+            });
+          }
+
+          const magic = detectImageMagic(item.data);
+          if (!magic) {
+            return sendJson(res, 400, {
+              success: false,
+              error: `Invalid image file "${item.fileName}". Only verified binary JPEG, PNG, WebP, or GIF images are permitted.`
+            });
+          }
+
+          const cleanBase = path.basename(item.fileName || 'jewellery', path.extname(item.fileName || ''))
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '_')
+            .replace(/^_+|_+$/g, '')
+            .slice(0, 48) || 'jewellery';
+
+          const finalFileName = `prod_${cleanBase}_${Date.now()}_${crypto.randomBytes(3).toString('hex')}${magic.ext}`;
+          const destPath = path.join(PRODUCTS_UPLOAD_MEDIA_DIR, finalFileName);
+          if (!destPath.startsWith(PRODUCTS_UPLOAD_MEDIA_DIR + path.sep)) {
+            return sendJson(res, 400, { success: false, error: 'Invalid upload path.' });
+          }
+
+          fs.writeFileSync(destPath, item.data);
+          if (distExists) {
+            try {
+              fs.writeFileSync(path.join(DIST_PRODUCTS_UPLOAD_MEDIA_DIR, finalFileName), item.data);
+            } catch {}
+          }
+
+          const publicUrl = `/products/uploads/${finalFileName}`;
+          savedFiles.push({
+            url: publicUrl,
+            fileName: finalFileName,
+            originalName: item.fileName,
+            sizeBytes: item.data.length,
+            mimeType: magic.mime
+          });
+        }
+
+        return sendJson(res, 200, {
+          success: true,
+          url: savedFiles[0].url,
+          urls: savedFiles.map((f) => f.url),
+          files: savedFiles,
+          fileName: savedFiles[0].fileName,
+          sizeBytes: savedFiles[0].sizeBytes,
+          mimeType: savedFiles[0].mimeType,
+          storageType: 'server'
         });
       }
 
@@ -2623,6 +2854,10 @@ export function handleApiMiddleware(req, res, next) {
             success: false,
             error: 'Unauthorized: Administrator session token required for video uploads.'
           });
+        }
+        const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+        if (!csrfCheck.ok) {
+          return sendJson(res, 403, { success: false, error: csrfCheck.error });
         }
 
         let rawBuffer;

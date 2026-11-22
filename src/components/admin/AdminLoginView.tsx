@@ -89,22 +89,21 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
   // Query server authentication status on mount
   const refreshAuthCapabilities = async () => {
     try {
-      const res = await fetch('/api/admin/auth-status');
+      const res = await fetch('/api/admin/auth-status', {
+        credentials: 'include',
+        cache: 'no-store'
+      });
       if (!res.ok) {
         setAuthCapabilities({ loaded: true, passwordConfigured: true, canFirstRunSetup: false });
         return;
       }
       const data = await res.json().catch(() => null);
       if (data && typeof data.passwordConfigured === 'boolean') {
-        const nextCaps = {
+        setAuthCapabilities({
           loaded: true,
           passwordConfigured: Boolean(data.passwordConfigured),
           canFirstRunSetup: Boolean(data.canFirstRunSetup)
-        };
-        setAuthCapabilities(nextCaps);
-        if (!nextCaps.passwordConfigured && nextCaps.canFirstRunSetup) {
-          setSetupMode(true);
-        }
+        });
       }
     } catch {
       setAuthCapabilities({ loaded: true, passwordConfigured: true, canFirstRunSetup: false });

@@ -13,6 +13,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
     vdhSendJson(405, ['success' => false, 'error' => 'Method not allowed.']);
 }
 
+vdhRequireCsrfSameOrigin();
+
 $clientIp = trim((string)($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
 $rlKey = "admin_setup:{$clientIp}";
 $rl = vdhCheckRateLimit($rlKey);
@@ -150,10 +152,16 @@ $result = vdhWithFileLock('admin_creds', function () use ($data, $rlKey) {
 
     return [200, [
         'success' => true,
-        'token' => $token,
+        'authenticated' => true,
         'expiresIn' => VDH_ADMIN_TTL_SECONDS,
-        'admin' => $adminInfo
+        'admin' => $adminInfo,
+        '_cookieToken' => $token
     ]];
 });
+
+if (!empty($result[1]['_cookieToken'])) {
+    vdhSetAdminSessionCookie((string)$result[1]['_cookieToken'], VDH_ADMIN_TTL_SECONDS);
+    unset($result[1]['_cookieToken']);
+}
 
 vdhSendJson($result[0], $result[1]);

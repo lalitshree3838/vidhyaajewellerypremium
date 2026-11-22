@@ -59,9 +59,10 @@ if ($idToken !== '') {
         'authMethod' => 'firebase'
     ], VDH_ADMIN_TTL_SECONDS);
 
+    vdhSetAdminSessionCookie($token, VDH_ADMIN_TTL_SECONDS);
     vdhSendJson(200, [
         'success' => true,
-        'token' => $token,
+        'authenticated' => true,
         'expiresIn' => VDH_ADMIN_TTL_SECONDS,
         'admin' => $adminInfo
     ]);
@@ -168,9 +169,10 @@ $token = vdhSignSessionToken([
     'authMethod' => 'password'
 ], VDH_ADMIN_TTL_SECONDS);
 
+vdhSetAdminSessionCookie($token, VDH_ADMIN_TTL_SECONDS);
 vdhSendJson(200, [
     'success' => true,
-    'token' => $token,
+    'authenticated' => true,
     'expiresIn' => VDH_ADMIN_TTL_SECONDS,
     'admin' => $adminInfo
 ]);

@@ -1118,19 +1118,6 @@ export async function fetchProductById(id: string): Promise<Product | null> {
   return fallback || null;
 }
 
-function getAdminAuthToken(): string {
-  try {
-    return (
-      (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('vidhyaa_admin_token') : null) ||
-      (typeof localStorage !== 'undefined' ? localStorage.getItem('vidhyaa_admin_token') : null) ||
-      (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('admin_session_token') : null) ||
-      (typeof localStorage !== 'undefined' ? localStorage.getItem('admin_session_token') : null) ||
-      ''
-    );
-  } catch {
-    return '';
-  }
-}
 
 export async function getCustomerAuthToken(): Promise<string> {
   try {
@@ -1195,53 +1182,84 @@ export async function saveProduct(product: Product): Promise<Product> {
   }
   unmarkProductDeleted(sanitized.id);
 
-  let firestoreSuccess = false;
-  let firestoreError: any = null;
-
-  // 1. Persist directly to individual Firestore document /products/{id}
-  try {
-    await setDoc(doc(db, PRODUCTS_COL, sanitized.id), sanitized);
-    firestoreSuccess = true;
-    console.log(`[Firestore] Product "${sanitized.name}" (${sanitized.id}) saved successfully.`);
-  } catch (error: any) {
-    firestoreError = error;
-    console.error('[Firestore] Error saving product to Firestore:', error);
-  }
-
-  // 2. Persist to server REST API /api/products as a reliable backup
+  // 1. Persist authoritatively to server REST API /api/products (via HttpOnly admin cookie)
   let serverSuccess = false;
+  let serverAuthError: string | null = null;
+  let serverError: string | null = null;
+  let finalSavedProduct: Product = sanitized;
+
   try {
     if (typeof fetch !== 'undefined') {
-      const adminToken = getAdminAuthToken();
-      if (adminToken) {
-        const resp = await fetch('/api/products', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${adminToken}`,
-            'x-admin-token': adminToken
-          },
-          body: JSON.stringify({ product: sanitized })
-        }).catch(() => null);
+      const resp = await fetch('/api/products', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ product: sanitized })
+      });
 
-        if (resp && resp.ok) {
-          serverSuccess = true;
-          console.log(`[Server] Product "${sanitized.name}" (${sanitized.id}) saved to server store.`);
+      const rawText = await resp.text();
+      let data: any = null;
+      try {
+        data = rawText ? JSON.parse(rawText) : null;
+      } catch {
+        data = null;
+      }
+
+      if (resp.status === 401 || resp.status === 403) {
+        serverAuthError = data?.error || 'Administrator session expired or unauthorized. Please sign in again.';
+      } else if (resp.ok) {
+        serverSuccess = true;
+        if (data?.product && typeof data.product === 'object') {
+          finalSavedProduct = sanitizeProductForFirestore(__mergeProductMedia(data.product as Product, sanitized));
         }
+        console.log(`[Server] Product "${finalSavedProduct.name}" (${finalSavedProduct.id}) saved to server store.`);
+      } else {
+        serverError = data?.error || `Server rejected product save (HTTP ${resp.status}).`;
       }
     }
-  } catch (serverErr) {
+  } catch (serverErr: any) {
+    serverError = serverErr?.message || 'Unable to reach product catalog server.';
     console.warn('[Server] Notice saving product to server endpoint:', serverErr);
   }
 
-  // 3. Update local memory, IndexedDB (awaited), and compact localStorage cache
-  const updatedCatalog = [...existingCatalog];
-  const index = updatedCatalog.findIndex((p) => p.id === sanitized.id);
-  if (index !== -1) {
-    updatedCatalog[index] = sanitized;
-  } else {
-    updatedCatalog.unshift(sanitized);
+  // Never allow a rejected server write (401/403/4xx/5xx) to be masked as success
+  if (serverAuthError) {
+    throw new Error(serverAuthError);
   }
+  if (!serverSuccess && serverError) {
+    throw new Error(serverError);
+  }
+
+  // 2. Mirror to Firestore document /products/{id} (best-effort when server succeeded; required fallback only if server fetch unavailable)
+  let firestoreSuccess = false;
+  let firestoreError: any = null;
+  try {
+    await setDoc(doc(db, PRODUCTS_COL, finalSavedProduct.id), finalSavedProduct);
+    firestoreSuccess = true;
+    console.log(`[Firestore] Product "${finalSavedProduct.name}" (${finalSavedProduct.id}) synced successfully.`);
+  } catch (error: any) {
+    firestoreError = error;
+    console.warn('[Firestore] Notice mirroring product to Firestore:', error);
+  }
+
+  if (!serverSuccess && !firestoreSuccess) {
+    if (firestoreError) {
+      handleFirestoreError(firestoreError, OperationType.WRITE, `${PRODUCTS_COL}/${sanitized.id}`);
+    }
+    throw new Error('Failed to persist product changes to server catalog or Firestore.');
+  }
+
+  // 3. Update local memory, IndexedDB (awaited), and compact localStorage cache ONLY after remote persistence succeeded
+  const updatedCatalog = [...existingCatalog];
+  const index = updatedCatalog.findIndex((p) => p.id === finalSavedProduct.id);
+  if (index !== -1) {
+    updatedCatalog[index] = finalSavedProduct;
+  } else {
+    updatedCatalog.unshift(finalSavedProduct);
+  }
+  __vidhyaaMemProducts = updatedCatalog;
   saveCachedProducts(updatedCatalog);
   await saveProductsToIdb(updatedCatalog);
   invalidateMediaInventoryCache();
@@ -1250,52 +1268,61 @@ export async function saveProduct(product: Product): Promise<Product> {
     window.dispatchEvent(new CustomEvent('vidhyaa_products_updated', { detail: updatedCatalog }));
   }
 
-  // Report or throw Firestore errors only if both Firestore and server persistence failed
-  if (!firestoreSuccess) {
-    if (serverSuccess || updatedCatalog.length > 0) {
-      console.warn(`[Firestore Warning] Firestore write delayed (${firestoreError?.message || 'offline/quota'}). Product preserved in server and local store.`);
-    } else if (firestoreError) {
-      handleFirestoreError(firestoreError, OperationType.WRITE, `${PRODUCTS_COL}/${sanitized.id}`);
-    } else {
-      throw new Error('Failed to confirm product save to database.');
-    }
+  if (!firestoreSuccess && serverSuccess) {
+    console.warn(`[Firestore Notice] Firestore sync deferred (${firestoreError?.message || 'offline/quota'}). Product persisted authoritatively on server.`);
   }
 
-  return sanitized;
+  return finalSavedProduct;
 }
 
 export async function deleteProduct(productId: string): Promise<void> {
-  // Update local cache and persistent deletion list
-  markProductDeleted(productId);
-  const updated = getCachedProducts().filter((p) => p.id !== productId);
-  __vidhyaaMemProducts = updated;
-  saveCachedProducts(updated);
+  let serverAuthError: string | null = null;
+  let serverDeleteOk = false;
 
-  // 1. Delete from Firestore document
-  try {
-    await deleteDoc(doc(db, PRODUCTS_COL, productId));
-    console.log(`[Firestore] Product "${productId}" deleted successfully.`);
-  } catch (error) {
-    console.warn('[Firestore] Notice deleting product from Firestore:', error);
-  }
-
-  // 2. Delete from server REST API
+  // 1. Delete from server REST API first via HttpOnly admin cookie
   try {
     if (typeof fetch !== 'undefined') {
-      const adminToken = getAdminAuthToken();
-      if (adminToken) {
-        await fetch(`/api/products/${encodeURIComponent(productId)}`, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${adminToken}`,
-            'x-admin-token': adminToken
-          }
-        }).catch(() => null);
+      const resp = await fetch(`/api/products/${encodeURIComponent(productId)}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      }).catch(() => null);
+      if (resp) {
+        if (resp.status === 401 || resp.status === 403) {
+          const data = await resp.json().catch(() => null);
+          serverAuthError = data?.error || 'Administrator session expired or unauthorized. Please sign in again.';
+        } else if (resp.ok) {
+          serverDeleteOk = true;
+        }
       }
     }
   } catch (serverErr) {
     console.warn('[Server] Notice deleting product from server endpoint:', serverErr);
   }
+
+  if (serverAuthError) {
+    throw new Error(serverAuthError);
+  }
+
+  // 2. Delete from Firestore document
+  let firestoreDeleteOk = false;
+  try {
+    await deleteDoc(doc(db, PRODUCTS_COL, productId));
+    firestoreDeleteOk = true;
+    console.log(`[Firestore] Product "${productId}" deleted successfully.`);
+  } catch (error) {
+    console.warn('[Firestore] Notice deleting product from Firestore:', error);
+  }
+
+  if (!serverDeleteOk && !firestoreDeleteOk) {
+    throw new Error('Failed to confirm product deletion on server.');
+  }
+
+  // 3. Update local cache and persistent deletion list
+  markProductDeleted(productId);
+  const updated = getCachedProducts().filter((p) => p.id !== productId);
+  __vidhyaaMemProducts = updated;
+  saveCachedProducts(updated);
+  await saveProductsToIdb(updated);
 
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('vidhyaa_products_updated', { detail: updated }));
@@ -1759,15 +1786,12 @@ export async function createOrder(orderData: Omit<Order, 'id'>, preferredId?: st
   try {
     if (typeof fetch !== 'undefined') {
       const customerToken = await getCustomerAuthToken();
-      const adminToken = getAdminAuthToken();
-      const authToken = customerToken || adminToken;
       const resp = await fetch('/api/orders', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-          ...(customerToken ? { 'x-customer-token': customerToken } : {}),
-          ...(adminToken ? { 'x-admin-token': adminToken } : {})
+          ...(customerToken ? { Authorization: `Bearer ${customerToken}`, 'x-customer-token': customerToken } : {})
         },
         body: JSON.stringify(stripUndefinedDeep(persistedOrder))
       });
@@ -1833,17 +1857,19 @@ export async function fetchOrderById(orderId: string): Promise<Order | null> {
 
   try {
     if (typeof fetch !== 'undefined') {
-      const adminToken = getAdminAuthToken();
       const customerToken = await getCustomerAuthToken();
       const receiptToken = getOrderReceiptToken(cleanId);
-      const authToken = adminToken || customerToken;
       const headers: Record<string, string> = {};
-      if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
-      if (adminToken) headers['x-admin-token'] = adminToken;
-      if (customerToken) headers['x-customer-token'] = customerToken;
+      if (customerToken) {
+        headers['Authorization'] = `Bearer ${customerToken}`;
+        headers['x-customer-token'] = customerToken;
+      }
       if (receiptToken) headers['x-order-token'] = receiptToken;
 
-      const resp = await fetch(`/api/orders/${encodeURIComponent(cleanId)}`, { headers });
+      const resp = await fetch(`/api/orders/${encodeURIComponent(cleanId)}`, {
+        credentials: 'include',
+        headers
+      });
       if (resp && resp.ok) {
         const data = await resp.json();
         if (data && (data.id || data.orderNumber)) {
@@ -1897,15 +1923,15 @@ export async function fetchOrdersByUserId(
       if (cleanPhoneDigits) params.set('phone', cleanPhoneDigits);
 
       const customerToken = await getCustomerAuthToken();
-      const adminToken = getAdminAuthToken();
-      const authToken = customerToken || adminToken;
-      if (authToken) {
+      if (customerToken || cleanUid || cleanEmail || cleanPhoneDigits) {
         const resp = await fetch(`/api/orders?${params.toString()}`, {
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-            ...(customerToken ? { 'x-customer-token': customerToken } : {}),
-            ...(adminToken ? { 'x-admin-token': adminToken } : {})
-          }
+          credentials: 'include',
+          headers: customerToken
+            ? {
+                Authorization: `Bearer ${customerToken}`,
+                'x-customer-token': customerToken
+              }
+            : {}
         });
         if (resp && resp.ok) {
           const data = await resp.json();
@@ -1974,17 +2000,11 @@ export async function fetchAllOrders(): Promise<Order[]> {
   let serverOrders: any[] = [];
   try {
     if (typeof fetch !== 'undefined') {
-      const adminToken = getAdminAuthToken();
-      if (adminToken) {
-        const resp = await fetch('/api/orders', {
-          headers: {
-            Authorization: `Bearer ${adminToken}`,
-            'x-admin-token': adminToken
-          }
-        });
-        if (resp && resp.ok) {
-          serverOrders = await resp.json();
-        }
+      const resp = await fetch('/api/orders', {
+        credentials: 'include'
+      });
+      if (resp && resp.ok) {
+        serverOrders = await resp.json();
       }
     }
   } catch {}
@@ -2072,18 +2092,14 @@ export async function updateOrderStatus(
 
   try {
     if (typeof fetch !== 'undefined') {
-      const adminToken = getAdminAuthToken();
-      if (adminToken) {
-        await fetch(`/api/orders/${encodeURIComponent(orderId)}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${adminToken}`,
-            'x-admin-token': adminToken
-          },
-          body: JSON.stringify(stripUndefinedDeep({ orderStatus: status, trackingNumber, courierName }))
-        });
-      }
+      await fetch(`/api/orders/${encodeURIComponent(orderId)}`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(stripUndefinedDeep({ orderStatus: status, trackingNumber, courierName }))
+      });
     }
   } catch {}
 
@@ -2102,19 +2118,13 @@ export async function updateOrderStatus(
 }
 
 export async function confirmOrderPaymentAdmin(orderId: string): Promise<Order | null> {
-  const adminToken = getAdminAuthToken();
-  if (!adminToken) {
-    return null;
-  }
-
   let updatedOrder: Order | null = null;
   try {
     const resp = await fetch(`/api/orders/${encodeURIComponent(orderId)}/confirm-payment`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${adminToken}`,
-        'x-admin-token': adminToken
+        'Content-Type': 'application/json'
       }
     });
     if (resp.ok) {

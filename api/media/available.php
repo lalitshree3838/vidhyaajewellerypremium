@@ -20,16 +20,21 @@ $imgExtRegex = '/\.(jpg|jpeg|png|webp|gif|avif|svg)$/i';
 
 $scanDirImages = static function (string $dir, string $urlPrefix) use ($imgExtRegex): array {
     $found = [];
-    if (!is_dir($dir)) return $found;
-    $entries = @scandir($dir);
-    if (!is_array($entries)) return $found;
-    foreach ($entries as $entry) {
-        if ($entry === '.' || $entry === '..') continue;
-        $full = $dir . '/' . $entry;
-        if (!is_file($full)) continue;
-        if (preg_match($imgExtRegex, $entry)) {
-            $found[$urlPrefix . $entry] = true;
+    try {
+        if (!vdhIsPathPermittedByOpenBasedir($dir)) return $found;
+        if (!@is_dir($dir)) return $found;
+        $entries = @scandir($dir);
+        if (!is_array($entries)) return $found;
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') continue;
+            $full = $dir . '/' . $entry;
+            if (!vdhIsPathPermittedByOpenBasedir($full) || !@is_file($full)) continue;
+            if (preg_match($imgExtRegex, $entry)) {
+                $found[$urlPrefix . $entry] = true;
+            }
         }
+    } catch (\Throwable $e) {
+        return $found;
     }
     return $found;
 };
@@ -37,7 +42,8 @@ $scanDirImages = static function (string $dir, string $urlPrefix) use ($imgExtRe
 $productImagesMap = array_merge(
     $scanDirImages($rootDir . '/products', '/products/'),
     $scanDirImages($rootDir . '/dist/products', '/products/'),
-    $scanDirImages($rootDir . '/products/uploads', '/products/uploads/')
+    $scanDirImages($rootDir . '/products/uploads', '/products/uploads/'),
+    $scanDirImages($rootDir . '/dist/products/uploads', '/products/uploads/')
 );
 
 $categoryImagesMap = array_merge(
@@ -50,9 +56,8 @@ $categoryImages = array_keys($categoryImagesMap);
 sort($productImages);
 sort($categoryImages);
 
-echo json_encode([
+vdhSendJson(200, [
     'success' => true,
     'productImages' => $productImages,
     'categoryImages' => $categoryImages
-], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-exit;
+]);

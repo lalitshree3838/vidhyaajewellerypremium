@@ -17,6 +17,7 @@ export interface MediaInventory {
 
 let cachedMediaInventory: MediaInventory | null = null;
 let inflightMediaPromise: Promise<MediaInventory> | null = null;
+const sessionUploadedProductImages = new Set<string>();
 
 export function normalizeImageUrl(url?: string | null): string {
   if (!url || typeof url !== 'string') return '';
@@ -34,14 +35,23 @@ export function normalizeImageUrl(url?: string | null): string {
 }
 
 function hasInMediaSet(set: Set<string>, url: string): boolean {
-  if (set.has(url)) return true;
+  if (set.has(url) || sessionUploadedProductImages.has(url)) return true;
   const noQuery = url.split(/[?#]/)[0];
-  if (set.has(noQuery)) return true;
+  if (set.has(noQuery) || sessionUploadedProductImages.has(noQuery)) return true;
   try {
     const decoded = decodeURIComponent(noQuery);
-    if (set.has(decoded)) return true;
+    if (set.has(decoded) || sessionUploadedProductImages.has(decoded)) return true;
   } catch {}
   return false;
+}
+
+export function addUploadedProductImageToCache(url?: string | null): void {
+  const normalized = normalizeImageUrl(url);
+  if (!normalized) return;
+  sessionUploadedProductImages.add(normalized);
+  if (cachedMediaInventory) {
+    cachedMediaInventory.productImages.add(normalized);
+  }
 }
 
 export function invalidateMediaInventoryCache(): void {
@@ -169,6 +179,12 @@ export function resolveSafeProductImageUrl(
   }
 
   if (normalized.startsWith('/products/')) {
+    if (sessionUploadedProductImages.has(normalized)) {
+      return normalized;
+    }
+    if (!normalized.startsWith('/products/uploads/') && inventory?.checked && !inventory?.ready) {
+      return JEWELLERY_PLACEHOLDER_IMAGE;
+    }
     if (inventory?.ready && !hasInMediaSet(inventory.productImages, normalized)) {
       return JEWELLERY_PLACEHOLDER_IMAGE;
     }
@@ -316,15 +332,67 @@ export async function compressImageToDataUrl(
 }
 
 /**
- * Uploads a product image directly to Firebase Cloud Storage, returning a persistent
- * public download URL. If Cloud Storage bucket is not yet activated/provisioned in GCP
- * (e.g. 404 storage/unknown), it seamlessly returns an optimized self-contained data URL
- * so the image survives static deployment on Hostinger without missing assets or 404s.
+ * Uploads a product image persistently to server storage (/api/media/upload -> /products/uploads/...)
+ * using HttpOnly admin session cookies. Falls back to Firebase Storage or compressed data URL
+ * ONLY when running purely client-side without a server media endpoint.
  */
 export async function uploadProductImageToStorage(
   file: File,
   productTitle?: string
 ): Promise<string> {
+  if (!file) {
+    throw new Error('Please choose an image file to upload.');
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    throw new Error(`Image "${file.name}" exceeds the 10 MB maximum file size.`);
+  }
+
+  // 1. Primary path: persistent server media endpoint (/products/uploads/...)
+  try {
+    const formData = new FormData();
+    formData.append('image', file, file.name);
+    if (productTitle) {
+      formData.append('productTitle', productTitle);
+    }
+
+    const res = await fetch('/api/media/upload', {
+      method: 'POST',
+      credentials: 'include',
+      body: formData
+    });
+
+    const rawText = await res.text();
+    let data: any = null;
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      data = null;
+    }
+
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(data?.error || 'Administrator session expired or unauthorized. Please sign in again before uploading images.');
+    }
+    if (res.status === 400 || res.status === 413 || res.status === 415) {
+      throw new Error(data?.error || `Image upload rejected (${res.status}). Only valid JPG, PNG, WebP, or GIF images up to 10 MB are accepted.`);
+    }
+
+    if (res.ok && data?.success && data?.url) {
+      const normalizedUrl = normalizeImageUrl(String(data.url));
+      addUploadedProductImageToCache(normalizedUrl);
+      return normalizedUrl;
+    }
+
+    if (res.status !== 404) {
+      throw new Error(data?.error || `Failed to save uploaded image (HTTP ${res.status}).`);
+    }
+  } catch (err: any) {
+    const msg = String(err?.message || '');
+    if (/unauthorized|session expired|rejected|unsupported|exceeds|10 mb|invalid image|forbidden/i.test(msg)) {
+      throw err;
+    }
+  }
+
+  // 2. Secondary fallback (Firebase Storage or compressed Data URL only if server route unavailable)
   try {
     const cleanFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
     const timestamp = Date.now();
@@ -341,14 +409,21 @@ export async function uploadProductImageToStorage(
 
     const snapshot = await uploadBytes(storageRef, file, metadata);
     const downloadUrl = await getDownloadURL(snapshot.ref);
-    console.log('[Storage] Image uploaded successfully to Firebase Cloud Storage:', downloadUrl);
+    addUploadedProductImageToCache(downloadUrl);
     return downloadUrl;
-  } catch (storageError: any) {
-    console.warn(
-      '[Storage Notice] Firebase Cloud Storage upload not available (status 404 / bucket unprovisioned). Generating persistent, optimized embedded data URL for Firestore:',
-      storageError?.message || storageError
-    );
-    // Reliable fallback: optimized compressed data URL embedded directly into Firestore product document
+  } catch {
     return await compressImageToDataUrl(file);
   }
+}
+
+export async function uploadMultipleProductImages(
+  files: File[],
+  productTitle?: string
+): Promise<string[]> {
+  const uploaded: string[] = [];
+  for (const file of files) {
+    const url = await uploadProductImageToStorage(file, productTitle);
+    if (url) uploaded.push(url);
+  }
+  return uploaded;
 }

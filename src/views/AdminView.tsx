@@ -81,6 +81,7 @@ import {
   hasRenderableProductImage,
   resolveSafeProductImageUrl,
   uploadProductImageToStorage,
+  uploadMultipleProductImages,
   useAvailableMediaInventory
 } from '../lib/storageService';
 
@@ -304,16 +305,18 @@ export const AdminView: React.FC<AdminViewProps> = ({
   const [saveProductSuccess, setSaveProductSuccess] = useState<string | null>(null);
   const [imageUrlInput, setImageUrlInput] = useState('');
   
-  // Dedicated Image Upload State (Only "Upload Image" & "Add Image")
+  // Dedicated Image Upload State (Supports multi-image selection & per-variation upload)
   const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const [selectedFileForUpload, setSelectedFileForUpload] = useState<{
-    file: File;
-    previewUrl: string;
-    base64: string;
-    name: string;
-    size: number;
-  } | null>(null);
+  const [selectedFilesForUpload, setSelectedFilesForUpload] = useState<
+    Array<{
+      file: File;
+      previewUrl: string;
+      name: string;
+      size: number;
+    }>
+  >([]);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadingVariationIdx, setUploadingVariationIdx] = useState<number | null>(null);
   const [imageUploadStatus, setImageUploadStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Category Modal State
@@ -458,9 +461,12 @@ export const AdminView: React.FC<AdminViewProps> = ({
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
+    selectedFilesForUpload.forEach((item) => {
+      try { URL.revokeObjectURL(item.previewUrl); } catch {}
+    });
     setEditingProduct(newProd);
     setIsCreatingNewProduct(true);
-    setSelectedFileForUpload(null);
+    setSelectedFilesForUpload([]);
     setImageUploadStatus(null);
     setSaveProductError(null);
     setSaveProductSuccess(null);
@@ -470,9 +476,12 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
   const handleEditProduct = (prod: Product) => {
     // Deep clone product to prevent mutation of existing state
+    selectedFilesForUpload.forEach((item) => {
+      try { URL.revokeObjectURL(item.previewUrl); } catch {}
+    });
     setEditingProduct(JSON.parse(JSON.stringify(prod)));
     setIsCreatingNewProduct(false);
-    setSelectedFileForUpload(null);
+    setSelectedFilesForUpload([]);
     setImageUploadStatus(null);
     setSaveProductError(null);
     setSaveProductSuccess(null);
@@ -525,32 +534,41 @@ export const AdminView: React.FC<AdminViewProps> = ({
       let productImages = [...(editingProduct.images || [])];
       let variationsList = [...(editingProduct.variations || [])];
 
-      // 5. Automatically upload and attach selected file if user picked a photo
-      if (selectedFileForUpload) {
+      // 5. Automatically upload all queued selected files if user picked photos
+      if (selectedFilesForUpload.length > 0) {
         setImageUploadStatus({
           type: 'success',
-          message: 'Uploading image to Firebase Storage...'
+          message: `Uploading ${selectedFilesForUpload.length} selected ${selectedFilesForUpload.length === 1 ? 'image' : 'images'} to server storage...`
         });
 
         try {
-          const uploadedUrl = await uploadProductImageToStorage(
-            selectedFileForUpload.file,
+          const uploadedUrls = await uploadMultipleProductImages(
+            selectedFilesForUpload.map((item) => item.file),
             editingProduct.name.trim()
           );
 
-          if (uploadedUrl) {
-            if (!productImages.includes(uploadedUrl)) {
-              productImages.unshift(uploadedUrl); // Prepend so it becomes primary
+          uploadedUrls.forEach((uploadedUrl) => {
+            if (uploadedUrl && !productImages.includes(uploadedUrl)) {
+              productImages.push(uploadedUrl);
             }
-            if (variationsList.length > 0) {
-              variationsList[0] = { ...variationsList[0], image: uploadedUrl };
-            }
-            if (selectedFileForUpload.previewUrl) {
-              URL.revokeObjectURL(selectedFileForUpload.previewUrl);
-            }
-            setSelectedFileForUpload(null);
-            if (fileInputRef.current) fileInputRef.current.value = '';
-          }
+          });
+
+          selectedFilesForUpload.forEach((item) => {
+            try { URL.revokeObjectURL(item.previewUrl); } catch {}
+          });
+          setSelectedFilesForUpload([]);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          // Sync uploaded URLs into form state immediately so they are never lost if saveProduct fails
+          setEditingProduct((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  images: productImages,
+                  _strippedImg: undefined,
+                  _imagesCleared: undefined
+                }
+              : prev
+          );
         } catch (uploadErr: any) {
           console.warn('[AdminView] Image upload error during product save:', uploadErr);
           setSaveProductError('Image upload failed: ' + (uploadErr?.message || String(uploadErr)));
@@ -559,7 +577,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
         }
       }
 
-      // Guarantee primary variation points to primary product image
+      // Only populate primary variation image if empty — never clobber distinct variation photos
       if (productImages.length > 0 && variationsList.length > 0) {
         if (!variationsList[0].image || variationsList[0].image.trim() === '') {
           variationsList[0] = { ...variationsList[0], image: productImages[0] };
@@ -601,7 +619,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
         updatedAt: new Date().toISOString()
       };
 
-      // Save directly to the exact Firestore 'products' collection
+      // Save authoritatively to backend server catalog & Firestore
       const saved = await saveProduct(updated);
 
       setLocalProducts((prev) => {
@@ -615,19 +633,22 @@ export const AdminView: React.FC<AdminViewProps> = ({
       });
 
       setSaveProductSuccess(`✓ Product "${saved.name}" successfully saved and published!`);
+      setAdminNotice({ type: 'success', text: `Product "${saved.name}" saved to catalog.` });
 
-      // Refresh parent database data
-      await onRefreshData();
+      await onRefreshData().catch((refreshErr) => {
+        console.warn('[AdminView] Post-save catalog refresh notice:', refreshErr);
+      });
 
-      // Close modal after confirmation so admin sees backend confirmed
+      // Close modal cleanly while keeping the user inside Products management
       setTimeout(() => {
         setEditingProduct(null);
         setIsCreatingNewProduct(false);
         setSaveProductSuccess(null);
-      }, 1000);
+        setImageUploadStatus(null);
+      }, 600);
     } catch (e: any) {
       console.error('Failed to save product in AdminView:', e);
-      setSaveProductError('Failed to save product to database: ' + (e?.message || String(e)));
+      setSaveProductError(e?.message || 'Failed to save product to database.');
     } finally {
       setSavingProduct(false);
     }
@@ -741,70 +762,74 @@ export const AdminView: React.FC<AdminViewProps> = ({
   };
 
   // -------------------------------------------------------------
-  // Dedicated Product Image Handlers (Upload Image & Add Image)
+  // Dedicated Product Image Handlers (Multi-image & Variation Upload)
   // -------------------------------------------------------------
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
 
     setImageUploadStatus(null);
 
-    // Validate image format: JPG, JPEG, PNG, WEBP
-    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    const ext = file.name.split('.').pop()?.toLowerCase();
-    const validExts = ['jpg', 'jpeg', 'png', 'webp'];
+    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
+    const validExts = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
+    const accepted: Array<{ file: File; previewUrl: string; name: string; size: number }> = [];
+    const errors: string[] = [];
 
-    if (!validTypes.includes(file.type) && (!ext || !validExts.includes(ext))) {
-      setImageUploadStatus({
-        type: 'error',
-        message: 'Unsupported format. Please select a JPG, JPEG, PNG, or WebP photo.'
-      });
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    // Size limit (25MB)
-    if (file.size > 25 * 1024 * 1024) {
-      setImageUploadStatus({
-        type: 'error',
-        message: 'File size exceeds 25MB limit. Please choose a smaller photo.'
-      });
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = reader.result as string;
-      if (selectedFileForUpload?.previewUrl) {
-        URL.revokeObjectURL(selectedFileForUpload.previewUrl);
+    for (const file of files) {
+      const ext = file.name.split('.').pop()?.toLowerCase() || '';
+      if (!validTypes.includes(file.type) && !validExts.includes(ext)) {
+        errors.push(`"${file.name}" has an unsupported format (use JPG, PNG, WebP, or GIF).`);
+        continue;
       }
-      setSelectedFileForUpload({
+      if (file.size > 10 * 1024 * 1024) {
+        errors.push(`"${file.name}" exceeds the 10 MB per-image limit.`);
+        continue;
+      }
+      accepted.push({
         file,
         previewUrl: URL.createObjectURL(file),
-        base64,
         name: file.name,
         size: file.size
       });
-      setImageUploadStatus({
-        type: 'success',
-        message: `Photo selected: "${file.name}" (${(file.size / 1024).toFixed(1)} KB). Click "Add Image" to save it to this product.`
-      });
-    };
-    reader.onerror = () => {
+    }
+
+    if (fileInputRef.current) fileInputRef.current.value = '';
+
+    if (accepted.length === 0) {
       setImageUploadStatus({
         type: 'error',
-        message: 'Failed to read selected image file. Please try again.'
+        message: errors[0] || 'Please select valid JPG, PNG, WebP, or GIF images (max 10 MB each).'
       });
-    };
-    reader.readAsDataURL(file);
+      return;
+    }
+
+    setSelectedFilesForUpload((prev) => [...prev, ...accepted]);
+    setImageUploadStatus({
+      type: errors.length > 0 ? 'error' : 'success',
+      message:
+        errors.length > 0
+          ? `${accepted.length} image(s) queued; skipped invalid file: ${errors[0]}`
+          : `${accepted.length} ${accepted.length === 1 ? 'photo' : 'photos'} selected. Click "Add Image" below to upload & attach to this product gallery.`
+    });
   };
 
-  const handleClearSelectedFile = () => {
-    if (selectedFileForUpload?.previewUrl) {
-      URL.revokeObjectURL(selectedFileForUpload.previewUrl);
-    }
-    setSelectedFileForUpload(null);
+  const handleRemoveQueuedFile = (index: number) => {
+    setSelectedFilesForUpload((prev) => {
+      const target = prev[index];
+      if (target?.previewUrl) {
+        try { URL.revokeObjectURL(target.previewUrl); } catch {}
+      }
+      const next = prev.filter((_, i) => i !== index);
+      if (next.length === 0) setImageUploadStatus(null);
+      return next;
+    });
+  };
+
+  const handleClearSelectedFiles = () => {
+    selectedFilesForUpload.forEach((item) => {
+      try { URL.revokeObjectURL(item.previewUrl); } catch {}
+    });
+    setSelectedFilesForUpload([]);
     setImageUploadStatus(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -812,10 +837,10 @@ export const AdminView: React.FC<AdminViewProps> = ({
   const handleAddImageToProduct = async () => {
     if (!editingProduct) return;
 
-    if (!selectedFileForUpload) {
+    if (selectedFilesForUpload.length === 0) {
       setImageUploadStatus({
         type: 'error',
-        message: 'Please click "Upload Image" first to select a photo from your gallery or computer.'
+        message: 'Please click "Upload Image" first to select one or more photos from your device.'
       });
       return;
     }
@@ -824,19 +849,22 @@ export const AdminView: React.FC<AdminViewProps> = ({
     setImageUploadStatus(null);
 
     try {
-      // Upload directly to persistent Firebase Cloud Storage (with optimized data URI fallback)
-      const uploadedUrl = await uploadProductImageToStorage(
-        selectedFileForUpload.file,
+      const uploadedUrls = await uploadMultipleProductImages(
+        selectedFilesForUpload.map((item) => item.file),
         editingProduct.name
       );
 
-      // Add to product images
-      const updatedImages = [...(editingProduct.images || []), uploadedUrl];
+      const updatedImages = [...(editingProduct.images || [])];
+      uploadedUrls.forEach((url) => {
+        if (url && !updatedImages.includes(url)) {
+          updatedImages.push(url);
+        }
+      });
 
-      // Always synchronize primary variation image with the uploaded image if it's primary or empty
+      const primaryUploadedUrl = uploadedUrls[0] || updatedImages[0] || '';
       const updatedVariations = (editingProduct.variations || []).map((v, idx) => {
-        if (idx === 0) {
-          return { ...v, image: uploadedUrl };
+        if (idx === 0 && (!v.image || v.image.trim() === '') && primaryUploadedUrl) {
+          return { ...v, image: primaryUploadedUrl };
         }
         return v;
       });
@@ -854,40 +882,79 @@ export const AdminView: React.FC<AdminViewProps> = ({
             hexCode: '#D4AF37',
             sku: `VDH-${Date.now()}`,
             stock: editingProduct.stock || 5,
-            image: uploadedUrl,
+            image: primaryUploadedUrl,
             active: true
           }
         ]
       });
 
-      // Clear pending selection
-      if (selectedFileForUpload.previewUrl) {
-        URL.revokeObjectURL(selectedFileForUpload.previewUrl);
-      }
-      setSelectedFileForUpload(null);
+      const uploadedCount = uploadedUrls.length;
+      selectedFilesForUpload.forEach((item) => {
+        try { URL.revokeObjectURL(item.previewUrl); } catch {}
+      });
+      setSelectedFilesForUpload([]);
       if (fileInputRef.current) fileInputRef.current.value = '';
 
       setImageUploadStatus({
         type: 'success',
-        message: `✓ Image "${selectedFileForUpload.name}" attached permanently and added to product gallery! Click "Save Jewellery Product" to record your changes.`
+        message: `✓ ${uploadedCount} ${uploadedCount === 1 ? 'image' : 'images'} uploaded and attached to product gallery! Click "${isCreatingNewProduct ? 'Save New Product' : 'Save Changes'}" to save product.`
       });
     } catch (err: any) {
       console.error('Image attachment failed:', err);
       setImageUploadStatus({
         type: 'error',
-        message: `Upload Failed: ${err.message || 'Could not process image. Please try again.'}`
+        message: `Upload Failed: ${err.message || 'Could not upload image(s). Please try again.'}`
       });
     } finally {
       setUploadingImage(false);
     }
   };
 
+  const handleUploadVariationImage = async (variationIndex: number, file?: File) => {
+    if (!editingProduct || !file) return;
+    setUploadingVariationIdx(variationIndex);
+    setSaveProductError(null);
+    setImageUploadStatus(null);
+    try {
+      const uploadedUrl = await uploadProductImageToStorage(
+        file,
+        `${editingProduct.name} - ${editingProduct.variations[variationIndex]?.name || 'Variation'}`
+      );
+      const nextImages = [...(editingProduct.images || [])];
+      if (!nextImages.includes(uploadedUrl)) {
+        nextImages.push(uploadedUrl);
+      }
+      const nextVars = editingProduct.variations.map((v, i) =>
+        i === variationIndex ? { ...v, image: uploadedUrl } : v
+      );
+      setEditingProduct({
+        ...editingProduct,
+        images: nextImages,
+        _strippedImg: undefined,
+        _imagesCleared: undefined,
+        variations: nextVars
+      });
+      setImageUploadStatus({
+        type: 'success',
+        message: `✓ Uploaded variation photo for "${editingProduct.variations[variationIndex]?.name || `Finish #${variationIndex + 1}`}".`
+      });
+    } catch (err: any) {
+      setImageUploadStatus({
+        type: 'error',
+        message: `Variation image upload failed: ${err?.message || 'Unable to upload variation image.'}`
+      });
+    } finally {
+      setUploadingVariationIdx(null);
+    }
+  };
+
   const handleRemoveImageFromProduct = (index: number) => {
     if (!editingProduct) return;
+    const removedUrl = editingProduct.images[index] || '';
     const imgs = editingProduct.images.filter((_, i) => i !== index);
     const newPrimary = imgs[0] || '';
     const updatedVariations = (editingProduct.variations || []).map((v, i) => {
-      if (i === 0) {
+      if (i === 0 && (!v.image || v.image === removedUrl)) {
         return { ...v, image: newPrimary };
       }
       return v;
@@ -2594,7 +2661,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
           <div className="animate-fadeIn">
             <AdminJewelleryPanel
               products={products}
-              onEditProduct={(p) => setEditingProduct(p)}
+              onEditProduct={(p) => handleEditProduct(p)}
               onOpenNewProduct={handleOpenNewProduct}
             />
           </div>
@@ -3245,18 +3312,19 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   )}
                 </div>
 
-                {/* Hidden Native File & Gallery Picker */}
+                {/* Hidden Native File & Gallery Picker (Single or Multiple) */}
                 <input
                   type="file"
+                  multiple
                   ref={fileInputRef}
                   onChange={handleFileSelect}
-                  accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                  accept=".jpg,.jpeg,.png,.webp,.gif,image/jpeg,image/png,image/webp,image/gif"
                   className="hidden"
                 />
 
-                {/* Action Buttons: ONLY "Upload Image" and "Add Image" */}
+                {/* Action Buttons: "Upload Image" and "Add Image" */}
                 <div className="flex flex-wrap items-center gap-3">
-                  {/* Button 1: Upload Image (Opens gallery/file picker) */}
+                  {/* Button 1: Upload Image (Opens gallery/file picker for 1+ images) */}
                   <button
                     type="button"
                     onClick={() => {
@@ -3269,13 +3337,13 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     <span>Upload Image</span>
                   </button>
 
-                  {/* Button 2: Add Image (Uploads selected photo to product) */}
+                  {/* Button 2: Add Image (Uploads all selected photos to product) */}
                   <button
                     type="button"
                     onClick={handleAddImageToProduct}
-                    disabled={uploadingImage || !selectedFileForUpload}
+                    disabled={uploadingImage || selectedFilesForUpload.length === 0}
                     className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider shadow-sm transition-all cursor-pointer active:scale-95 ${
-                      uploadingImage || !selectedFileForUpload
+                      uploadingImage || selectedFilesForUpload.length === 0
                         ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed'
                         : 'btn-teak-green text-white shadow-[#0F5B46]/20'
                     }`}
@@ -3283,12 +3351,14 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     {uploadingImage ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin text-white" />
-                        <span>Uploading Image...</span>
+                        <span>Uploading {selectedFilesForUpload.length} {selectedFilesForUpload.length === 1 ? 'Image' : 'Images'}...</span>
                       </>
                     ) : (
                       <>
                         <Plus className="w-4 h-4 text-white" />
-                        <span>Add Image</span>
+                        <span>
+                          Add {selectedFilesForUpload.length > 1 ? `${selectedFilesForUpload.length} Images` : 'Image'}
+                        </span>
                       </>
                     )}
                   </button>
@@ -3308,7 +3378,8 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     onClick={() => {
                       if (!editingProduct || !imageUrlInput.trim()) return;
                       const url = imageUrlInput.trim();
-                      const updatedImages = [...(editingProduct.images || []), url];
+                      const updatedImages = [...(editingProduct.images || [])];
+                      if (!updatedImages.includes(url)) updatedImages.push(url);
                       const updatedVariations = (editingProduct.variations || []).map((v, idx) => {
                         if (idx === 0 && (!v.image || v.image === '')) {
                           return { ...v, image: url };
@@ -3339,47 +3410,47 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   </button>
                 </div>
 
-                {/* Selected Image Preview (Before Adding) */}
-                {selectedFileForUpload && (
-                  <div className="bg-[#FAF7F2] border-2 border-dashed border-[#0F5B46]/40 rounded-xl p-3 flex flex-col sm:flex-row items-center justify-between gap-3 animate-fadeIn">
-                    <div className="flex items-center gap-3 w-full sm:w-auto">
-                      <div className="w-16 h-16 rounded-lg bg-white border border-[#E8DCCF] overflow-hidden flex items-center justify-center p-1 shrink-0 shadow-sm">
-                        <img
-                          src={selectedFileForUpload.previewUrl}
-                          alt="Selected preview"
-                          className="w-full h-full object-contain"
-                        />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-[#0F5B46] text-white">
-                            Selected
-                          </span>
-                          <span className="text-xs font-semibold text-[#241C1A] truncate max-w-[180px] sm:max-w-[240px]">
-                            {selectedFileForUpload.name}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-gray-500 mt-0.5">
-                          Size: {(selectedFileForUpload.size / 1024).toFixed(1)} KB • Ready to add. Click "Add Image" above to save.
-                        </p>
-                      </div>
+                {/* Selected Queued Images Preview (Before Adding) */}
+                {selectedFilesForUpload.length > 0 && (
+                  <div className="bg-[#FAF7F2] border-2 border-dashed border-[#0F5B46]/40 rounded-xl p-3 space-y-2.5 animate-fadeIn">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-bold text-[#0F5B46] uppercase tracking-wider">
+                        {selectedFilesForUpload.length} {selectedFilesForUpload.length === 1 ? 'Photo Queued' : 'Photos Queued'} — Click "Add Image" or Save Product
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleClearSelectedFiles}
+                        className="px-2.5 py-1 text-[11px] font-semibold text-red-600 hover:bg-red-50 rounded-lg border border-red-200 transition-colors cursor-pointer"
+                      >
+                        Clear Queue
+                      </button>
                     </div>
-
-                    <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        className="px-3 py-1.5 text-[11px] font-semibold text-[#0F5B46] hover:bg-white rounded-lg border border-[#0F5B46]/30 transition-colors cursor-pointer"
-                      >
-                        Change Photo
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleClearSelectedFile}
-                        className="px-3 py-1.5 text-[11px] font-semibold text-red-600 hover:bg-red-50 rounded-lg border border-red-200 transition-colors cursor-pointer"
-                      >
-                        Remove
-                      </button>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {selectedFilesForUpload.map((item, qIdx) => (
+                        <div key={`${item.name}_${qIdx}`} className="flex items-center justify-between gap-2 bg-white border border-[#E8DCCF] rounded-lg p-2">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="w-11 h-11 rounded bg-white border border-[#E8DCCF] overflow-hidden flex items-center justify-center p-0.5 shrink-0">
+                              <img
+                                src={item.previewUrl}
+                                alt={`Queued preview ${qIdx + 1}`}
+                                className="w-full h-full object-contain"
+                              />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold text-[#241C1A] truncate">{item.name}</div>
+                              <div className="text-[10px] text-gray-500">{(item.size / 1024).toFixed(1)} KB</div>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveQueuedFile(qIdx)}
+                            className="p-1 text-red-500 hover:bg-red-50 rounded cursor-pointer shrink-0"
+                            title="Remove queued image"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -3544,64 +3615,125 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
                 <div className="space-y-3">
                   {editingProduct.variations.map((v, idx) => (
-                    <div key={v.id || idx} className="p-3 bg-[#FAF7F2] rounded-xl border border-[#E8DCCF] grid grid-cols-1 sm:grid-cols-6 gap-2 items-center">
-                      <div className="sm:col-span-2">
-                        <label className="text-[10px] text-gray-500 block">Finish Name</label>
-                        <input
-                          type="text"
-                          value={v.name}
-                          onChange={(e) => handleUpdateVariation(idx, 'name', e.target.value)}
-                          className="w-full px-2 py-1 bg-white border border-[#E8DCCF] rounded text-xs"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-[10px] text-gray-500 block">Color & Hex</label>
-                        <div className="flex items-center gap-1">
-                          <input
-                            type="color"
-                            value={v.hexCode}
-                            onChange={(e) => handleUpdateVariation(idx, 'hexCode', e.target.value)}
-                            className="w-6 h-6 rounded cursor-pointer border-0 p-0"
-                          />
+                    <div key={v.id || idx} className="p-3 bg-[#FAF7F2] rounded-xl border border-[#E8DCCF] space-y-2.5">
+                      <div className="grid grid-cols-1 sm:grid-cols-6 gap-2 items-center">
+                        <div className="sm:col-span-2">
+                          <label className="text-[10px] text-gray-500 block">Finish Name</label>
                           <input
                             type="text"
-                            value={v.colorFinish}
-                            onChange={(e) => handleUpdateVariation(idx, 'colorFinish', e.target.value)}
-                            className="w-full px-1.5 py-1 bg-white border border-[#E8DCCF] rounded text-xs"
+                            value={v.name}
+                            onChange={(e) => handleUpdateVariation(idx, 'name', e.target.value)}
+                            className="w-full px-2 py-1 bg-white border border-[#E8DCCF] rounded text-xs"
                           />
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] text-gray-500 block">Color & Hex</label>
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="color"
+                              value={v.hexCode}
+                              onChange={(e) => handleUpdateVariation(idx, 'hexCode', e.target.value)}
+                              className="w-6 h-6 rounded cursor-pointer border-0 p-0"
+                            />
+                            <input
+                              type="text"
+                              value={v.colorFinish}
+                              onChange={(e) => handleUpdateVariation(idx, 'colorFinish', e.target.value)}
+                              className="w-full px-1.5 py-1 bg-white border border-[#E8DCCF] rounded text-xs"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] text-gray-500 block">SKU</label>
+                          <input
+                            type="text"
+                            value={v.sku}
+                            onChange={(e) => handleUpdateVariation(idx, 'sku', e.target.value)}
+                            className="w-full px-2 py-1 bg-white border border-[#E8DCCF] rounded text-xs font-mono text-[11px]"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] text-gray-500 block">Stock</label>
+                          <input
+                            type="number"
+                            value={v.stock}
+                            onChange={(e) => handleUpdateVariation(idx, 'stock', Number(e.target.value))}
+                            className="w-full px-2 py-1 bg-white border border-[#E8DCCF] rounded text-xs font-bold"
+                          />
+                        </div>
+
+                        <div className="text-right pt-2 sm:pt-0">
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveVariation(idx)}
+                            className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded cursor-pointer"
+                            title="Remove variation"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </div>
 
-                      <div>
-                        <label className="text-[10px] text-gray-500 block">SKU</label>
-                        <input
-                          type="text"
-                          value={v.sku}
-                          onChange={(e) => handleUpdateVariation(idx, 'sku', e.target.value)}
-                          className="w-full px-2 py-1 bg-white border border-[#E8DCCF] rounded text-xs font-mono text-[11px]"
-                        />
-                      </div>
+                      {/* Per-Variation Image Attachment & Gallery Selector */}
+                      <div className="flex flex-wrap items-center gap-2.5 pt-2 border-t border-[#E8DCCF]/70">
+                        <div className="w-10 h-10 rounded-lg bg-white border border-[#E8DCCF] overflow-hidden flex items-center justify-center p-0.5 shrink-0">
+                          <img
+                            src={resolveSafeProductImageUrl(v.image, mediaInventory)}
+                            alt={`${v.name || 'Variation'} photo`}
+                            className="w-full h-full object-contain"
+                            onError={(e) => {
+                              const imgEl = e.currentTarget;
+                              if (imgEl.dataset.fallbackApplied === '1') return;
+                              imgEl.dataset.fallbackApplied = '1';
+                              imgEl.src = JEWELLERY_PLACEHOLDER_IMAGE;
+                            }}
+                          />
+                        </div>
 
-                      <div>
-                        <label className="text-[10px] text-gray-500 block">Stock</label>
-                        <input
-                          type="number"
-                          value={v.stock}
-                          onChange={(e) => handleUpdateVariation(idx, 'stock', Number(e.target.value))}
-                          className="w-full px-2 py-1 bg-white border border-[#E8DCCF] rounded text-xs font-bold"
-                        />
-                      </div>
+                        <div className="flex-1 min-w-[160px]">
+                          <select
+                            value={editingProduct.images.includes(v.image) ? v.image : ''}
+                            onChange={(e) => handleUpdateVariation(idx, 'image', e.target.value)}
+                            className="w-full px-2.5 py-1.5 bg-white border border-[#E8DCCF] rounded-lg text-[11px] text-gray-700"
+                          >
+                            <option value="">
+                              {v.image ? 'Custom Variation Image (Select gallery photo to replace)' : 'Select from product gallery...'}
+                            </option>
+                            {(editingProduct.images || []).map((gImg, gIdx) => (
+                              <option key={`${gImg}_${gIdx}`} value={gImg}>
+                                Gallery Image #{gIdx + 1} ({gImg.split('/').pop()?.slice(0, 28) || 'photo'})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
 
-                      <div className="text-right pt-2 sm:pt-0">
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveVariation(idx)}
-                          className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded cursor-pointer"
-                          title="Remove variation"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <label className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-[#FAF7F2] border border-[#E8DCCF] hover:border-[#0F5B46] rounded-lg text-[11px] font-bold text-[#0F5B46] cursor-pointer transition-colors shrink-0">
+                          {uploadingVariationIdx === idx ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Uploading...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Upload className="w-3.5 h-3.5" />
+                              <span>Upload Finish Photo</span>
+                            </>
+                          )}
+                          <input
+                            type="file"
+                            accept=".jpg,.jpeg,.png,.webp,.gif,image/jpeg,image/png,image/webp,image/gif"
+                            className="hidden"
+                            disabled={uploadingVariationIdx === idx}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              e.target.value = '';
+                              if (file) void handleUploadVariationImage(idx, file);
+                            }}
+                          />
+                        </label>
                       </div>
                     </div>
                   ))}

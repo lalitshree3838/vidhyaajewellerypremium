@@ -30,17 +30,8 @@ export const AdminCashfreeSettingsPanel: React.FC = () => {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const token = sessionStorage.getItem('vidhyaa_admin_token') || localStorage.getItem('vidhyaa_admin_token') || '';
-      if (!token) {
-        setErrorMsg('Administrator session token missing. Please re-authenticate.');
-        setLoading(false);
-        return;
-      }
       const res = await fetch('/api/admin/cashfree-config', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'x-admin-token': token
-        }
+        credentials: 'include'
       });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -67,18 +58,11 @@ export const AdminCashfreeSettingsPanel: React.FC = () => {
     setErrorMsg(null);
 
     try {
-      const token = sessionStorage.getItem('vidhyaa_admin_token') || localStorage.getItem('vidhyaa_admin_token') || '';
-      if (!token) {
-        setErrorMsg('Administrator session expired. Please sign in again.');
-        setSaving(false);
-        return;
-      }
       const res = await fetch('/api/admin/cashfree-config', {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-          'x-admin-token': token
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           appId: appId.trim() || undefined,

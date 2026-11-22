@@ -87,6 +87,7 @@
   RewriteRule ^api/auth/mobile-login/?$ /api/auth/mobile.php?action=login [QSA,L]
   RewriteRule ^api/videos/available/?$ /api/videos/available.php [QSA,L]
   RewriteRule ^api/media/available/?$ /api/media/available.php [QSA,L]
+  RewriteRule ^api/media/upload/?$ /api/media/upload.php [QSA,L]
 
   # Cashfree PG & Webhook routes
   RewriteRule ^api/payments/cashfree/status/?$ /api/payments/cashfree.php?action=status [QSA,L]
@@ -102,6 +103,8 @@
   RewriteRule ^ - [L]
 
   # Admin & Media API routes on Hostinger Apache
+  RewriteRule ^api/admin/auth-status/?$ /api/admin/auth-status.php [QSA,L]
+  RewriteRule ^api/admin/setup-password/?$ /api/admin/setup-password.php [QSA,L]
   RewriteRule ^api/admin/login/?$ /api/admin/login.php [QSA,L]
   RewriteRule ^api/admin/verify-session/?$ /api/admin/verify-session.php [QSA,L]
   RewriteRule ^api/admin/logout/?$ /api/admin/logout.php [QSA,L]
