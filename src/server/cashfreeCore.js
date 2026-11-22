@@ -7,7 +7,14 @@ import { getOutsideSecretsDir, isLiveProductionRequest } from './sessionAuth.js'
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..', '..');
-const ENV_FILE_PATH = path.join(ROOT_DIR, '.env');
+const ENV_CANDIDATE_PATHS = [
+  path.join(ROOT_DIR, '.env'),
+  path.join(path.dirname(ROOT_DIR), '.env'),
+  path.join(path.dirname(ROOT_DIR), '.env.production')
+];
+
+const VALID_CASHFREE_PAYMENT_METHODS = new Set(['cc', 'dc', 'upi', 'nb', 'app', 'emi', 'paylater']);
+const CASHFREE_FETCH_TIMEOUT_MS = 20000;
 
 function resolveOutsideConfigPath() {
   const override = String(process.env.VIDHYAA_SECRETS_DIR || '').trim();
@@ -19,26 +26,63 @@ function resolveOutsideConfigPath() {
 
 function readDotEnvVars() {
   const vars = {};
-  try {
-    if (fs.existsSync(ENV_FILE_PATH)) {
-      const content = fs.readFileSync(ENV_FILE_PATH, 'utf8');
-      for (const line of content.split(/\r?\n/)) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) continue;
-        const eqIdx = trimmed.indexOf('=');
-        if (eqIdx === -1) continue;
-        const key = trimmed.slice(0, eqIdx).trim();
-        let val = trimmed.slice(eqIdx + 1).trim();
-        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-          val = val.slice(1, -1);
+  for (const envPath of ENV_CANDIDATE_PATHS) {
+    try {
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, 'utf8');
+        for (const line of content.split(/\r?\n/)) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          const eqIdx = trimmed.indexOf('=');
+          if (eqIdx === -1) continue;
+          const key = trimmed.slice(0, eqIdx).trim();
+          let val = trimmed.slice(eqIdx + 1).trim();
+          if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+            val = val.slice(1, -1);
+          }
+          if (!(key in vars) || !vars[key]) {
+            vars[key] = val;
+          }
         }
-        vars[key] = val;
       }
+    } catch {
+      // ignore malformed .env
     }
-  } catch {
-    // ignore malformed .env
   }
   return vars;
+}
+
+export function normalizeIndianMobile10(rawPhone) {
+  let digits = String(rawPhone || '').replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+  if (!/^[6-9]\d{9}$/.test(digits)) {
+    return null;
+  }
+  return digits;
+}
+
+export function sanitizeCashfreePaymentMethods(rawMethods) {
+  const tokens = String(rawMethods || '')
+    .toLowerCase()
+    .split(',')
+    .map((t) => t.trim())
+    .filter((t) => VALID_CASHFREE_PAYMENT_METHODS.has(t));
+  const unique = Array.from(new Set(tokens));
+  return unique.length > 0 ? unique.join(',') : 'upi,cc,dc';
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = CASHFREE_FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function getCashfreeCredentials() {
@@ -143,7 +187,8 @@ export function getCashfreeStatusSummary(req = null) {
     mode: creds.env.toLowerCase(),
     appIdMasked: maskedAppId,
     hasSecretKey: Boolean(creds.secretKey),
-    apiVersion: creds.apiVersion
+    apiVersion: creds.apiVersion,
+    supportedMethods: ['upi', 'cc', 'dc']
   };
 }
 
@@ -180,8 +225,18 @@ export async function createCashfreeOrder(params) {
     };
   }
 
-  const rawPhone = String(params.customerPhone || '').replace(/\D/g, '');
-  const cleanPhone = rawPhone.length >= 10 ? rawPhone.slice(-10) : '9758350524';
+  const cleanPhone = normalizeIndianMobile10(params.customerPhone);
+  if (!cleanPhone) {
+    return {
+      success: false,
+      configured: true,
+      code: 'INVALID_MOBILE_NUMBER',
+      mode: creds.env.toLowerCase(),
+      env: creds.env,
+      error: 'Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.'
+    };
+  }
+
   const safeEmail = String(params.customerEmail || '').trim() || 'patron@vidhyaajewellery.com';
   const safeName = String(params.customerName || 'Valued Patron').trim().slice(0, 80) || 'Valued Patron';
   const safeCustomerId = `cust_${(safeEmail || cleanPhone).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40) || Date.now()}`;
@@ -198,10 +253,11 @@ export async function createCashfreeOrder(params) {
   }
   const safeAmount = Math.round(rawAmount * 100) / 100;
   const safeOrderId = sanitizeGatewayOrderId(params.orderId || `VDH-${Date.now()}`);
+  const safeMethods = sanitizeCashfreePaymentMethods(params.paymentMethods);
 
   const orderMeta = {
     return_url: params.returnUrl || 'https://vidhyaajewellerystudio.com/?view=checkout&cf_order_id={order_id}',
-    payment_methods: params.paymentMethods || 'upi,cc,dc,nb'
+    payment_methods: safeMethods
   };
   if (params.notifyUrl || creds.notifyUrl) {
     const candidateNotify = String(params.notifyUrl || creds.notifyUrl).trim();
@@ -225,7 +281,7 @@ export async function createCashfreeOrder(params) {
   };
 
   try {
-    const res = await fetch(`${creds.baseUrl}/orders`, {
+    const res = await fetchWithTimeout(`${creds.baseUrl}/orders`, {
       method: 'POST',
       headers: {
         'x-client-id': creds.appId,
@@ -258,38 +314,62 @@ export async function createCashfreeOrder(params) {
       cfOrderId: data.cf_order_id,
       paymentSessionId: data.payment_session_id,
       orderStatus: data.order_status || 'ACTIVE',
+      paymentMethods: safeMethods,
       mode: creds.env.toLowerCase(),
       env: creds.env
     };
   } catch (err) {
     console.error('[Cashfree Order Network Error]', err);
+    const isTimeout = err?.name === 'AbortError';
     return {
       success: false,
       configured: true,
       mode: creds.env.toLowerCase(),
       env: creds.env,
-      error: err?.message || 'Network error connecting to Cashfree Payments Gateway.'
+      error: isTimeout
+        ? 'Cashfree Payments Gateway timed out. Please try again.'
+        : err?.message || 'Network error connecting to Cashfree Payments Gateway.'
     };
   }
 }
 
-function formatPaymentMethodLabel(methodObj) {
-  if (!methodObj || typeof methodObj !== 'object') return 'Cashfree Online Payment';
-  if (methodObj.upi) {
-    const channel = methodObj.upi.channel ? ` (${String(methodObj.upi.channel).toUpperCase()})` : '';
-    return `UPI via Cashfree${channel}`;
+export function formatPaymentMethodLabel(methodObj, paymentGroup = '') {
+  const groupLower = String(paymentGroup || '').trim().toLowerCase();
+  if (methodObj && typeof methodObj === 'object') {
+    if (methodObj.upi) {
+      const rawChannel = String(methodObj.upi.channel || '').trim().toLowerCase();
+      const channelMap = {
+        intent: 'UPI App Intent',
+        link: 'UPI App Intent',
+        qrcode: 'UPI QR Code',
+        qr: 'UPI QR Code',
+        collect: 'UPI ID / Collect'
+      };
+      const suffix = channelMap[rawChannel] || (rawChannel ? rawChannel.toUpperCase() : 'Cashfree');
+      return `UPI (${suffix})`;
+    }
+    if (methodObj.card) {
+      const rawType = String(methodObj.card.card_type || groupLower || '').trim().toLowerCase();
+      const typeLabel = rawType.includes('credit')
+        ? 'Credit Card'
+        : rawType.includes('debit')
+        ? 'Debit Card'
+        : 'Card';
+      const rawNet = String(methodObj.card.card_network || '').trim();
+      const netLabel = rawNet ? rawNet.charAt(0).toUpperCase() + rawNet.slice(1) : '';
+      return netLabel ? `${typeLabel} (${netLabel})` : typeLabel;
+    }
+    if (methodObj.netbanking) {
+      return `Netbanking (${methodObj.netbanking.netbanking_bank_name || 'Bank'})`;
+    }
+    if (methodObj.app) {
+      return `Wallet (${methodObj.app.provider || 'App'})`;
+    }
   }
-  if (methodObj.card) {
-    const net = methodObj.card.card_network || 'Credit/Debit';
-    const type = methodObj.card.card_type ? ` (${methodObj.card.card_type})` : ' Card';
-    return `${net}${type}`;
-  }
-  if (methodObj.netbanking) {
-    return `Netbanking (${methodObj.netbanking.netbanking_bank_name || 'Bank'})`;
-  }
-  if (methodObj.app) {
-    return `Wallet (${methodObj.app.provider || 'App'})`;
-  }
+  if (groupLower === 'credit_card') return 'Credit Card (Cashfree)';
+  if (groupLower === 'debit_card') return 'Debit Card (Cashfree)';
+  if (groupLower === 'upi') return 'UPI (Cashfree)';
+  if (groupLower === 'net_banking' || groupLower === 'netbanking') return 'Netbanking (Cashfree)';
   return 'Cashfree Online Payment';
 }
 
@@ -304,6 +384,8 @@ export async function verifyCashfreeOrder(orderId, options = {}) {
       success: false,
       isPaid: false,
       isFailed: false,
+      isCancelled: false,
+      isPending: false,
       orderId: '',
       orderStatus: 'INVALID_ORDER_ID',
       error: 'Order ID is required for payment verification.'
@@ -315,6 +397,8 @@ export async function verifyCashfreeOrder(orderId, options = {}) {
       success: false,
       isPaid: false,
       isFailed: false,
+      isCancelled: false,
+      isPending: false,
       configured: false,
       orderId: safeOrderId,
       orderStatus: 'UNCONFIGURED',
@@ -327,6 +411,8 @@ export async function verifyCashfreeOrder(orderId, options = {}) {
       success: false,
       isPaid: false,
       isFailed: false,
+      isCancelled: false,
+      isPending: false,
       blockedOnLiveDomain: true,
       orderId: safeOrderId,
       orderStatus: 'SANDBOX_BLOCKED_ON_PRODUCTION',
@@ -337,7 +423,7 @@ export async function verifyCashfreeOrder(orderId, options = {}) {
   }
 
   try {
-    const orderRes = await fetch(`${creds.baseUrl}/orders/${encodeURIComponent(safeOrderId)}`, {
+    const orderRes = await fetchWithTimeout(`${creds.baseUrl}/orders/${encodeURIComponent(safeOrderId)}`, {
       method: 'GET',
       headers: {
         'x-client-id': creds.appId,
@@ -353,6 +439,8 @@ export async function verifyCashfreeOrder(orderId, options = {}) {
         success: false,
         isPaid: false,
         isFailed: false,
+        isCancelled: false,
+        isPending: false,
         orderId: safeOrderId,
         orderStatus: orderRes.status === 404 ? 'NOT_FOUND' : 'GATEWAY_ERROR',
         error: orderData?.message || `Cashfree order lookup failed with HTTP ${orderRes.status}`
@@ -365,6 +453,8 @@ export async function verifyCashfreeOrder(orderId, options = {}) {
         success: true,
         isPaid: false,
         isFailed: true,
+        isCancelled: false,
+        isPending: false,
         orderId: safeOrderId,
         orderStatus: 'ORDER_ID_MISMATCH',
         error: `Gateway order ID mismatch: expected ${safeOrderId}, received ${gatewayOrderId}.`
@@ -377,7 +467,7 @@ export async function verifyCashfreeOrder(orderId, options = {}) {
 
     let paymentsArray = [];
     try {
-      const paymentsRes = await fetch(`${creds.baseUrl}/orders/${encodeURIComponent(safeOrderId)}/payments`, {
+      const paymentsRes = await fetchWithTimeout(`${creds.baseUrl}/orders/${encodeURIComponent(safeOrderId)}/payments`, {
         method: 'GET',
         headers: {
           'x-client-id': creds.appId,
@@ -405,12 +495,15 @@ export async function verifyCashfreeOrder(orderId, options = {}) {
       const methodObj = latestPayment.payment_method || {};
       paymentDetails = {
         cfPaymentId: latestPayment.cf_payment_id,
+        bankReference: latestPayment.bank_reference ? String(latestPayment.bank_reference) : undefined,
+        paymentGroup: latestPayment.payment_group ? String(latestPayment.payment_group) : undefined,
         paymentStatus: latestPaymentStatus,
         paymentAmount: Number(latestPayment.payment_amount ?? gatewayOrderAmount),
         paymentCurrency: String(latestPayment.payment_currency || orderCurrency).toUpperCase(),
-        paymentMethod: formatPaymentMethodLabel(methodObj),
+        paymentMethod: formatPaymentMethodLabel(methodObj, latestPayment.payment_group),
         cardNetwork: methodObj.card?.card_network,
         cardType: methodObj.card?.card_type,
+        upiChannel: methodObj.upi?.channel,
         paymentTime: latestPayment.payment_completion_time || latestPayment.payment_time,
         paymentMessage: latestPayment.payment_message
       };
@@ -429,6 +522,8 @@ export async function verifyCashfreeOrder(orderId, options = {}) {
           success: true,
           isPaid: false,
           isFailed: true,
+          isCancelled: false,
+          isPending: false,
           mismatch: true,
           orderId: safeOrderId,
           orderStatus: 'CURRENCY_MISMATCH',
@@ -445,6 +540,8 @@ export async function verifyCashfreeOrder(orderId, options = {}) {
             success: true,
             isPaid: false,
             isFailed: true,
+            isCancelled: false,
+            isPending: false,
             mismatch: true,
             orderId: safeOrderId,
             orderStatus: 'AMOUNT_MISMATCH',
@@ -460,6 +557,8 @@ export async function verifyCashfreeOrder(orderId, options = {}) {
         success: true,
         isPaid: true,
         isFailed: false,
+        isCancelled: false,
+        isPending: false,
         orderId: safeOrderId,
         orderStatus: rawOrderStatus,
         orderAmount: paidAmount,
@@ -470,34 +569,56 @@ export async function verifyCashfreeOrder(orderId, options = {}) {
       };
     }
 
-    const failedStates = new Set(['FAILED', 'CANCELLED', 'TERMINATED', 'EXPIRED', 'VOID']);
+    const cancelledStates = new Set(['CANCELLED', 'USER_DROPPED']);
+    const failedStates = new Set(['FAILED', 'TERMINATED', 'EXPIRED', 'VOID']);
+    const isCancelled =
+      !successfulPayment &&
+      (cancelledStates.has(latestPaymentStatus) || cancelledStates.has(rawOrderStatus));
     const isFailed =
-      failedStates.has(rawOrderStatus) ||
-      (!successfulPayment && ['FAILED', 'CANCELLED', 'VOID'].includes(latestPaymentStatus));
+      !isCancelled &&
+      (failedStates.has(rawOrderStatus) ||
+        (!successfulPayment && failedStates.has(latestPaymentStatus)));
+    const isPending = !isFailed && !isCancelled;
+
+    const effectiveStatus =
+      latestPaymentStatus && !successfulPayment && latestPaymentStatus !== 'NOT_ATTEMPTED'
+        ? latestPaymentStatus
+        : rawOrderStatus;
 
     return {
       success: true,
       isPaid: false,
       isFailed,
+      isCancelled,
+      isPending,
       orderId: safeOrderId,
-      orderStatus: latestPaymentStatus && !successfulPayment && latestPaymentStatus !== 'NOT_ATTEMPTED'
-        ? latestPaymentStatus
-        : rawOrderStatus,
+      orderStatus: effectiveStatus,
       orderAmount: gatewayOrderAmount,
       cfOrderId: orderData.cf_order_id,
       env: creds.env,
       mode: creds.env.toLowerCase(),
       paymentDetails,
-      error: paymentDetails?.paymentMessage || (isFailed ? `Payment ${latestPaymentStatus || rawOrderStatus}` : undefined)
+      error:
+        paymentDetails?.paymentMessage ||
+        (isCancelled
+          ? 'Payment was cancelled before completion. No amount was confirmed.'
+          : isFailed
+          ? `Payment ${latestPaymentStatus || rawOrderStatus}`
+          : undefined)
     };
   } catch (err) {
+    const isTimeout = err?.name === 'AbortError';
     return {
       success: false,
       isPaid: false,
       isFailed: false,
+      isCancelled: false,
+      isPending: true,
       orderId: safeOrderId,
-      orderStatus: 'ERROR',
-      error: err?.message || 'Error communicating with Cashfree Payments API'
+      orderStatus: isTimeout ? 'TIMEOUT' : 'ERROR',
+      error: isTimeout
+        ? 'Cashfree verification timed out. Please check payment status again.'
+        : err?.message || 'Error communicating with Cashfree Payments API'
     };
   }
 }

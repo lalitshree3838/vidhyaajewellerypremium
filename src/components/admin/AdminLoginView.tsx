@@ -23,6 +23,7 @@ import {
   logAuditEvent
 } from '../../lib/securityService';
 import { useAuth } from '../../context/AuthContext';
+import { getAdminAuthHeaders } from '../../lib/adminSessionMemory';
 
 interface AdminLoginViewProps {
   onSuccessLogin: () => void;
@@ -91,6 +92,7 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
     try {
       const res = await fetch('/api/admin/auth-status', {
         credentials: 'include',
+        headers: getAdminAuthHeaders(),
         cache: 'no-store'
       });
       if (!res.ok) {
@@ -99,10 +101,12 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
       }
       const data = await res.json().catch(() => null);
       if (data && typeof data.passwordConfigured === 'boolean') {
+        const nextPasswordConfigured = Boolean(data.passwordConfigured);
+        const nextCanFirstRunSetup = Boolean(data.canFirstRunSetup);
         setAuthCapabilities({
           loaded: true,
-          passwordConfigured: Boolean(data.passwordConfigured),
-          canFirstRunSetup: Boolean(data.canFirstRunSetup)
+          passwordConfigured: nextPasswordConfigured,
+          canFirstRunSetup: nextCanFirstRunSetup
         });
       }
     } catch {
@@ -182,13 +186,25 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
 
       if (backendRes.success) {
         resetFailedAttempts(email);
-        // Optionally sync Firebase session if available
-        try {
-          await signInWithEmail(email.trim(), password);
-        } catch {}
         setSuccessMessage('Authentication verified. Redirecting to Executive Admin Dashboard...');
         setLoading(false);
         onSuccessLogin();
+        return;
+      }
+
+      const isUnconfiguredServerError = Boolean(
+        backendRes.error && /not configured/i.test(backendRes.error)
+      );
+
+      // If no server password exists yet and first-run setup is allowed (Preview/non-prod),
+      // transition cleanly into First-Run Password Setup with email & password preserved.
+      if (isUnconfiguredServerError && authCapabilities.canFirstRunSetup) {
+        setLoading(false);
+        setSetupMode(true);
+        setConfirmPassword('');
+        setErrorMessage(
+          'No admin password is saved on this server yet. Confirm your new password below (min 12 chars with upper, lower, digit & symbol) to create it and enter the Admin Dashboard, or use Google Workspace Admin Sign In.'
+        );
         return;
       }
 
@@ -208,10 +224,6 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
           console.warn('Firebase Auth Email/Password provider is disabled in Firebase Console.');
         }
       }
-
-      const isUnconfiguredServerError = Boolean(
-        backendRes.error && /not configured/i.test(backendRes.error)
-      );
 
       // Both failed: handle failed attempt & report accurate reason
       setLoading(false);
@@ -473,15 +485,16 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
             </div>
           )}
 
-          {/* Unconfigured live-server guidance banner */}
+          {/* Unconfigured server guidance banner */}
           {!step2FA && authCapabilities.loaded && !authCapabilities.passwordConfigured && !setupMode && (
-            <div className="mb-6 p-4 rounded-2xl bg-[#0F4C4A]/35 border border-[#DFB982]/40 text-xs text-[#F5EDE5] space-y-1.5">
+            <div className="mb-6 p-4 rounded-2xl bg-[#0F4C4A]/35 border border-[#DFB982]/40 text-xs text-[#F5EDE5] space-y-2.5">
               <div className="font-bold text-[#DFB982] flex items-center gap-1.5">
                 <Sparkles className="w-4 h-4 shrink-0" />
-                <span>Recommended: Google Workspace Admin Sign In</span>
+                <span>Admin Password Not Set Yet on This Server</span>
               </div>
               <p className="text-gray-300 leading-relaxed">
-                Server password login is not configured yet. Sign in using <strong>Google Workspace Admin Sign In</strong> below with <span className="font-mono text-[#DFB982]">anavneeraj2003@gmail.com</span>.
+                Sign in with <strong>Google Workspace Admin Sign In</strong> below using <span className="font-mono text-[#DFB982]">anavneeraj2003@gmail.com</span>
+                {authCapabilities.canFirstRunSetup ? ', or create your first-run Admin Password now.' : '.'}
               </p>
               {authCapabilities.canFirstRunSetup && (
                 <button
@@ -490,9 +503,10 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
                     setErrorMessage(null);
                     setSetupMode(true);
                   }}
-                  className="text-[#DFB982] underline font-semibold hover:text-white cursor-pointer pt-0.5"
+                  className="w-full bg-[#DFB982]/15 hover:bg-[#DFB982]/25 border border-[#DFB982]/50 text-[#DFB982] font-bold py-2.5 px-4 rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
                 >
-                  Or set up first-run Admin Password now →
+                  <KeyRound className="w-4 h-4 shrink-0" />
+                  <span>Set Up First-Run Admin Password Now</span>
                 </button>
               )}
             </div>

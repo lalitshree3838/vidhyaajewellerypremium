@@ -14,6 +14,11 @@ import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { Address, UserProfile } from '../types';
 import { fetchUserProfile, saveUserProfile } from '../lib/dbService';
+import {
+  setAdminMemoryToken,
+  clearAdminMemoryToken,
+  getAdminAuthHeaders
+} from '../lib/adminSessionMemory';
 
 interface AdminSessionData {
   email: string;
@@ -167,6 +172,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const res = await fetch('/api/admin/auth-status', {
           method: 'GET',
           credentials: 'include',
+          headers: getAdminAuthHeaders(),
           cache: 'no-store'
         });
         if (res.ok) {
@@ -180,7 +186,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 name: 'Executive Administrator'
               }
             );
-          } else {
+          } else if (!adminSessionActiveRef.current) {
             updateAdminSessionState(false, null);
           }
         }
@@ -221,6 +227,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
         const data = await res.json().catch(() => null);
         if (res.ok && data?.success) {
+          if (data?.token) {
+            setAdminMemoryToken(data.token);
+          }
           updateAdminSessionState(
             true,
             data.admin || {
@@ -347,6 +356,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       if (data?.success) {
+        if (data?.token) {
+          setAdminMemoryToken(data.token);
+        }
         const nextAdmin = data.admin || { email, role: 'admin', name: 'Executive Administrator' };
         updateAdminSessionState(true, nextAdmin);
         return { success: true, admin: nextAdmin };
@@ -388,6 +400,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       if (data?.success) {
+        if (data?.token) {
+          setAdminMemoryToken(data.token);
+        }
         const nextAdmin = data.admin || { email, role: 'admin', name: 'Neeraj Chauhan (Owner)' };
         updateAdminSessionState(true, nextAdmin);
         return { success: true, admin: nextAdmin };
@@ -404,9 +419,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await fetch('/api/admin/logout', {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' }
+        headers: getAdminAuthHeaders({ 'Content-Type': 'application/json' })
       });
     } catch {}
+    clearAdminMemoryToken();
     try {
       sessionStorage.removeItem('vidhyaa_admin_token');
       localStorage.removeItem('vidhyaa_admin_token');

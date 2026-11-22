@@ -371,12 +371,38 @@ export function parseCookies(req) {
   return out;
 }
 
+function extractOriginHost(rawUrl) {
+  const clean = String(rawUrl || '').trim();
+  if (!clean) return '';
+  try {
+    return normalizeHostname(new URL(clean).host);
+  } catch {
+    return '';
+  }
+}
+
 export function isHttpsRequest(req) {
   if (req?.socket?.encrypted) return true;
   const proto = String(req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
   if (proto === 'https') return true;
   if (String(req?.headers?.['x-forwarded-ssl'] || '').toLowerCase() === 'on') return true;
+  const cfVisitor = String(req?.headers?.['cf-visitor'] || '').toLowerCase();
+  if (cfVisitor.includes('"https"')) return true;
+  const origin = String(req?.headers?.origin || '').trim().toLowerCase();
+  if (origin.startsWith('https://')) return true;
+  const referer = String(req?.headers?.referer || '').trim().toLowerCase();
+  if (referer.startsWith('https://')) return true;
   return false;
+}
+
+function isRunAppPreviewRequest(req) {
+  const candidates = [
+    normalizeHostname(req?.headers?.['x-forwarded-host'] || ''),
+    normalizeHostname(req?.headers?.host || ''),
+    extractOriginHost(req?.headers?.origin || ''),
+    extractOriginHost(req?.headers?.referer || '')
+  ];
+  return candidates.some((h) => Boolean(h) && /\.run\.app$/i.test(h));
 }
 
 export function isAllowedOriginValue(origin) {
@@ -384,7 +410,7 @@ export function isAllowedOriginValue(origin) {
   if (!clean) return false;
   if (/^https:\/\/(?:www\.)?vidhyaajewellerystudio\.com$/i.test(clean)) return true;
   if (/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/i.test(clean)) return true;
-  if (/^https:\/\/[a-z0-9-]+\.run\.app$/i.test(clean)) return true;
+  if (/^https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.run\.app$/i.test(clean)) return true;
   const extra = String(process.env.ALLOWED_ORIGINS || '')
     .split(',')
     .map((s) => s.trim())
@@ -393,9 +419,8 @@ export function isAllowedOriginValue(origin) {
 }
 
 export function buildAdminSessionCookie(token, req, maxAgeSeconds = ADMIN_TTL_SECONDS) {
-  const https = isHttpsRequest(req);
-  const host = normalizeHostname(req?.headers?.['x-forwarded-host'] || req?.headers?.host || '');
-  const isRunApp = https && /\.run\.app$/i.test(host);
+  const isRunApp = isRunAppPreviewRequest(req);
+  const https = isHttpsRequest(req) || isRunApp;
   const parts = [
     `${ADMIN_SESSION_COOKIE_NAME}=${encodeURIComponent(String(token || ''))}`,
     'Path=/',
@@ -417,9 +442,8 @@ export function buildAdminSessionCookie(token, req, maxAgeSeconds = ADMIN_TTL_SE
 }
 
 export function clearAdminSessionCookie(req) {
-  const https = isHttpsRequest(req);
-  const host = normalizeHostname(req?.headers?.['x-forwarded-host'] || req?.headers?.host || '');
-  const isRunApp = https && /\.run\.app$/i.test(host);
+  const isRunApp = isRunAppPreviewRequest(req);
+  const https = isHttpsRequest(req) || isRunApp;
   const parts = [
     `${ADMIN_SESSION_COOKIE_NAME}=`,
     'Path=/',

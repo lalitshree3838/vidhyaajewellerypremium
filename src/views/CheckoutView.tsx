@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import confetti from 'canvas-confetti';
 import {
   ShieldCheck,
@@ -22,7 +22,8 @@ import {
   Lock,
   Loader2,
   Gift,
-  Clock
+  Clock,
+  RefreshCw
 } from 'lucide-react';
 import { Address, Order, OrderItem, StoreSettings } from '../types';
 import { useCart } from '../context/CartContext';
@@ -88,6 +89,70 @@ const INDIAN_STATES_AND_UTS = [
 
 const DRAFT_ORDER_KEY = 'vidhyaa_draft_order_number';
 const COMPLETED_ORDER_KEY = 'vidhyaa_completed_order_id';
+const CHECKOUT_DRAFT_FORM_KEY = 'vidhyaa_checkout_draft_form';
+const PENDING_CASHFREE_ORDER_KEY = 'vidhyaa_pending_cf_order';
+
+type CheckoutPaymentOption = 'upi' | 'cc' | 'dc' | 'manual_qr';
+
+interface PendingCashfreeSession {
+  orderId: string;
+  orderNumber: string;
+  paymentChannel: 'upi' | 'cc' | 'dc';
+  createdAt: number;
+}
+
+function extractIndianMobile10(raw?: string | null): string {
+  let digits = String(raw || '').replace(/\D/g, '');
+  if (digits.length > 10 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  } else if (digits.length > 10 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+  return digits.slice(0, 10);
+}
+
+function isValidIndianMobile10(raw?: string | null): boolean {
+  const digits = extractIndianMobile10(raw);
+  return /^[6-9]\d{9}$/.test(digits);
+}
+
+function loadCheckoutDraftForm(): Record<string, any> {
+  try {
+    const raw = sessionStorage.getItem(CHECKOUT_DRAFT_FORM_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePendingCashfreeSession(session: PendingCashfreeSession | null): void {
+  try {
+    if (!session) {
+      sessionStorage.removeItem(PENDING_CASHFREE_ORDER_KEY);
+    } else {
+      sessionStorage.setItem(PENDING_CASHFREE_ORDER_KEY, JSON.stringify(session));
+    }
+  } catch {}
+}
+
+function loadPendingCashfreeSession(): PendingCashfreeSession | null {
+  try {
+    const raw = sessionStorage.getItem(PENDING_CASHFREE_ORDER_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.orderId !== 'string' || !parsed.orderId.trim()) return null;
+    // Ignore stale sessions older than 2 hours
+    if (typeof parsed.createdAt === 'number' && Date.now() - parsed.createdAt > 2 * 60 * 60 * 1000) {
+      sessionStorage.removeItem(PENDING_CASHFREE_ORDER_KEY);
+      return null;
+    }
+    return parsed as PendingCashfreeSession;
+  } catch {
+    return null;
+  }
+}
 
 function getOrCreateDraftOrderNumber(): string {
   try {
@@ -293,11 +358,16 @@ const VerifiedPaymentSuccessView: React.FC<VerifiedPaymentSuccessViewProps> = ({
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pb-3 border-b border-[#E8DCCF]">
-          <div>
+          <div className="space-y-1">
             <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block">
               Payment Transaction ID
             </span>
-            <span className="font-mono font-bold text-gray-900 break-all">{transactionId}</span>
+            <span className="font-mono font-bold text-gray-900 break-all block">{transactionId}</span>
+            {order.bankReference && order.bankReference !== transactionId && (
+              <span className="font-mono text-[11px] text-gray-600 block">
+                Bank / UPI Ref: <strong>{order.bankReference}</strong>
+              </span>
+            )}
           </div>
           <div className="sm:text-right">
             <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block">
@@ -671,32 +741,59 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
   const mediaInventory = useAvailableMediaInventory();
   const effectiveUserId = user?.uid || patronSession?.uid || undefined;
 
-  // Multi-step states: 1: Address, 2: Review, 3: Payment, 4: Confirmed / Submitted
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+  const initialDraft = useRef<Record<string, any>>(loadCheckoutDraftForm());
 
-  // Address & Contact info
-  const [name, setName] = useState(
-    userProfile?.displayName || user?.displayName || patronSession?.displayName || ''
+  // Multi-step states: 1: Address, 2: Review, 3: Payment, 4: Confirmed / Submitted
+  const [step, setStep] = useState<1 | 2 | 3 | 4>(() => {
+    const saved = initialDraft.current.step;
+    return saved === 2 || saved === 3 ? saved : 1;
+  });
+
+  // Address & Contact info (restored from session draft on refresh or payment return)
+  const [name, setName] = useState<string>(
+    initialDraft.current.name ||
+      userProfile?.displayName ||
+      user?.displayName ||
+      patronSession?.displayName ||
+      ''
   );
-  const [email, setEmail] = useState(
-    userProfile?.email || user?.email || patronSession?.email || ''
+  const [email, setEmail] = useState<string>(
+    initialDraft.current.email ||
+      userProfile?.email ||
+      user?.email ||
+      patronSession?.email ||
+      ''
   );
-  const [phone, setPhone] = useState(
-    userProfile?.phone || patronSession?.phone || patronSession?.mobile || ''
+  const [phone, setPhone] = useState<string>(() =>
+    extractIndianMobile10(
+      initialDraft.current.phone ||
+        userProfile?.phone ||
+        patronSession?.phone ||
+        patronSession?.mobile ||
+        ''
+    )
   );
-  const [houseNo, setHouseNo] = useState('');
-  const [area, setArea] = useState('');
-  const [landmark, setLandmark] = useState('');
-  const [city, setCity] = useState('');
-  const [state, setState] = useState('Uttarakhand');
-  const [pincode, setPincode] = useState('');
+  const [houseNo, setHouseNo] = useState<string>(initialDraft.current.houseNo || '');
+  const [area, setArea] = useState<string>(initialDraft.current.area || '');
+  const [landmark, setLandmark] = useState<string>(initialDraft.current.landmark || '');
+  const [city, setCity] = useState<string>(initialDraft.current.city || '');
+  const [state, setState] = useState<string>(initialDraft.current.state || 'Uttarakhand');
+  const [pincode, setPincode] = useState<string>(initialDraft.current.pincode || '');
   const [saveToAccount, setSaveToAccount] = useState(true);
   const [step1Error, setStep1Error] = useState<string | null>(null);
 
-  // Payment method states: Cashfree (UPI/Cards/Netbanking), UPI QR, UPI Phone, 1-Tap App, Bank VPA
-  const [upiMethod, setUpiMethod] = useState<'card' | 'phone' | 'qr' | 'intent' | 'vpa'>('card');
+  // Explicit Cashfree payment channel selection: UPI, Credit Card, Debit Card (+ optional manual QR fallback only if gateway unavailable)
+  const [paymentOption, setPaymentOption] = useState<CheckoutPaymentOption>(() => {
+    const saved = initialDraft.current.paymentOption;
+    if (saved === 'upi' || saved === 'cc' || saved === 'dc' || saved === 'manual_qr') {
+      return saved;
+    }
+    return 'upi';
+  });
   const [cashfreeStatus, setCashfreeStatus] = useState<{
     isConfigured: boolean;
+    hasLiveCredentials?: boolean;
+    blockedOnLiveDomain?: boolean;
     env: 'SANDBOX' | 'PRODUCTION';
     appIdMasked?: string;
     hasSecretKey?: boolean;
@@ -706,12 +803,45 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
   const [orderNumber, setOrderNumber] = useState<string>(() => getOrCreateDraftOrderNumber());
 
   const [utrNumber, setUtrNumber] = useState('');
-  const [copiedVpa, setCopiedVpa] = useState(false);
-  const [copiedPhone, setCopiedPhone] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
   const [isRestoringOrder, setIsRestoringOrder] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [paymentNotice, setPaymentNotice] = useState<{
+    type: 'pending' | 'cancelled' | 'failed';
+    title: string;
+    message: string;
+    cfOrderId?: string;
+  } | null>(null);
+  const [pendingCfOrderId, setPendingCfOrderId] = useState<string | null>(
+    () => loadPendingCashfreeSession()?.orderId || null
+  );
   const [completedOrder, setCompletedOrder] = useState<Order | null>(null);
+
+  // Synchronous submission lock to prevent duplicate payment creation on rapid clicks
+  const submittingRef = useRef(false);
+
+  // Persist checkout form draft cleanly in sessionStorage for refresh / app-switch recovery
+  useEffect(() => {
+    if (step === 4) return;
+    try {
+      sessionStorage.setItem(
+        CHECKOUT_DRAFT_FORM_KEY,
+        JSON.stringify({
+          step: step === 1 || step === 2 || step === 3 ? step : 1,
+          name,
+          email,
+          phone,
+          houseNo,
+          area,
+          landmark,
+          city,
+          state,
+          pincode,
+          paymentOption
+        })
+      );
+    } catch {}
+  }, [step, name, email, phone, houseNo, area, landmark, city, state, pincode, paymentOption]);
 
   // Sync user / patron profile info cleanly into blank inputs
   useEffect(() => {
@@ -725,8 +855,9 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       if (candidate) setEmail(candidate);
     }
     if (!phone) {
-      const candidate =
-        userProfile?.phone || patronSession?.phone || patronSession?.mobile || '';
+      const candidate = extractIndianMobile10(
+        userProfile?.phone || patronSession?.phone || patronSession?.mobile || ''
+      );
       if (candidate) setPhone(candidate);
     }
   }, [user, userProfile, patronSession]);
@@ -742,15 +873,22 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       .catch(() => {});
   }, []);
 
-  // Merchant UPI Credentials
+  // Merchant UPI Credentials (used only for manual fallback when Cashfree gateway is not configured)
   const merchantVpa = storeSettings?.upiVpa || 'neerajchauhan2000-1@oksbi';
   const payeeName = storeSettings?.upiPayeeName || 'neeraj chauhan';
-  const upiMobileNumber = storeSettings?.upiMobileNumber || '9758350524';
+  const cashfreeAvailable = Boolean(
+    cashfreeStatus?.isConfigured && !cashfreeStatus?.blockedOnLiveDomain
+  );
 
   const combinedStreet = [houseNo.trim(), area.trim()].filter(Boolean).join(', ');
-  const upiDeepLink = `upi://pay?pa=${encodeURIComponent(merchantVpa)}&pn=${encodeURIComponent(
-    payeeName
-  )}&am=${finalTotal}&cu=INR&tn=${encodeURIComponent(`Vidhyaa Jewellery Order ${orderNumber}`)}`;
+  const normalizedPhone10 = extractIndianMobile10(phone);
+
+  const getPaymentOptionLabel = (opt: CheckoutPaymentOption): string => {
+    if (opt === 'upi') return 'UPI (Google Pay, PhonePe, Paytm, BHIM & QR)';
+    if (opt === 'cc') return 'Credit Card (Visa, Mastercard, RuPay)';
+    if (opt === 'dc') return 'Debit Card (Visa, Mastercard, RuPay)';
+    return 'Direct Studio UPI QR (Manual Verification)';
+  };
 
   const finalizeVerifiedOrderSuccess = useCallback(
     async (verifiedOrder: Order) => {
@@ -765,8 +903,13 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       } catch {}
       try {
         sessionStorage.removeItem(DRAFT_ORDER_KEY);
+        sessionStorage.removeItem(CHECKOUT_DRAFT_FORM_KEY);
+        savePendingCashfreeSession(null);
         sessionStorage.setItem(COMPLETED_ORDER_KEY, synced.orderNumber || synced.id);
       } catch {}
+      setPendingCfOrderId(null);
+      setPaymentNotice(null);
+      setPaymentError(null);
       setCompletedOrder(synced);
       clearCart();
       setStep(4);
@@ -776,9 +919,11 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
   );
 
   const verifyAndFinalizeCashfreePayment = useCallback(
-    async (cfOrderId: string) => {
+    async (cfOrderId: string, opts: { autoPollPending?: boolean } = {}) => {
       setIsVerifying(true);
       setPaymentError(null);
+      const maxAttempts = opts.autoPollPending ? 3 : 1;
+
       try {
         const orderItems: OrderItem[] = items.map((i) => ({
           productId: i.productId,
@@ -792,12 +937,13 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
           sku: i.sku
         }));
 
+        const formattedPhone = formatIndianPhone(phone);
         const hasShippingInForm = Boolean(name.trim() && combinedStreet && city.trim() && pincode.trim());
         const shippingAddressPayload: Address | undefined = hasShippingInForm
           ? {
               id: `addr_${Date.now()}`,
               name: name.trim(),
-              phone: formatIndianPhone(phone),
+              phone: formattedPhone,
               houseNo: houseNo.trim(),
               area: area.trim(),
               street: combinedStreet,
@@ -810,75 +956,130 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
 
         const authHeaders = await resolveCheckoutCustomerHeaders([cfOrderId, orderNumber]);
 
-        const verifyRes = await fetch('/api/payments/cashfree/verify-order', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...authHeaders
-          },
-          body: JSON.stringify({
-            orderId: cfOrderId,
-            ...(hasShippingInForm && orderItems.length > 0
-              ? {
-                  orderData: {
-                    orderNumber: cfOrderId.startsWith('VDH') ? cfOrderId : orderNumber,
-                    userId: effectiveUserId,
-                    customerName: name.trim(),
-                    customerEmail: email.trim(),
-                    customerPhone: formatIndianPhone(phone),
-                    shippingAddress: shippingAddressPayload,
-                    items: orderItems,
-                    originalTotal,
-                    productSavings,
-                    couponSavings: discount,
-                    totalSavings,
-                    subtotal,
-                    discount,
-                    appliedPromo: appliedPromo || undefined,
-                    deliveryCharge,
-                    totalAmount: finalTotal
-                  }
-                }
-              : {})
-          })
-        });
-
-        const verifyData = await verifyRes.json().catch(() => ({}));
-
-        if (verifyData.success && verifyData.isPaid === true && verifyData.order) {
-          if (verifyData.receiptToken) {
-            saveOrderReceiptToken(verifyData.order.id, verifyData.receiptToken);
-            saveOrderReceiptToken(verifyData.order.orderNumber || cfOrderId, verifyData.receiptToken);
+        let lastVerifyData: any = {};
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          if (attempt > 0) {
+            await new Promise((resolve) => setTimeout(resolve, 2500));
           }
-          await finalizeVerifiedOrderSuccess(verifyData.order);
-          return true;
+
+          const verifyRes = await fetch('/api/payments/cashfree/verify-order', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...authHeaders
+            },
+            body: JSON.stringify({
+              orderId: cfOrderId,
+              ...(hasShippingInForm && orderItems.length > 0
+                ? {
+                    orderData: {
+                      orderNumber: cfOrderId.startsWith('VDH') ? cfOrderId : orderNumber,
+                      userId: effectiveUserId,
+                      customerName: name.trim(),
+                      customerEmail: email.trim(),
+                      customerPhone: formattedPhone,
+                      shippingAddress: shippingAddressPayload,
+                      items: orderItems,
+                      originalTotal,
+                      productSavings,
+                      couponSavings: discount,
+                      totalSavings,
+                      subtotal,
+                      discount,
+                      appliedPromo: appliedPromo || undefined,
+                      deliveryCharge,
+                      totalAmount: finalTotal
+                    }
+                  }
+                : {})
+            })
+          });
+
+          const verifyData = await verifyRes.json().catch(() => ({}));
+          lastVerifyData = verifyData;
+
+          if (verifyData.success && verifyData.isPaid === true && verifyData.order) {
+            if (verifyData.receiptToken) {
+              saveOrderReceiptToken(verifyData.order.id, verifyData.receiptToken);
+              saveOrderReceiptToken(verifyData.order.orderNumber || cfOrderId, verifyData.receiptToken);
+            }
+            await finalizeVerifiedOrderSuccess(verifyData.order);
+            return true;
+          }
+
+          const gatewayStatus = String(verifyData.orderStatus || 'INCOMPLETE').toUpperCase();
+          const isStillPending =
+            Boolean(verifyData.isPending) ||
+            gatewayStatus === 'ACTIVE' ||
+            gatewayStatus === 'PENDING' ||
+            gatewayStatus === 'NOT_ATTEMPTED';
+
+          if (!isStillPending) {
+            break;
+          }
         }
 
-        const gatewayStatus = String(verifyData.orderStatus || 'INCOMPLETE').toUpperCase();
-        if (verifyData.isFailed || ['FAILED', 'CANCELLED', 'USER_DROPPED', 'TERMINATED', 'VOID', 'EXPIRED', 'AMOUNT_MISMATCH', 'CURRENCY_MISMATCH'].includes(gatewayStatus)) {
-          setPaymentError(
-            verifyData.failureReason ||
-              verifyData.error ||
-              `Payment ${gatewayStatus.toLowerCase()}. Your order was not confirmed and you can safely retry or choose another payment method.`
-          );
-        } else if (gatewayStatus === 'ACTIVE' || gatewayStatus === 'PENDING') {
-          setPaymentError(
-            'Payment was not completed yet (status: pending). Please complete the payment to confirm your order.'
-          );
+        const gatewayStatus = String(lastVerifyData.orderStatus || 'INCOMPLETE').toUpperCase();
+        if (
+          lastVerifyData.isCancelled ||
+          gatewayStatus === 'USER_DROPPED' ||
+          gatewayStatus === 'CANCELLED'
+        ) {
+          savePendingCashfreeSession(null);
+          setPendingCfOrderId(null);
+          const msg =
+            lastVerifyData.error ||
+            'You closed or cancelled the payment before completion. No payment was confirmed and your cart is safely preserved.';
+          setPaymentNotice({
+            type: 'cancelled',
+            title: 'Payment Cancelled',
+            message: msg,
+            cfOrderId
+          });
+          setPaymentError(null);
+        } else if (
+          lastVerifyData.isFailed ||
+          ['FAILED', 'TERMINATED', 'VOID', 'EXPIRED', 'AMOUNT_MISMATCH', 'CURRENCY_MISMATCH'].includes(gatewayStatus)
+        ) {
+          savePendingCashfreeSession(null);
+          setPendingCfOrderId(null);
+          const msg =
+            lastVerifyData.failureReason ||
+            lastVerifyData.error ||
+            `Payment ${gatewayStatus.toLowerCase()}. Your order was not confirmed and your shopping bag is preserved so you can retry safely.`;
+          setPaymentNotice({
+            type: 'failed',
+            title: 'Payment Failed',
+            message: msg,
+            cfOrderId
+          });
+          setPaymentError(null);
         } else {
-          setPaymentError(
-            verifyData.error ||
-              `Payment verification did not return PAID (status: ${gatewayStatus}). Please retry safely.`
-          );
+          // Still pending / awaiting UPI bank confirmation — keep pendingCfOrderId so user can re-check without double-charging
+          setPendingCfOrderId(cfOrderId);
+          setPaymentNotice({
+            type: 'pending',
+            title: 'Payment Verification Pending',
+            message:
+              'Your payment is not confirmed by Cashfree yet (common while UPI apps or banks complete settlement). Do not pay twice — tap "Check Payment Status" below, or retry only if no amount was debited.',
+            cfOrderId
+          });
+          setPaymentError(null);
         }
         return false;
       } catch {
-        setPaymentError(
-          'Unable to verify payment status with server right now. If your account was debited, please check My Orders or contact +91 7302187770.'
-        );
+        setPendingCfOrderId(cfOrderId);
+        setPaymentNotice({
+          type: 'pending',
+          title: 'Unable to Reach Payment Verification Server',
+          message:
+            'We could not confirm your payment status due to a network interruption. Tap "Check Payment Status" to verify without creating a duplicate charge.',
+          cfOrderId
+        });
         return false;
       } finally {
         setIsVerifying(false);
+        submittingRef.current = false;
       }
     },
     [
@@ -907,7 +1108,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     ]
   );
 
-  // Return URL (?cf_order_id=...) and Page Refresh Recovery
+  // Return URL (?cf_order_id=...) and Page Refresh / Mobile UPI App-Switch Recovery
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const cfReturnOrderId = params.get('cf_order_id')?.trim();
@@ -915,12 +1116,24 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     if (cfReturnOrderId) {
       setIsRestoringOrder(true);
       setStep(3);
-      verifyAndFinalizeCashfreePayment(cfReturnOrderId).finally(() => {
+      verifyAndFinalizeCashfreePayment(cfReturnOrderId, { autoPollPending: true }).finally(() => {
         setIsRestoringOrder(false);
         try {
           const cleanUrl = `${window.location.pathname}`;
           window.history.replaceState({}, '', cleanUrl);
         } catch {}
+      });
+      return;
+    }
+
+    // Recover interrupted Cashfree checkout session after browser refresh or mobile app-switch
+    const pendingSession = loadPendingCashfreeSession();
+    if (pendingSession && !completedOrder) {
+      setIsRestoringOrder(true);
+      setStep(3);
+      setPendingCfOrderId(pendingSession.orderId);
+      verifyAndFinalizeCashfreePayment(pendingSession.orderId, { autoPollPending: false }).finally(() => {
+        setIsRestoringOrder(false);
       });
       return;
     }
@@ -950,6 +1163,8 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       try {
         sessionStorage.removeItem(COMPLETED_ORDER_KEY);
         sessionStorage.removeItem(DRAFT_ORDER_KEY);
+        sessionStorage.removeItem(CHECKOUT_DRAFT_FORM_KEY);
+        savePendingCashfreeSession(null);
       } catch {}
       destFn();
     },
@@ -960,7 +1175,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
   const handleSelectSavedAddress = (addr: Address) => {
     setStep1Error(null);
     setName(addr.name || '');
-    setPhone(addr.phone || '');
+    setPhone(extractIndianMobile10(addr.phone || ''));
     setHouseNo(addr.houseNo || addr.street || '');
     setArea(addr.area || '');
     setLandmark(addr.landmark || '');
@@ -975,7 +1190,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
 
     const cleanName = name.trim();
     const cleanEmail = email.trim();
-    const phoneDigits = phone.replace(/\D/g, '').slice(-10);
+    const phoneDigits = extractIndianMobile10(phone);
     const cleanHouseNo = houseNo.trim();
     const cleanArea = area.trim();
     const cleanCity = city.trim();
@@ -986,8 +1201,8 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       setStep1Error('Please enter your full name for delivery.');
       return;
     }
-    if (phoneDigits.length !== 10) {
-      setStep1Error('Please enter a valid 10-digit Indian mobile number.');
+    if (!isValidIndianMobile10(phoneDigits)) {
+      setStep1Error('Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
@@ -1016,7 +1231,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     }
 
     const formattedPhone = formatIndianPhone(phoneDigits);
-    setPhone(formattedPhone);
+    setPhone(phoneDigits);
 
     if (saveToAccount && (user || patronSession)) {
       saveAddress({
@@ -1035,29 +1250,24 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
     setStep(2);
   };
 
-  const handleCopyVpa = () => {
-    navigator.clipboard.writeText(merchantVpa);
-    setCopiedVpa(true);
-    setTimeout(() => setCopiedVpa(false), 2000);
-  };
-
-  const handleCopyPhone = () => {
-    navigator.clipboard.writeText(upiMobileNumber);
-    setCopiedPhone(true);
-    setTimeout(() => setCopiedPhone(false), 2000);
-  };
-
-  // Manual Direct UPI UTR Submission (Maintains 'pending' status until verified — never falsely confirms payment)
-  const handleVerifyUpiPayment = async () => {
+  // Manual Direct UPI QR Fallback (Only used when Cashfree gateway is not configured; strictly remains 'pending' until Admin verifies)
+  const handleVerifyManualUpiQr = async () => {
+    if (submittingRef.current) return;
     setPaymentError(null);
-    setIsVerifying(true);
+    setPaymentNotice(null);
 
     const cleanUtr = utrNumber.trim();
-    if (cleanUtr.length < 8) {
-      setPaymentError('Please enter a valid 12-digit UPI Reference Number / UTR from your UPI payment app.');
-      setIsVerifying(false);
+    if (!/^\d{12}$/.test(cleanUtr)) {
+      setPaymentError('Please enter the exact 12-digit UPI Reference Number / UTR from your UPI payment app.');
       return;
     }
+    if (!isValidIndianMobile10(phone)) {
+      setPaymentError('Please go back to Step 1 and enter a valid 10-digit Indian mobile number.');
+      return;
+    }
+
+    submittingRef.current = true;
+    setIsVerifying(true);
 
     try {
       const orderItems: OrderItem[] = items.map((i) => ({
@@ -1085,15 +1295,6 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         state: state.trim(),
         pincode: pincode.trim()
       };
-
-      let methodLabel = 'Direct UPI Mobile Transfer';
-      if (upiMethod === 'qr') {
-        methodLabel = 'Direct UPI QR Code';
-      } else if (upiMethod === 'intent') {
-        methodLabel = 'Direct UPI App Transfer';
-      } else if (upiMethod === 'vpa') {
-        methodLabel = 'Direct UPI ID / VPA';
-      }
 
       const newOrderData: Omit<Order, 'id'> = {
         orderNumber,
@@ -1112,7 +1313,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         appliedPromo: appliedPromo || undefined,
         deliveryCharge,
         totalAmount: finalTotal,
-        paymentMethod: methodLabel,
+        paymentMethod: 'Direct Studio UPI QR (Manual Verification)',
         paymentStatus: 'pending',
         isPaid: false,
         currency: 'INR',
@@ -1121,12 +1322,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         trackingNumber: '',
         courierName: 'Atelier Express Dispatch',
         giftItem: subtotal >= 2000 ? 'Gold Imitation Bangles' : subtotal >= 1500 ? 'Gold Imitation Jhoomki' : undefined,
-        notes:
-          upiMethod === 'phone'
-            ? `Manual UPI Mobile Number transfer to ${upiMobileNumber} (UTR: ${cleanUtr})`
-            : upiMethod === 'qr'
-            ? `Manual UPI QR Code transfer (UTR: ${cleanUtr})`
-            : `Manual UPI transfer (UTR: ${cleanUtr})`,
+        notes: `Manual Studio UPI QR transfer (UTR: ${cleanUtr}) — Awaiting Admin bank verification`,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -1134,6 +1330,8 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       const savedOrder = await createOrder(newOrderData);
       try {
         sessionStorage.removeItem(DRAFT_ORDER_KEY);
+        sessionStorage.removeItem(CHECKOUT_DRAFT_FORM_KEY);
+        savePendingCashfreeSession(null);
         sessionStorage.setItem(COMPLETED_ORDER_KEY, savedOrder.orderNumber || savedOrder.id);
       } catch {}
 
@@ -1145,13 +1343,46 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       setPaymentError('Order submission failed. Please verify your network connection and try again.');
     } finally {
       setIsVerifying(false);
+      submittingRef.current = false;
     }
   };
 
-  // Cashfree Online Payment Handler (UPI, Credit/Debit Card, Netbanking)
-  const handleCashfreeCardPayment = async () => {
+  // Retry cleanly with a fresh order number (used after a confirmed Failed or Cancelled payment)
+  const handlePrepareFreshRetry = () => {
+    savePendingCashfreeSession(null);
+    setPendingCfOrderId(null);
+    setPaymentNotice(null);
+    setPaymentError(null);
+    const freshOrderNum = rotateDraftOrderNumber();
+    setOrderNumber(freshOrderNum);
+  };
+
+  // Authoritative Cashfree Online Payment Handler (UPI, Credit Card, Debit Card)
+  const handleCashfreePayment = async (channelOverride?: 'upi' | 'cc' | 'dc') => {
+    if (submittingRef.current || isVerifying) return;
+
+    const activeChannel: 'upi' | 'cc' | 'dc' =
+      channelOverride || (paymentOption === 'cc' || paymentOption === 'dc' || paymentOption === 'upi' ? paymentOption : 'upi');
+
+    const cleanMobile = extractIndianMobile10(phone);
+    if (!isValidIndianMobile10(cleanMobile)) {
+      setPaymentError('Please enter a valid 10-digit Indian mobile number in Step 1 before paying.');
+      return;
+    }
+
+    if (cashfreeStatus && (!cashfreeStatus.isConfigured || cashfreeStatus.blockedOnLiveDomain)) {
+      setPaymentError(
+        cashfreeStatus.blockedOnLiveDomain
+          ? 'Cashfree Gateway is currently in SANDBOX mode and disabled on the live domain. Please switch to PRODUCTION credentials in Admin Settings.'
+          : 'Cashfree Merchant API credentials are not configured on the server yet. Please configure Cashfree in Admin Settings.'
+      );
+      return;
+    }
+
+    submittingRef.current = true;
     setIsVerifying(true);
     setPaymentError(null);
+    setPaymentNotice(null);
 
     try {
       const orderItems: OrderItem[] = items.map((i) => ({
@@ -1166,7 +1397,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         sku: i.sku
       }));
 
-      const formattedPhone = formatIndianPhone(phone);
+      const formattedPhone = formatIndianPhone(cleanMobile);
       const shippingAddress: Address = {
         id: `addr_${Date.now()}`,
         name: name.trim(),
@@ -1180,8 +1411,16 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         pincode: pincode.trim()
       };
 
+      const channelLabel =
+        activeChannel === 'cc'
+          ? 'Credit Card (Cashfree)'
+          : activeChannel === 'dc'
+          ? 'Debit Card (Cashfree)'
+          : 'UPI (Cashfree)';
+
       const customerHeaders = await resolveCheckoutCustomerHeaders([orderNumber]);
       let attemptOrderNumber = orderNumber;
+      const activeReturnUrl = `${window.location.origin}/?view=checkout&cf_order_id={order_id}`;
 
       const postCreateOrder = async (targetOrderNum: string) =>
         fetch('/api/payments/cashfree/create-order', {
@@ -1196,7 +1435,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
             orderAmount: finalTotal,
             customerName: name.trim() || 'Valued Patron',
             customerEmail: email.trim() || 'patron@vidhyaajewellery.com',
-            customerPhone: formattedPhone || '9758350524',
+            customerPhone: cleanMobile,
             shippingAddress,
             items: orderItems,
             subtotal,
@@ -1205,8 +1444,9 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
             deliveryCharge,
             userId: effectiveUserId,
             giftItem: subtotal >= 2000 ? 'Gold Imitation Bangles' : subtotal >= 1500 ? 'Gold Imitation Jhoomki' : undefined,
-            paymentMethods: 'upi,cc,dc,nb',
-            paymentMethod: 'Cashfree (UPI / Cards / Netbanking)',
+            returnUrl: activeReturnUrl,
+            paymentMethods: activeChannel,
+            paymentMethod: channelLabel,
             orderNote: `VIDHYAA Jewellery Studio Order ${targetOrderNum} (${items.length} items)`
           })
         });
@@ -1222,6 +1462,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       const paymentSessionId = data.paymentSessionId || data.payment_session_id;
       const cfOrderId = data.orderId || data.order_id || attemptOrderNumber;
       const cfMode = data.mode;
+
       if (data?.receiptToken) {
         saveOrderReceiptToken(cfOrderId, data.receiptToken);
         saveOrderReceiptToken(attemptOrderNumber, data.receiptToken);
@@ -1231,21 +1472,31 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       if (!res.ok || !data.success || !paymentSessionId) {
         if (data.configured === false) {
           setPaymentError(
-            'Cashfree Payments Gateway is not yet configured with Live Merchant API credentials. You can pay via Direct UPI or configure Cashfree in Admin Settings.'
+            'Cashfree Payments Gateway is not yet configured with Merchant API credentials. Configure Cashfree in Admin Settings to enable live Card & UPI checkout.'
           );
         } else {
           setPaymentError(data.error || 'Failed to initialize Cashfree Hosted Checkout session. Please try again.');
         }
         setIsVerifying(false);
+        submittingRef.current = false;
         return;
       }
+
+      // Persist pending gateway session BEFORE launching Cashfree so refresh / UPI app switch always recovers
+      savePendingCashfreeSession({
+        orderId: cfOrderId,
+        orderNumber: attemptOrderNumber,
+        paymentChannel: activeChannel,
+        createdAt: Date.now()
+      });
+      setPendingCfOrderId(cfOrderId);
 
       if (typeof (window as any).Cashfree === 'undefined') {
         await new Promise<void>((resolve, reject) => {
           const script = document.createElement('script');
           script.src = 'https://sdk.cashfree.com/js/v3/cashfree.js';
           script.onload = () => resolve();
-          script.onerror = () => reject(new Error('Failed to load Cashfree Hosted Checkout SDK'));
+          script.onerror = () => reject(new Error('Failed to load Cashfree Hosted Checkout SDK. Please check your internet connection.'));
           document.body.appendChild(script);
         });
       }
@@ -1254,23 +1505,25 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         mode: cfMode === 'production' ? 'production' : 'sandbox'
       });
 
+      const isSmallMobile =
+        typeof window !== 'undefined' &&
+        window.innerWidth < 640 &&
+        activeChannel === 'upi';
+
       cashfree
         .checkout({
           paymentSessionId,
-          redirectTarget: '_modal'
+          redirectTarget: isSmallMobile ? '_self' : '_modal'
         })
-        .then(async (result: any) => {
-          if (result?.error) {
-            await verifyAndFinalizeCashfreePayment(cfOrderId);
-            return;
-          }
-          await verifyAndFinalizeCashfreePayment(cfOrderId);
+        .then(async () => {
+          await verifyAndFinalizeCashfreePayment(cfOrderId, { autoPollPending: true });
         })
         .catch(async () => {
-          await verifyAndFinalizeCashfreePayment(cfOrderId);
+          await verifyAndFinalizeCashfreePayment(cfOrderId, { autoPollPending: true });
         });
     } catch (err: any) {
       setIsVerifying(false);
+      submittingRef.current = false;
       setPaymentError(err?.message || 'Error communicating with Cashfree Payments Gateway.');
     }
   };
@@ -1451,16 +1704,33 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
 
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-gray-700 mb-1">
-                  Mobile Number (for Courier SMS) *
+                  Indian Mobile Number (+91) *
                 </label>
-                <input
-                  type="tel"
-                  required
-                  placeholder="e.g. 98290 12345"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="w-full px-3.5 py-2.5 text-xs border border-[#E8DCCF] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#802336]"
-                />
+                <div className="flex items-stretch">
+                  <span className="inline-flex items-center px-3 bg-[#FAF7F2] border border-r-0 border-[#E8DCCF] rounded-l-xl text-xs font-mono font-bold text-[#3B1E22] select-none">
+                    +91
+                  </span>
+                  <input
+                    type="tel"
+                    inputMode="numeric"
+                    autoComplete="tel-national"
+                    required
+                    maxLength={10}
+                    placeholder="9829012345"
+                    value={normalizedPhone10}
+                    onChange={(e) => setPhone(extractIndianMobile10(e.target.value))}
+                    className="w-full px-3.5 py-2.5 text-xs font-mono border border-[#E8DCCF] rounded-r-xl focus:outline-none focus:ring-1 focus:ring-[#802336]"
+                  />
+                </div>
+                <p className="text-[10px] text-gray-500 mt-1">
+                  {normalizedPhone10.length > 0 && !isValidIndianMobile10(normalizedPhone10) ? (
+                    <span className="text-red-600 font-semibold">
+                      Enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.
+                    </span>
+                  ) : (
+                    'Saved with your order & linked to Cashfree checkout for UPI/card receipts and courier updates.'
+                  )}
+                </p>
               </div>
             </div>
 
@@ -1741,28 +2011,23 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
             <div className="p-4 bg-emerald-50/70 rounded-xl border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-full bg-[#802336] text-white flex items-center justify-center flex-shrink-0 shadow-xs">
-                  {upiMethod === 'card' ? <CreditCard className="w-4 h-4 text-[#DFB982]" /> : <Smartphone className="w-4 h-4" />}
+                  {paymentOption === 'upi' ? (
+                    <Smartphone className="w-4 h-4 text-[#DFB982]" />
+                  ) : (
+                    <CreditCard className="w-4 h-4 text-[#DFB982]" />
+                  )}
                 </div>
                 <div>
                   <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 block">
                     Selected Payment Option:
                   </span>
                   <div className="font-bold text-[#3B1E22] flex items-center gap-2">
-                    <span>
-                      {upiMethod === 'card' && 'Cashfree Online Payment (UPI • Cards • Netbanking)'}
-                      {upiMethod === 'phone' && 'Pay by UPI Mobile Number'}
-                      {upiMethod === 'qr' && 'Pay by UPI QR Code'}
-                      {upiMethod === 'intent' && 'Google Pay (1-Tap UPI)'}
-                      {upiMethod === 'vpa' && 'UPI ID / VPA'}
-                    </span>
-                    {upiMethod === 'phone' && (
-                      <span className="font-mono text-[#802336] font-extrabold">{upiMobileNumber}</span>
-                    )}
+                    <span>{getPaymentOptionLabel(paymentOption)}</span>
                   </div>
                   <span className="text-[11px] text-gray-600">
-                    {upiMethod === 'card'
-                      ? 'Official Hosted Checkout • Instant verification for UPI, Visa, Mastercard, RuPay & Netbanking'
-                      : 'Direct UPI transfer verified by our studio team'}
+                    {paymentOption === 'manual_qr'
+                      ? 'Manual Studio UPI QR • Requires 12-digit UTR & admin bank verification'
+                      : 'Official Cashfree PCI-DSS Hosted Checkout • Verified automatically via server'}
                   </span>
                 </div>
               </div>
@@ -1771,7 +2036,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                 onClick={() => setStep(3)}
                 className="text-[11px] font-bold text-[#802336] hover:underline self-start sm:self-auto cursor-pointer"
               >
-                Change in Step 3 →
+                Choose in Step 3 →
               </button>
             </div>
 
@@ -1801,20 +2066,20 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
         <div className="bg-white rounded-2xl border border-[#E8DCCF] p-6 sm:p-8 shadow-sm space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-[#E8DCCF] gap-3">
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="bg-[#802336] text-white text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase flex items-center gap-1 shadow-xs">
                   <ShieldCheck className="w-3 h-3 text-[#DFB982]" />
-                  <span>Secure Checkout</span>
+                  <span>Cashfree Secure Checkout</span>
                 </span>
                 <span className="text-xs text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
                   Order #{orderNumber}
                 </span>
               </div>
               <h2 className="font-serif text-2xl font-bold text-[#3B1E22] mt-1.5">
-                Select Payment Method
+                Choose Your Payment Method
               </h2>
               <p className="text-xs text-gray-500">
-                Choose Cashfree instant online checkout (UPI, Cards, Netbanking) or direct UPI below.
+                Pay securely via Cashfree using UPI, Credit Card, or Debit Card. Order confirms only after server payment verification.
               </p>
             </div>
             <div className="sm:text-right bg-[#FAF7F2] p-3 rounded-xl border border-[#E8DCCF]">
@@ -1827,72 +2092,133 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
             </div>
           </div>
 
-          <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 pb-1">
-              <div>
-                <label className="block text-sm font-bold uppercase tracking-wider text-[#3B1E22]">
-                  Select Payment Option (Choose Preferred Method)
-                </label>
-                <p className="text-xs text-gray-500">
-                  Cashfree Instant Gateway (UPI, Cards & Netbanking), UPI QR Code, and Direct Mobile UPI are supported.
-                </p>
+          {/* Pending / Cancelled / Failed Payment Recovery Banner */}
+          {paymentNotice && (
+            <div
+              data-testid={`payment-notice-${paymentNotice.type}`}
+              className={`p-4 sm:p-5 rounded-2xl border-2 space-y-3 ${
+                paymentNotice.type === 'failed'
+                  ? 'bg-red-50 border-red-200 text-red-900'
+                  : 'bg-amber-50 border-amber-300 text-amber-950'
+              }`}
+            >
+              <div className="flex items-start gap-2.5">
+                {paymentNotice.type === 'pending' ? (
+                  <Clock className="w-5 h-5 text-amber-700 flex-shrink-0 mt-0.5" />
+                ) : (
+                  <AlertCircle
+                    className={`w-5 h-5 flex-shrink-0 mt-0.5 ${
+                      paymentNotice.type === 'failed' ? 'text-red-600' : 'text-amber-700'
+                    }`}
+                  />
+                )}
+                <div className="space-y-1 flex-1">
+                  <h3 className="text-sm font-bold">{paymentNotice.title}</h3>
+                  <p className="text-xs leading-relaxed opacity-90">{paymentNotice.message}</p>
+                  {paymentNotice.cfOrderId && (
+                    <p className="text-[11px] font-mono opacity-80">
+                      Reference Order: <strong>{paymentNotice.cfOrderId}</strong>
+                    </p>
+                  )}
+                </div>
               </div>
-              <span className="text-[11px] font-semibold text-[#802336] bg-[#FAF7F2] px-3 py-1 rounded-full border border-[#E8DCCF]">
-                3 Options Available
-              </span>
-            </div>
 
+              <div className="flex flex-wrap items-center gap-2.5 pt-1">
+                {paymentNotice.type === 'pending' && pendingCfOrderId && (
+                  <button
+                    type="button"
+                    disabled={isVerifying}
+                    onClick={() => verifyAndFinalizeCashfreePayment(pendingCfOrderId, { autoPollPending: false })}
+                    className="bg-[#3B1E22] hover:bg-[#802336] text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isVerifying ? 'animate-spin' : ''}`} />
+                    <span>{isVerifying ? 'Checking Status...' : 'Check Payment Status Again'}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={isVerifying}
+                  onClick={handlePrepareFreshRetry}
+                  className="bg-white hover:bg-gray-50 border border-[#E8DCCF] text-[#3B1E22] px-4 py-2 rounded-xl text-xs font-bold cursor-pointer disabled:opacity-50"
+                >
+                  {paymentNotice.type === 'pending' ? 'Start Fresh Payment Attempt' : 'Retry Payment Now'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Gateway Status Warning if Unconfigured or Blocked on Live Domain */}
+          {cashfreeStatus && (!cashfreeStatus.isConfigured || cashfreeStatus.blockedOnLiveDomain) && (
+            <div className="p-4 bg-amber-50 border border-amber-300 rounded-2xl text-xs text-amber-950 space-y-1.5">
+              <div className="font-bold flex items-center gap-2 text-amber-900">
+                <AlertCircle className="w-4 h-4 text-amber-700 flex-shrink-0" />
+                <span>
+                  {cashfreeStatus.blockedOnLiveDomain
+                    ? 'Cashfree Sandbox Mode Blocked on Live Website'
+                    : 'Cashfree Online Payment Gateway Awaiting Merchant Credentials'}
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-amber-900/90">
+                {cashfreeStatus.blockedOnLiveDomain
+                  ? 'Online Card and UPI gateway checkout requires Live Production Cashfree credentials configured in Admin Settings > Cashfree Gateway.'
+                  : 'Instant UPI, Credit Card, and Debit Card checkout requires CASHFREE_APP_ID and CASHFREE_SECRET_KEY configured on the server (Admin Settings > Cashfree Gateway or environment variables).'}
+              </p>
+            </div>
+          )}
+
+          {/* 3 Explicit Cashfree Payment Channels: UPI, Credit Card, Debit Card */}
+          <div className="space-y-4">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              {/* Option 1: Cashfree Payments Gateway (UPI, Cards & Netbanking) */}
+              {/* Option 1: UPI (Google Pay, PhonePe, Paytm, BHIM & QR) */}
               <button
                 type="button"
-                onClick={() => setUpiMethod('card')}
+                data-testid="pay-option-upi"
+                onClick={() => {
+                  setPaymentOption('upi');
+                  setPaymentError(null);
+                }}
                 className={`p-5 rounded-2xl border-2 text-left transition-all relative flex flex-col justify-between cursor-pointer ${
-                  upiMethod === 'card'
-                    ? 'bg-[#FAF7F2] border-[#802336] ring-2 ring-[#802336]/30 shadow-md'
+                  paymentOption === 'upi'
+                    ? 'bg-[#FAF7F2] border-[#802336] ring-2 ring-[#802336]/25 shadow-md'
                     : 'bg-white border-[#E8DCCF] hover:border-[#802336]/40 hover:shadow-xs'
                 }`}
               >
                 <div>
                   <div className="flex items-center justify-between mb-3">
-                    <div className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-colors ${
-                      upiMethod === 'card' ? 'bg-[#0F5B46] text-white shadow-xs' : 'bg-[#FAF7F2] text-[#0F5B46] border border-[#E8DCCF]'
-                    }`}>
-                      <CreditCard className="w-6 h-6" />
+                    <div
+                      className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-colors ${
+                        paymentOption === 'upi'
+                          ? 'bg-[#0F5B46] text-white shadow-xs'
+                          : 'bg-[#FAF7F2] text-[#0F5B46] border border-[#E8DCCF]'
+                      }`}
+                    >
+                      <Smartphone className="w-5 h-5" />
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-800 px-2.5 py-1 rounded-full border border-emerald-200">
-                        Instant Verify
-                      </span>
-                      <span className="text-[10px] font-bold uppercase tracking-wider bg-purple-50 text-purple-800 px-2 py-1 rounded-full border border-purple-200">
-                        UPI • Cards
-                      </span>
-                    </div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-800 px-2.5 py-1 rounded-full border border-emerald-200">
+                      Instant UPI
+                    </span>
                   </div>
 
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 block">
-                    Option 1
-                  </span>
-                  <h3 className="text-base font-bold text-[#3B1E22] mt-0.5">
-                    Online Payment (UPI / Cards)
-                  </h3>
-                  <p className="text-xs font-semibold text-[#0F5B46] mt-1">
-                    Pay ₹{finalTotal.toLocaleString('en-IN')} via Cashfree
+                  <h3 className="text-base font-bold text-[#3B1E22]">UPI & UPI QR</h3>
+                  <p className="text-xs font-semibold text-[#0F5B46] mt-0.5">
+                    Google Pay, PhonePe, Paytm, BHIM
                   </p>
-                  <p className="text-[11px] text-gray-500 mt-1 leading-snug">
-                    Official 3D Secure & UPI checkout. Supports GPay, PhonePe, Visa, Mastercard, RuPay & Netbanking.
+                  <p className="text-[11px] text-gray-500 mt-1.5 leading-snug">
+                    1-tap UPI app intent on mobile or scannable Cashfree UPI QR / UPI ID on desktop with automatic verification.
                   </p>
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-[#E8DCCF]/70 flex items-center justify-between">
                   <div className="flex items-center gap-2 text-xs font-bold">
-                    <span className={`w-4 h-4 rounded-full border-2 flex items-center justify-center transition-all ${
-                      upiMethod === 'card' ? 'border-[#802336] bg-[#802336]' : 'border-gray-400 bg-white'
-                    }`}>
-                      {upiMethod === 'card' && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    <span
+                      className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                        paymentOption === 'upi' ? 'border-[#802336] bg-[#802336]' : 'border-gray-400 bg-white'
+                      }`}
+                    >
+                      {paymentOption === 'upi' && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
                     </span>
-                    <span className={upiMethod === 'card' ? 'text-[#802336]' : 'text-gray-600'}>
-                      {upiMethod === 'card' ? 'Selected Method' : 'Tap to Select'}
+                    <span className={paymentOption === 'upi' ? 'text-[#802336]' : 'text-gray-600'}>
+                      {paymentOption === 'upi' ? 'Selected' : 'Select UPI'}
                     </span>
                   </div>
                   <span className="text-xs font-mono font-bold text-gray-700">
@@ -1901,56 +2227,56 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                 </div>
               </button>
 
-              {/* Option 2: Pay by UPI QR Code */}
+              {/* Option 2: Credit Card */}
               <button
                 type="button"
-                onClick={() => setUpiMethod('qr')}
+                data-testid="pay-option-cc"
+                onClick={() => {
+                  setPaymentOption('cc');
+                  setPaymentError(null);
+                }}
                 className={`p-5 rounded-2xl border-2 text-left transition-all relative flex flex-col justify-between cursor-pointer ${
-                  upiMethod === 'qr'
-                    ? 'bg-[#FAF7F2] border-[#802336] ring-2 ring-[#802336]/30 shadow-md'
+                  paymentOption === 'cc'
+                    ? 'bg-[#FAF7F2] border-[#802336] ring-2 ring-[#802336]/25 shadow-md'
                     : 'bg-white border-[#E8DCCF] hover:border-[#802336]/40 hover:shadow-xs'
                 }`}
               >
                 <div>
                   <div className="flex items-center justify-between mb-3">
-                    <div className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-colors ${
-                      upiMethod === 'qr' ? 'bg-[#802336] text-white shadow-xs' : 'bg-[#FAF7F2] text-[#802336] border border-[#E8DCCF]'
-                    }`}>
-                      <QrCode className="w-6 h-6" />
+                    <div
+                      className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-colors ${
+                        paymentOption === 'cc'
+                          ? 'bg-[#802336] text-white shadow-xs'
+                          : 'bg-[#FAF7F2] text-[#802336] border border-[#E8DCCF]'
+                      }`}
+                    >
+                      <CreditCard className="w-5 h-5" />
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] font-bold uppercase tracking-wider bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full border border-blue-200">
-                        Scan & Pay
-                      </span>
-                      <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-800 px-2.5 py-1 rounded-full border border-emerald-200">
-                        Auto-Amount
-                      </span>
-                    </div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider bg-blue-50 text-blue-800 px-2.5 py-1 rounded-full border border-blue-200">
+                      3D Secure
+                    </span>
                   </div>
 
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 block">
-                    Option 2
-                  </span>
-                  <h3 className="text-base font-bold text-[#3B1E22] mt-0.5">
-                    Pay by UPI QR Code
-                  </h3>
-                  <p className="text-xs font-semibold text-[#802336] mt-1">
-                    Scan with any UPI app to pay ₹{finalTotal.toLocaleString('en-IN')}
+                  <h3 className="text-base font-bold text-[#3B1E22]">Credit Card</h3>
+                  <p className="text-xs font-semibold text-[#802336] mt-0.5">
+                    Visa, Mastercard, RuPay
                   </p>
-                  <p className="text-[11px] text-gray-500 mt-1 leading-snug">
-                    Displays verified UPI QR code on screen. Supports Google Pay, PhonePe, Paytm, BHIM & CRED.
+                  <p className="text-[11px] text-gray-500 mt-1.5 leading-snug">
+                    Enter card details securely inside Cashfree's PCI-DSS hosted checkout with bank 3DS / OTP authentication.
                   </p>
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-[#E8DCCF]/70 flex items-center justify-between">
                   <div className="flex items-center gap-2 text-xs font-bold">
-                    <span className={`w-4 h-4 rounded-full border-2 flex items-center justify-center transition-all ${
-                      upiMethod === 'qr' ? 'border-[#802336] bg-[#802336]' : 'border-gray-400 bg-white'
-                    }`}>
-                      {upiMethod === 'qr' && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    <span
+                      className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                        paymentOption === 'cc' ? 'border-[#802336] bg-[#802336]' : 'border-gray-400 bg-white'
+                      }`}
+                    >
+                      {paymentOption === 'cc' && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
                     </span>
-                    <span className={upiMethod === 'qr' ? 'text-[#802336]' : 'text-gray-600'}>
-                      {upiMethod === 'qr' ? 'Selected Method' : 'Tap to Select'}
+                    <span className={paymentOption === 'cc' ? 'text-[#802336]' : 'text-gray-600'}>
+                      {paymentOption === 'cc' ? 'Selected' : 'Select Credit Card'}
                     </span>
                   </div>
                   <span className="text-xs font-mono font-bold text-gray-700">
@@ -1959,61 +2285,56 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                 </div>
               </button>
 
-              {/* Option 3: Pay by UPI Contact Number */}
+              {/* Option 3: Debit Card */}
               <button
                 type="button"
-                onClick={() => setUpiMethod('phone')}
+                data-testid="pay-option-dc"
+                onClick={() => {
+                  setPaymentOption('dc');
+                  setPaymentError(null);
+                }}
                 className={`p-5 rounded-2xl border-2 text-left transition-all relative flex flex-col justify-between cursor-pointer ${
-                  upiMethod === 'phone'
-                    ? 'bg-[#FAF7F2] border-[#802336] ring-2 ring-[#802336]/30 shadow-md'
+                  paymentOption === 'dc'
+                    ? 'bg-[#FAF7F2] border-[#802336] ring-2 ring-[#802336]/25 shadow-md'
                     : 'bg-white border-[#E8DCCF] hover:border-[#802336]/40 hover:shadow-xs'
                 }`}
               >
                 <div>
                   <div className="flex items-center justify-between mb-3">
-                    <div className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-colors ${
-                      upiMethod === 'phone' ? 'bg-[#802336] text-white shadow-xs' : 'bg-[#FAF7F2] text-[#802336] border border-[#E8DCCF]'
-                    }`}>
-                      <Smartphone className="w-6 h-6" />
+                    <div
+                      className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-colors ${
+                        paymentOption === 'dc'
+                          ? 'bg-[#3B1E22] text-[#DFB982] shadow-xs'
+                          : 'bg-[#FAF7F2] text-[#3B1E22] border border-[#E8DCCF]'
+                      }`}
+                    >
+                      <CreditCard className="w-5 h-5" />
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] font-bold uppercase tracking-wider bg-[#802336] text-white px-2.5 py-1 rounded-full shadow-xs">
-                        Contact Transfer
-                      </span>
-                      <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-800 px-2.5 py-1 rounded-full border border-emerald-200">
-                        Active UPI
-                      </span>
-                    </div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider bg-purple-50 text-purple-800 px-2.5 py-1 rounded-full border border-purple-200">
+                      Bank OTP
+                    </span>
                   </div>
 
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 block">
-                    Option 3
-                  </span>
-                  <h3 className="text-base font-bold text-[#3B1E22] mt-0.5">
-                    Pay by UPI Contact Number
-                  </h3>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="font-mono text-sm font-extrabold text-[#802336]">
-                      {upiMobileNumber}
-                    </span>
-                    <span className="text-[10px] text-gray-500">
-                      (neeraj chauhan)
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-gray-500 mt-1 leading-snug">
-                    Send directly to our registered mobile contact number using any UPI app with easy 1-click copy.
+                  <h3 className="text-base font-bold text-[#3B1E22]">Debit Card</h3>
+                  <p className="text-xs font-semibold text-[#3B1E22] mt-0.5">
+                    RuPay, Visa, Mastercard Debit
+                  </p>
+                  <p className="text-[11px] text-gray-500 mt-1.5 leading-snug">
+                    Secure hosted Debit Card payment via Cashfree with bank 3D Secure verification. Zero card data stored on our site.
                   </p>
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-[#E8DCCF]/70 flex items-center justify-between">
                   <div className="flex items-center gap-2 text-xs font-bold">
-                    <span className={`w-4 h-4 rounded-full border-2 flex items-center justify-center transition-all ${
-                      upiMethod === 'phone' ? 'border-[#802336] bg-[#802336]' : 'border-gray-400 bg-white'
-                    }`}>
-                      {upiMethod === 'phone' && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    <span
+                      className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                        paymentOption === 'dc' ? 'border-[#802336] bg-[#802336]' : 'border-gray-400 bg-white'
+                      }`}
+                    >
+                      {paymentOption === 'dc' && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
                     </span>
-                    <span className={upiMethod === 'phone' ? 'text-[#802336]' : 'text-gray-600'}>
-                      {upiMethod === 'phone' ? 'Selected Method' : 'Tap to Select'}
+                    <span className={paymentOption === 'dc' ? 'text-[#802336]' : 'text-gray-600'}>
+                      {paymentOption === 'dc' ? 'Selected' : 'Select Debit Card'}
                     </span>
                   </div>
                   <span className="text-xs font-mono font-bold text-gray-700">
@@ -2023,45 +2344,63 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
               </button>
             </div>
 
-            {/* Alternate Gateway Options (1-Tap App Pay & Bank VPA) kept accessible */}
-            <div className="flex items-center justify-center gap-3 pt-1 text-xs text-gray-500">
-              <span className="text-[11px]">Other Options:</span>
+            {/* Honest Mobile Number Payment Guidance Strip (Phase 4) */}
+            <div className="p-3.5 bg-[#FAF7F2] border border-[#E8DCCF] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+              <div className="flex items-start sm:items-center gap-2 text-gray-700">
+                <Phone className="w-4 h-4 text-[#802336] flex-shrink-0 mt-0.5 sm:mt-0" />
+                <span>
+                  Customer Mobile linked to Cashfree:{' '}
+                  <strong className="font-mono text-[#3B1E22]">
+                    {normalizedPhone10 ? `+91 ${normalizedPhone10}` : 'Not entered'}
+                  </strong>
+                  <span className="text-gray-500 ml-1.5">
+                    — Used by Cashfree for UPI/card receipts and bank verification. To pay, select UPI, Credit Card, or Debit Card above.
+                  </span>
+                </span>
+              </div>
               <button
                 type="button"
-                onClick={() => setUpiMethod('intent')}
-                className={`text-[11px] font-semibold hover:underline cursor-pointer ${
-                  upiMethod === 'intent' ? 'text-[#802336] font-bold underline' : 'text-gray-600'
-                }`}
+                onClick={() => setStep(1)}
+                className="text-[11px] font-bold text-[#802336] hover:underline shrink-0 self-end sm:self-auto cursor-pointer"
               >
-                ⚡ 1-Tap App Pay (Mobile)
-              </button>
-              <span>•</span>
-              <button
-                type="button"
-                onClick={() => setUpiMethod('vpa')}
-                className={`text-[11px] font-semibold hover:underline cursor-pointer ${
-                  upiMethod === 'vpa' ? 'text-[#802336] font-bold underline' : 'text-gray-600'
-                }`}
-              >
-                🏦 UPI ID / VPA ({merchantVpa})
+                Edit Mobile
               </button>
             </div>
+
+            {/* Secondary Manual Studio UPI QR Fallback ONLY when Cashfree gateway is not configured */}
+            {cashfreeStatus && (!cashfreeStatus.isConfigured || cashfreeStatus.blockedOnLiveDomain) && (
+              <div className="text-center pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPaymentOption(paymentOption === 'manual_qr' ? 'upi' : 'manual_qr');
+                    setPaymentError(null);
+                  }}
+                  className="text-[11px] font-semibold text-[#802336] hover:underline cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <QrCode className="w-3.5 h-3.5" />
+                  <span>
+                    {paymentOption === 'manual_qr'
+                      ? 'Back to Cashfree Instant Methods'
+                      : 'Alternative: Direct Studio UPI QR (Manual 12-Digit UTR — Order stays Pending until verified)'}
+                  </span>
+                </button>
+              </div>
+            )}
           </div>
 
-          {/* METHOD CONTENT CONTAINER */}
-          <div className="p-6 sm:p-8 bg-[#FAF7F2] rounded-3xl border border-[#E8DCCF] flex flex-col items-center text-center space-y-6">
-            
-            {/* 0. CREDIT / DEBIT CARD VIEW (CASHFREE HOSTED CHECKOUT) */}
-            {upiMethod === 'card' && (
+          {/* ACTIVE METHOD DETAIL & EXECUTION PANEL */}
+          <div className="p-6 sm:p-8 bg-[#FAF7F2] rounded-3xl border border-[#E8DCCF] flex flex-col items-center text-center space-y-5">
+            {paymentOption !== 'manual_qr' ? (
               <div className="w-full max-w-xl space-y-5 animate-fadeIn">
                 <div className="p-5 sm:p-6 bg-white rounded-2xl border-2 border-[#802336] shadow-sm text-left space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-[#E8DCCF] gap-2">
                     <div>
                       <span className="text-[10px] font-bold text-[#802336] uppercase tracking-wider block">
-                        Selected Method
+                        Selected Cashfree Payment Mode
                       </span>
                       <h3 className="font-serif text-lg font-bold text-[#3B1E22]">
-                        Cashfree Online Checkout (UPI • Cards • Netbanking)
+                        {getPaymentOptionLabel(paymentOption)}
                       </h3>
                     </div>
                     <div className="sm:text-right">
@@ -2074,66 +2413,91 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Supported Payment Networks Banner */}
+                  {/* Mode-specific Accepted Badges */}
                   <div className="p-4 bg-[#FAF7F2] rounded-xl border border-[#DFB982] space-y-2.5">
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">
-                        Accepted Payment Modes
+                        {paymentOption === 'upi'
+                          ? 'Supported UPI Apps & Modes'
+                          : paymentOption === 'cc'
+                          ? 'Supported Credit Card Networks'
+                          : 'Supported Debit Card Networks'}
                       </span>
                       <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
                         <ShieldCheck className="w-3 h-3 text-emerald-700" />
-                        3D Secure & Instant Verify
+                        Server-Verified
                       </span>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                      <span className="px-2.5 py-1 bg-white border border-emerald-300 rounded-md text-xs font-black tracking-wider text-emerald-800 shadow-xs">
-                        UPI (GPay / PhonePe / Paytm)
-                      </span>
-                      <span className="px-2.5 py-1 bg-white border border-gray-300 rounded-md text-xs font-black tracking-wider text-blue-900 shadow-xs">
-                        VISA
-                      </span>
-                      <span className="px-2.5 py-1 bg-white border border-gray-300 rounded-md text-xs font-black tracking-wider text-red-600 shadow-xs">
-                        Mastercard
-                      </span>
-                      <span className="px-2.5 py-1 bg-white border border-gray-300 rounded-md text-xs font-black tracking-wider text-emerald-800 shadow-xs">
-                        RuPay
-                      </span>
-                      <span className="px-2.5 py-1 bg-white border border-gray-300 rounded-md text-xs font-bold tracking-wider text-blue-700 shadow-xs">
-                        Netbanking
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Gateway Environment Status Indicator */}
-                  <div className="p-3.5 bg-blue-50/80 border border-blue-200 rounded-xl text-xs text-blue-950 space-y-1.5">
-                    <div className="font-bold flex items-center gap-1.5 text-blue-900">
-                      <Lock className="w-3.5 h-3.5 text-blue-700 flex-shrink-0" />
-                      <span>Official Cashfree Hosted Checkout</span>
-                    </div>
-                    <p className="text-[11px] leading-relaxed text-blue-900/90">
-                      Complete your payment via Cashfree's PCI-DSS Level 1 gateway using UPI, Credit/Debit Card, or Netbanking. Order confirmation appears immediately after gateway verification.
-                    </p>
-                    {cashfreeStatus && (
-                      <div className="pt-1 flex flex-wrap items-center gap-2 text-[10px]">
-                        <span className="font-semibold text-blue-800">Mode:</span>
-                        <span className={`px-2 py-0.5 rounded font-bold uppercase ${
-                          cashfreeStatus.env === 'PRODUCTION'
-                            ? 'bg-purple-100 text-purple-900 border border-purple-200'
-                            : 'bg-amber-100 text-amber-900 border border-amber-200'
-                        }`}>
-                          {cashfreeStatus.env === 'PRODUCTION' ? 'Production (Live Payments)' : 'Sandbox Test Mode'}
+                    {paymentOption === 'upi' ? (
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <span className="px-2.5 py-1 bg-white border border-blue-200 rounded-md text-xs font-bold text-blue-900">
+                          Google Pay
                         </span>
-                        {!cashfreeStatus.isConfigured && (
-                          <span className="text-amber-800 font-semibold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                            Merchant App ID & Secret Key required in Admin Settings or .env
-                          </span>
-                        )}
+                        <span className="px-2.5 py-1 bg-white border border-purple-200 rounded-md text-xs font-bold text-purple-900">
+                          PhonePe
+                        </span>
+                        <span className="px-2.5 py-1 bg-white border border-sky-200 rounded-md text-xs font-bold text-sky-900">
+                          Paytm
+                        </span>
+                        <span className="px-2.5 py-1 bg-white border border-emerald-200 rounded-md text-xs font-bold text-emerald-900">
+                          BHIM UPI
+                        </span>
+                        <span className="px-2.5 py-1 bg-white border border-gray-300 rounded-md text-xs font-bold text-gray-800">
+                          UPI QR / UPI ID
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <span className="px-2.5 py-1 bg-white border border-gray-300 rounded-md text-xs font-black tracking-wider text-blue-900">
+                          VISA
+                        </span>
+                        <span className="px-2.5 py-1 bg-white border border-gray-300 rounded-md text-xs font-black tracking-wider text-red-600">
+                          Mastercard
+                        </span>
+                        <span className="px-2.5 py-1 bg-white border border-gray-300 rounded-md text-xs font-black tracking-wider text-emerald-800">
+                          RuPay
+                        </span>
+                        <span className="px-2.5 py-1 bg-white border border-blue-200 rounded-md text-xs font-semibold text-blue-800">
+                          3D Secure / Bank OTP
+                        </span>
                       </div>
                     )}
                   </div>
 
-                  {/* Payment Error if any */}
+                  {/* Security & Environment Disclosure */}
+                  <div className="p-3.5 bg-blue-50/80 border border-blue-200 rounded-xl text-xs text-blue-950 space-y-1.5">
+                    <div className="font-bold flex items-center gap-1.5 text-blue-900">
+                      <Lock className="w-3.5 h-3.5 text-blue-700 flex-shrink-0" />
+                      <span>PCI-DSS Level 1 Cashfree Hosted Checkout</span>
+                    </div>
+                    <p className="text-[11px] leading-relaxed text-blue-900/90">
+                      {paymentOption === 'upi'
+                        ? 'You can approve payment in Google Pay, PhonePe, Paytm, BHIM, or by scanning Cashfree’s dynamic UPI QR. After returning, we verify payment status securely with Cashfree before confirming your order.'
+                        : 'Card numbers, CVV, and bank OTP are entered strictly inside Cashfree’s encrypted hosted checkout and are never stored by VIDHYAA Jewellery Studio.'}
+                    </p>
+                    {cashfreeStatus && (
+                      <div className="pt-1 flex flex-wrap items-center gap-2 text-[10px]">
+                        <span className="font-semibold text-blue-800">Gateway Mode:</span>
+                        <span
+                          className={`px-2 py-0.5 rounded font-bold uppercase ${
+                            cashfreeStatus.env === 'PRODUCTION'
+                              ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
+                              : 'bg-amber-100 text-amber-900 border border-amber-200'
+                          }`}
+                        >
+                          {cashfreeStatus.env === 'PRODUCTION'
+                            ? cashfreeStatus.isConfigured
+                              ? 'Production (Live Payments)'
+                              : 'Production (Credentials Missing)'
+                            : cashfreeStatus.isConfigured
+                            ? 'Sandbox Test Mode'
+                            : 'Not Configured Yet'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
                   {paymentError && (
                     <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-start gap-2">
                       <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
@@ -2141,284 +2505,79 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                     </div>
                   )}
 
-                  {/* Payment Action Button */}
                   <button
                     type="button"
-                    disabled={isVerifying}
-                    onClick={handleCashfreeCardPayment}
-                    className="w-full bg-[#0F5B46] hover:bg-[#0A3D2F] disabled:bg-gray-400 text-white py-3.5 px-6 rounded-xl font-bold text-xs uppercase tracking-wider transition-all shadow-md flex items-center justify-center gap-2.5 cursor-pointer active:scale-[0.99]"
+                    data-testid="cashfree-pay-now-btn"
+                    disabled={isVerifying || (cashfreeStatus !== null && !cashfreeAvailable)}
+                    onClick={() => handleCashfreePayment(paymentOption)}
+                    className="w-full bg-[#0F5B46] hover:bg-[#0A3D2F] disabled:bg-gray-400 disabled:cursor-not-allowed text-white py-3.5 px-6 rounded-xl font-bold text-xs uppercase tracking-wider transition-all shadow-md flex items-center justify-center gap-2.5 cursor-pointer active:scale-[0.99]"
                   >
                     {isVerifying ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin text-[#DFB982]" />
-                        <span>Processing Cashfree Checkout...</span>
+                        <span>Connecting to Cashfree...</span>
+                      </>
+                    ) : cashfreeStatus !== null && !cashfreeAvailable ? (
+                      <>
+                        <Lock className="w-4 h-4 text-white/80" />
+                        <span>Cashfree Credentials Required</span>
                       </>
                     ) : (
                       <>
-                        <CreditCard className="w-4 h-4 text-[#DFB982]" />
-                        <span>Pay ₹{finalTotal.toLocaleString('en-IN')} Now</span>
+                        {paymentOption === 'upi' ? (
+                          <Smartphone className="w-4 h-4 text-[#DFB982]" />
+                        ) : (
+                          <CreditCard className="w-4 h-4 text-[#DFB982]" />
+                        )}
+                        <span>
+                          Pay ₹{finalTotal.toLocaleString('en-IN')} via{' '}
+                          {paymentOption === 'upi'
+                            ? 'UPI'
+                            : paymentOption === 'cc'
+                            ? 'Credit Card'
+                            : 'Debit Card'}
+                        </span>
                         <Lock className="w-3.5 h-3.5 text-white/80 ml-1" />
                       </>
                     )}
                   </button>
                 </div>
               </div>
-            )}
-
-            {/* 1. PAY BY UPI MOBILE NUMBER VIEW */}
-            {upiMethod === 'phone' && (
-              <div className="w-full max-w-xl space-y-5">
-                <div className="p-5 sm:p-6 bg-white rounded-2xl border-2 border-[#802336] shadow-sm text-left space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-[#E8DCCF] gap-2">
-                    <div>
-                      <span className="text-[10px] font-bold text-[#802336] uppercase tracking-wider block">
-                        Selected Method
-                      </span>
-                      <h3 className="font-serif text-lg font-bold text-[#3B1E22]">
-                        Pay by UPI Mobile Number
-                      </h3>
-                    </div>
-                    <div className="sm:text-right">
-                      <span className="text-[10px] text-gray-500 uppercase tracking-wider block font-semibold">
-                        Order Total to Pay
-                      </span>
-                      <span className="font-serif text-xl sm:text-2xl font-bold text-[#802336]">
-                        ₹{finalTotal.toLocaleString('en-IN')}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Prominent Contact Number Card with Working Copy Button */}
-                  <div className="p-4 bg-[#FAF7F2] rounded-xl border border-[#DFB982] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div>
-                      <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider block">
-                        UPI Contact Number
-                      </span>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="font-mono text-2xl sm:text-3xl font-extrabold text-[#3B1E22] tracking-wider select-all">
-                          {upiMobileNumber}
-                        </span>
-                        <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full">
-                          Active UPI
-                        </span>
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={handleCopyPhone}
-                      className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm ${
-                        copiedPhone
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-[#802336] hover:bg-[#681c2b] text-white'
-                      }`}
-                    >
-                      {copiedPhone ? <Check className="w-4 h-4 text-white" /> : <Copy className="w-4 h-4 text-[#DFB982]" />}
-                      <span>{copiedPhone ? `Copied ${upiMobileNumber}!` : 'Copy Number'}</span>
-                    </button>
-                  </div>
-
-                  {/* Mandatory Recipient Verification Warning */}
-                  <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950 space-y-1">
-                    <div className="font-bold flex items-center gap-1.5 text-amber-900">
-                      <AlertCircle className="w-4 h-4 text-amber-700 flex-shrink-0" />
-                      <span>Please Verify Recipient Name Before Transfer</span>
-                    </div>
-                    <p className="text-[11px] leading-relaxed text-amber-900/90">
-                      When paying to mobile number <strong className="font-mono">{upiMobileNumber}</strong> in your UPI app, please confirm the verified recipient name appears as <strong className="text-black">{payeeName}</strong> before approving the payment.
-                    </p>
-                  </div>
-
-                  {/* Step by Step Instructions */}
-                  <div className="space-y-2 pt-1 text-xs text-gray-700">
-                    <h4 className="font-bold uppercase tracking-wider text-[11px] text-[#3B1E22] flex items-center gap-1.5">
-                      <Info className="w-3.5 h-3.5 text-[#802336]" />
-                      <span>Payment Instructions:</span>
-                    </h4>
-                    <ol className="list-decimal list-inside space-y-1.5 text-[11px] text-gray-600 pl-1 leading-relaxed">
-                      <li>Open any supported UPI app (<span className="font-semibold text-gray-800">Google Pay, PhonePe, Paytm, BHIM, CRED</span>).</li>
-                      <li>Choose <strong className="text-gray-900">"Pay to Mobile Number"</strong> or <strong className="text-gray-900">"Pay Contacts"</strong>.</li>
-                      <li>Enter or paste mobile number <strong className="font-mono text-gray-900">{upiMobileNumber}</strong>.</li>
-                      <li>Verify the recipient name displays as <strong className="text-gray-900">{payeeName}</strong>.</li>
-                      <li>Enter the exact order total of <strong className="text-[#802336]">₹{finalTotal.toLocaleString('en-IN')}</strong> and complete payment with your UPI PIN.</li>
-                      <li>After paying, copy the 12-digit <strong className="text-gray-900">UPI Reference Number / UTR</strong> and enter it below.</li>
-                    </ol>
-                  </div>
-
-                  {/* Supported UPI Apps Row */}
-                  <div className="pt-2 border-t border-gray-100 flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-[10px] text-gray-400 font-medium">Supported UPI Apps:</span>
-                    <div className="flex items-center gap-2 text-[10px] font-semibold text-gray-700">
-                      <span className="bg-[#FAF7F2] px-2 py-0.5 rounded border border-[#E8DCCF]">Google Pay</span>
-                      <span className="bg-[#FAF7F2] px-2 py-0.5 rounded border border-[#E8DCCF]">PhonePe</span>
-                      <span className="bg-[#FAF7F2] px-2 py-0.5 rounded border border-[#E8DCCF]">Paytm</span>
-                      <span className="bg-[#FAF7F2] px-2 py-0.5 rounded border border-[#E8DCCF]">BHIM</span>
-                      <span className="bg-[#FAF7F2] px-2 py-0.5 rounded border border-[#E8DCCF]">CRED</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* 2. GOOGLE PAY QR VIEW */}
-            {upiMethod === 'qr' && (
-              <GooglePayQRCard
-                payeeName={payeeName}
-                upiId={merchantVpa}
-                amount={finalTotal}
-                orderNumber={orderNumber}
-              />
-            )}
-
-            {/* 3. 1-TAP APP PAY VIEW */}
-            {upiMethod === 'intent' && (
-              <div className="w-full max-w-md space-y-4">
-                <div className="p-4 bg-white rounded-2xl border border-[#E8DCCF] text-left">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                    <span className="text-xs font-bold text-gray-800 uppercase tracking-wider">
-                      Instant 1-Tap Mobile Payment
-                    </span>
-                  </div>
-                  <p className="text-xs text-gray-600">
-                    If you are on your smartphone or tablet, tap below to open Google Pay directly with the exact order amount (<strong>₹{finalTotal.toLocaleString('en-IN')}</strong>) pre-filled.
-                  </p>
+            ) : (
+              /* Manual Studio UPI QR Fallback (only accessible when Cashfree is unavailable) */
+              <div className="w-full max-w-md space-y-5">
+                <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-left text-xs text-amber-950">
+                  <strong>Manual Studio Verification:</strong> Orders submitted with a 12-digit UTR remain in{' '}
+                  <strong>Payment Pending</strong> status until verified in our studio bank account.
                 </div>
 
-                {/* Primary Google Pay Intent */}
-                <a
-                  href={upiDeepLink}
-                  className="w-full p-4 bg-gradient-to-r from-[#1A73E8] to-[#1557B0] hover:from-[#1557B0] hover:to-[#0D47A1] text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-3 shadow-md transition-all hover:shadow-lg"
-                >
-                  <div className="bg-white p-1 rounded-full">
-                    <svg className="w-5 h-5" viewBox="0 0 24 24">
-                      <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/>
-                      <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"/>
-                      <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/>
-                      <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
-                    </svg>
-                  </div>
-                  <span>Pay ₹{finalTotal.toLocaleString('en-IN')} with Google Pay</span>
-                </a>
+                <GooglePayQRCard
+                  payeeName={payeeName}
+                  upiId={merchantVpa}
+                  amount={finalTotal}
+                  orderNumber={orderNumber}
+                />
 
-                {/* Alternate UPI Apps */}
-                <div className="grid grid-cols-2 gap-3 pt-1">
-                  <a
-                    href={upiDeepLink}
-                    className="p-3 bg-white rounded-xl border border-[#E8DCCF] hover:border-[#5F259F] text-xs font-semibold text-[#3B1E22] flex items-center justify-center gap-2 shadow-xs hover:bg-purple-50/30 transition-colors"
-                  >
-                    <span className="w-2 h-2 rounded-full bg-[#5F259F]" />
-                    <span>PhonePe</span>
-                  </a>
-                  <a
-                    href={upiDeepLink}
-                    className="p-3 bg-white rounded-xl border border-[#E8DCCF] hover:border-[#00BAF2] text-xs font-semibold text-[#3B1E22] flex items-center justify-center gap-2 shadow-xs hover:bg-sky-50/30 transition-colors"
-                  >
-                    <span className="w-2 h-2 rounded-full bg-[#00BAF2]" />
-                    <span>Paytm UPI</span>
-                  </a>
-                  <a
-                    href={upiDeepLink}
-                    className="p-3 bg-white rounded-xl border border-[#E8DCCF] hover:border-gray-800 text-xs font-semibold text-[#3B1E22] flex items-center justify-center gap-2 shadow-xs hover:bg-gray-50 transition-colors"
-                  >
-                    <span className="w-2 h-2 rounded-full bg-black" />
-                    <span>CRED UPI</span>
-                  </a>
-                  <a
-                    href={upiDeepLink}
-                    className="p-3 bg-white rounded-xl border border-[#E8DCCF] hover:border-[#0F4C4A] text-xs font-semibold text-[#3B1E22] flex items-center justify-center gap-2 shadow-xs hover:bg-emerald-50/30 transition-colors"
-                  >
-                    <span className="w-2 h-2 rounded-full bg-[#0F4C4A]" />
-                    <span>Any UPI App</span>
-                  </a>
-                </div>
-              </div>
-            )}
-
-            {/* 4. UPI ID / VPA VIEW */}
-            {upiMethod === 'vpa' && (
-              <div className="w-full max-w-md space-y-4">
-                <div className="p-5 bg-white rounded-2xl border border-[#E8DCCF] shadow-sm text-left space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                      Google Pay Merchant UPI VPA
-                    </span>
-                    <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                      SBI Verified
-                    </span>
-                  </div>
-
-                  <div className="p-3.5 bg-[#FAF7F2] rounded-xl border border-[#E8DCCF] flex items-center justify-between">
-                    <div>
-                      <span className="text-[10px] text-gray-400 block font-medium">
-                        Payee Name: <strong className="text-gray-800">{payeeName}</strong>
-                      </span>
-                      <span className="font-mono text-sm sm:text-base font-bold text-[#3B1E22] select-all">
-                        {merchantVpa}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleCopyVpa}
-                      className="px-3.5 py-2 rounded-xl bg-white hover:bg-gray-50 text-[#802336] text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs border border-[#E8DCCF]"
-                    >
-                      {copiedVpa ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
-                      <span>{copiedVpa ? 'Copied!' : 'Copy ID'}</span>
-                    </button>
-                  </div>
-
-                  <p className="text-[11px] text-gray-500">
-                    Open your banking or UPI app, choose "Pay to UPI ID / VPA", enter <span className="font-mono font-semibold text-gray-800">{merchantVpa}</span>, verify the payee is <strong>{payeeName}</strong>, and send ₹{finalTotal.toLocaleString('en-IN')}.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* MANDATORY 12-DIGIT UPI REFERENCE / UTR INPUT (UPI ONLY) */}
-            {upiMethod !== 'card' && (
-              <div className="w-full max-w-md pt-5 border-t border-[#E8DCCF] text-left space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="pt-4 border-t border-[#E8DCCF] text-left space-y-3">
                   <label className="block text-xs font-bold uppercase tracking-wider text-[#3B1E22]">
                     Enter 12-Digit UPI Reference / UTR Number *
                   </label>
-                  <span className="text-[10px] text-[#802336] font-semibold bg-[#802336]/10 px-2 py-0.5 rounded-full">
-                    Mandatory for Dispatch
-                  </span>
-                </div>
-
-                <div className="relative">
                   <input
                     type="text"
+                    inputMode="numeric"
                     placeholder="e.g. 427819028471"
                     maxLength={12}
                     value={utrNumber}
                     onChange={(e) => setUtrNumber(e.target.value.replace(/\D/g, ''))}
-                    className="w-full px-4 py-3.5 text-base font-mono font-bold tracking-widest border border-[#E8DCCF] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#802336] bg-white text-gray-900 placeholder:tracking-normal placeholder:font-normal placeholder:text-gray-400 placeholder:text-xs"
+                    className="w-full px-4 py-3 text-base font-mono font-bold tracking-widest border border-[#E8DCCF] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#802336] bg-white text-gray-900"
                   />
-                  {utrNumber.length === 12 && (
-                    <div className="absolute right-3.5 top-1/2 -translate-y-1/2 text-emerald-600 flex items-center gap-1 text-xs font-semibold">
-                      <CheckCircle className="w-4 h-4" />
-                      <span>Valid</span>
+                  {paymentError && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                      <span>{paymentError}</span>
                     </div>
                   )}
                 </div>
-
-                <div className="p-3 bg-white rounded-xl border border-gray-200 text-[11px] text-gray-600 space-y-1">
-                  <div className="font-semibold text-gray-900 flex items-center gap-1.5">
-                    <Info className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Where to find this in your UPI app?</span>
-                  </div>
-                  <p>
-                    After paying in Google Pay, PhonePe, or Paytm, tap the payment in your transaction history and copy the 12-digit number labeled <strong>"UPI transaction ID"</strong>, <strong>"UTR"</strong>, or <strong>"Ref No."</strong>.
-                  </p>
-                </div>
-
-                {paymentError && (
-                  <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                    <span>{paymentError}</span>
-                  </div>
-                )}
               </div>
             )}
           </div>
@@ -2431,23 +2590,22 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
             >
               Back
             </button>
-            {upiMethod === 'card' ? (
+            {paymentOption !== 'manual_qr' ? (
               <button
                 type="button"
-                disabled={isVerifying}
-                onClick={handleCashfreeCardPayment}
-                className="bg-[#0F5B46] hover:bg-[#0A3D2F] text-white px-8 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow-lg disabled:opacity-50 flex items-center gap-2"
+                disabled={isVerifying || (cashfreeStatus !== null && !cashfreeAvailable)}
+                onClick={() => handleCashfreePayment(paymentOption)}
+                className="bg-[#0F5B46] hover:bg-[#0A3D2F] disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-7 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow-lg flex items-center gap-2"
               >
                 {isVerifying ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin text-[#DFB982]" />
-                    <span>Connecting to Cashfree...</span>
+                    <span>Verifying...</span>
                   </>
                 ) : (
                   <>
-                    <CreditCard className="w-4 h-4 text-[#DFB982]" />
-                    <span>Pay ₹{finalTotal.toLocaleString('en-IN')} Now</span>
-                    <Lock className="w-3.5 h-3.5 text-white/80" />
+                    <ShieldCheck className="w-4 h-4 text-[#DFB982]" />
+                    <span>Pay ₹{finalTotal.toLocaleString('en-IN')} Securely</span>
                   </>
                 )}
               </button>
@@ -2455,22 +2613,11 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
               <button
                 type="button"
                 disabled={isVerifying}
-                onClick={handleVerifyUpiPayment}
-                className="bg-[#0F4C4A] hover:bg-[#0A3635] text-white px-8 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow-lg disabled:opacity-50 flex items-center gap-2"
+                onClick={handleVerifyManualUpiQr}
+                className="bg-[#0F4C4A] hover:bg-[#0A3635] text-white px-7 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer shadow-lg disabled:opacity-50 flex items-center gap-2"
               >
-                {isVerifying ? (
-                  <span>Submitting Order...</span>
-                ) : upiMethod === 'phone' ? (
-                  <>
-                    <ShieldCheck className="w-4 h-4 text-[#DFB982]" />
-                    <span>Submit Order (Pay to {upiMobileNumber})</span>
-                  </>
-                ) : (
-                  <>
-                    <ShieldCheck className="w-4 h-4 text-[#DFB982]" />
-                    <span>Submit UTR & Place Order</span>
-                  </>
-                )}
+                <ShieldCheck className="w-4 h-4 text-[#DFB982]" />
+                <span>{isVerifying ? 'Submitting...' : 'Submit UTR (Pending Verification)'}</span>
               </button>
             )}
           </div>

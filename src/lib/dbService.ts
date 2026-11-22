@@ -25,6 +25,7 @@ import {
   resolveCategoryCoverImage
 } from './sampleData';
 import { invalidateMediaInventoryCache, normalizeImageUrl } from './storageService';
+import { getAdminAuthHeaders } from './adminSessionMemory';
 
 const PRODUCTS_COL = 'products';
 const CATEGORIES_COL = 'categories';
@@ -1193,9 +1194,9 @@ export async function saveProduct(product: Product): Promise<Product> {
       const resp = await fetch('/api/products', {
         method: 'POST',
         credentials: 'include',
-        headers: {
+        headers: getAdminAuthHeaders({
           'Content-Type': 'application/json'
-        },
+        }),
         body: JSON.stringify({ product: sanitized })
       });
 
@@ -1284,7 +1285,8 @@ export async function deleteProduct(productId: string): Promise<void> {
     if (typeof fetch !== 'undefined') {
       const resp = await fetch(`/api/products/${encodeURIComponent(productId)}`, {
         method: 'DELETE',
-        credentials: 'include'
+        credentials: 'include',
+        headers: getAdminAuthHeaders()
       }).catch(() => null);
       if (resp) {
         if (resp.status === 401 || resp.status === 403) {
@@ -1734,6 +1736,12 @@ export function $sanitizeOrder(raw: any): Order | null {
   if (raw.gatewayOrderId) sanitized.gatewayOrderId = String(raw.gatewayOrderId);
   if (raw.cardNetwork) sanitized.cardNetwork = String(raw.cardNetwork);
   if (raw.cardType) sanitized.cardType = String(raw.cardType);
+  if (raw.bankReference) sanitized.bankReference = String(raw.bankReference);
+  if (raw.paymentGroup) sanitized.paymentGroup = String(raw.paymentGroup);
+  if (raw.selectedPaymentChannel) sanitized.selectedPaymentChannel = String(raw.selectedPaymentChannel);
+  if (raw.paymentEnv) sanitized.paymentEnv = String(raw.paymentEnv);
+  if (typeof raw.isTestOrder === 'boolean') sanitized.isTestOrder = raw.isTestOrder;
+  if (typeof raw.redactedPii === 'boolean') sanitized.redactedPii = raw.redactedPii;
   if (raw.paidAt) sanitized.paidAt = String(raw.paidAt);
   if (raw.paymentVerifiedAt) sanitized.paymentVerifiedAt = String(raw.paymentVerifiedAt);
   if (raw.verifiedAmount !== undefined) sanitized.verifiedAmount = parseMoney(raw.verifiedAmount, totalAmount);
@@ -2001,7 +2009,8 @@ export async function fetchAllOrders(): Promise<Order[]> {
   try {
     if (typeof fetch !== 'undefined') {
       const resp = await fetch('/api/orders', {
-        credentials: 'include'
+        credentials: 'include',
+        headers: getAdminAuthHeaders()
       });
       if (resp && resp.ok) {
         serverOrders = await resp.json();
@@ -2095,9 +2104,9 @@ export async function updateOrderStatus(
       await fetch(`/api/orders/${encodeURIComponent(orderId)}`, {
         method: 'PUT',
         credentials: 'include',
-        headers: {
+        headers: getAdminAuthHeaders({
           'Content-Type': 'application/json'
-        },
+        }),
         body: JSON.stringify(stripUndefinedDeep({ orderStatus: status, trackingNumber, courierName }))
       });
     }
@@ -2123,9 +2132,9 @@ export async function confirmOrderPaymentAdmin(orderId: string): Promise<Order |
     const resp = await fetch(`/api/orders/${encodeURIComponent(orderId)}/confirm-payment`, {
       method: 'POST',
       credentials: 'include',
-      headers: {
+      headers: getAdminAuthHeaders({
         'Content-Type': 'application/json'
-      }
+      })
     });
     if (resp.ok) {
       const data = await resp.json().catch(() => null);

@@ -64,23 +64,24 @@ export const TrackOrderView: React.FC<TrackOrderViewProps> = ({
   };
 
   const steps: { key: OrderStatus; label: string; desc: string }[] = [
-    { key: 'Confirmed', label: 'Order Confirmed', desc: 'Payment verified via UPI' },
+    { key: 'Confirmed', label: 'Order Confirmed', desc: 'Payment verified & confirmed' },
     { key: 'Processing', label: 'Processing & Quality Check', desc: 'Handcrafted in Roorkee atelier' },
     { key: 'Shipped', label: 'Dispatched & In Transit', desc: 'Handed over to express courier' },
     { key: 'Delivered', label: 'Delivered', desc: 'Hand delivered to your doorstep' }
   ];
 
-  const getStepIndex = (status: OrderStatus) => {
-    if (status === 'Cancelled') return -1;
-    if (status === 'Pending') return 0;
-    if (status === 'Confirmed') return 0;
+  const getStepIndex = (ord: Order) => {
+    const status = ord.orderStatus;
+    if (status === 'Cancelled' || ord.paymentStatus === 'failed') return -1;
+    if (status === 'Pending' && !isOrderPaid(ord)) return -1;
+    if (status === 'Confirmed' || (status === 'Pending' && isOrderPaid(ord))) return 0;
     if (status === 'Processing') return 1;
     if (status === 'Shipped') return 2;
     if (status === 'Delivered') return 3;
-    return 0;
+    return -1;
   };
 
-  const activeIndex = order ? getStepIndex(order.orderStatus) : 0;
+  const activeIndex = order ? getStepIndex(order) : -1;
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
@@ -215,7 +216,7 @@ export const TrackOrderView: React.FC<TrackOrderViewProps> = ({
             </div>
           ) : (
             <div className="p-4 bg-red-50 text-red-700 rounded-xl text-xs">
-              This order was cancelled. Any processed UPI funds are returned within 2-3 business days.
+              This order was cancelled. Any verified online payment is refunded within 3–5 business days.
             </div>
           )}
 
@@ -298,8 +299,13 @@ export const TrackOrderView: React.FC<TrackOrderViewProps> = ({
                 </strong>
               </p>
               <p className="text-gray-600">
-                Reference: <strong>{order.paymentId || order.upiReference || (order.cfOrderId ? String(order.cfOrderId) : 'Pending')}</strong>
+                Reference: <strong className="font-mono">{order.paymentId || order.upiReference || (order.cfOrderId ? String(order.cfOrderId) : 'Pending')}</strong>
               </p>
+              {order.bankReference && order.bankReference !== order.paymentId && (
+                <p className="text-gray-500 text-[11px]">
+                  Bank / UPI Ref: <strong className="font-mono">{order.bankReference}</strong>
+                </p>
+              )}
               <p className="font-serif text-base font-bold text-[#802336] pt-1">
                 Total Amount: ₹{Number(order.totalAmount || (order as any).total || 0).toLocaleString('en-IN')}
               </p>

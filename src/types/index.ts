@@ -224,6 +224,9 @@ export interface Order {
   gatewayOrderId?: string;
   cardNetwork?: string;
   cardType?: string;
+  bankReference?: string;
+  paymentGroup?: string;
+  selectedPaymentChannel?: string;
   upiReference?: string;
   paidAt?: string;
   paymentVerifiedAt?: string;

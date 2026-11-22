@@ -373,7 +373,10 @@ export const AccountView: React.FC<AccountViewProps> = ({
                   <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 pt-2 border-t border-gray-100 text-xs">
                     <span className="text-gray-600">
                       Method: <strong className="text-[#3B1E22]">{ord.paymentMethod || 'Online Payment'}</strong>
-                      {txRef ? <span className="ml-2 font-mono text-[11px] text-gray-500">(Ref: {txRef})</span> : null}
+                      {txRef ? <span className="ml-2 font-mono text-[11px] text-gray-500">(ID: {txRef})</span> : null}
+                      {ord.bankReference && ord.bankReference !== txRef ? (
+                        <span className="ml-2 font-mono text-[11px] text-gray-500">(Ref: {ord.bankReference})</span>
+                      ) : null}
                     </span>
                     <span className="font-bold text-sm text-[#3B1E22]">
                       {paid ? 'Amount Paid' : 'Order Total'}: ₹{Number(ord.totalAmount || 0).toLocaleString('en-IN')}

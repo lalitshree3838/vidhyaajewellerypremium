@@ -10,7 +10,10 @@ import {
   createCashfreeOrder,
   verifyCashfreeOrder,
   verifyCashfreeWebhookSignature,
-  sanitizeGatewayOrderId
+  sanitizeGatewayOrderId,
+  normalizeIndianMobile10,
+  sanitizeCashfreePaymentMethods,
+  formatPaymentMethodLabel
 } from './src/server/cashfreeCore.js';
 import {
   getAllowedAdminEmails,
@@ -319,7 +322,7 @@ function getAllowedCorsOrigin(req) {
   if (/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/i.test(origin)) {
     return origin;
   }
-  if (/^https:\/\/[a-z0-9-]+\.run\.app$/i.test(origin)) {
+  if (/^https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.run\.app$/i.test(origin)) {
     return origin;
   }
 
@@ -1014,6 +1017,7 @@ export function handleApiMiddleware(req, res, next) {
               success: true,
               authenticated: true,
               expiresIn: 12 * 3600,
+              token,
               admin: adminInfo
             },
             req,
@@ -1070,6 +1074,7 @@ export function handleApiMiddleware(req, res, next) {
               success: true,
               authenticated: true,
               expiresIn: 12 * 3600,
+              token,
               admin: adminInfo
             },
             req,
@@ -1176,6 +1181,7 @@ export function handleApiMiddleware(req, res, next) {
             success: true,
             authenticated: true,
             expiresIn: 12 * 3600,
+            token,
             admin: adminInfo
           },
           req,
@@ -1865,15 +1871,32 @@ export function handleApiMiddleware(req, res, next) {
           });
         }
 
+        const rawCustomerPhone = body.customerPhone || body.shippingAddress?.phone || '';
+        const cleanCustomerMobile = normalizeIndianMobile10(rawCustomerPhone);
+        if (!cleanCustomerMobile) {
+          return sendJson(res, 400, {
+            success: false,
+            configured: true,
+            code: 'INVALID_MOBILE_NUMBER',
+            error: 'Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.'
+          });
+        }
+
         const directHostRaw = String(req.headers['host'] || '').split(',')[0].trim();
-        const canonicalLiveHost = /^(?:www\.)?vidhyaajewellerystudio\.com(?::\d+)?$/i.test(directHostRaw)
-          ? directHostRaw.replace(/:\d+$/, '').toLowerCase()
+        const forwardedHostRaw = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+        const activeHostRaw = forwardedHostRaw || directHostRaw || 'localhost:3000';
+        const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+        const isProxiedHttps =
+          forwardedProto === 'https' ||
+          Boolean(req.socket?.encrypted) ||
+          /\.run\.app$/i.test(activeHostRaw.replace(/:\d+$/, ''));
+
+        const canonicalLiveHost = /^(?:www\.)?vidhyaajewellerystudio\.com(?::\d+)?$/i.test(activeHostRaw)
+          ? activeHostRaw.replace(/:\d+$/, '').toLowerCase()
           : 'vidhyaajewellerystudio.com';
         const defaultOrigin = isLiveDomain
           ? `https://${canonicalLiveHost}`
-          : directHostRaw
-          ? `${String(req.headers['x-forwarded-proto'] || 'http').split(',')[0].trim() === 'https' ? 'https' : 'http'}://${directHostRaw}`
-          : 'http://localhost:3000';
+          : `${isProxiedHttps ? 'https' : 'http'}://${activeHostRaw}`;
         const defaultReturnUrl = `${defaultOrigin}/?view=checkout&cf_order_id={order_id}`;
 
         let validatedReturnUrl = defaultReturnUrl;
@@ -1904,10 +1927,28 @@ export function handleApiMiddleware(req, res, next) {
               });
             }
           } else {
-            const reqHostname = directHostRaw.replace(/:\d+$/, '').toLowerCase();
+            const allowedHosts = new Set(
+              [directHostRaw, forwardedHostRaw]
+                .map((h) => h.replace(/:\d+$/, '').toLowerCase())
+                .filter(Boolean)
+            );
+            const originHdr = String(req.headers['origin'] || '').trim();
+            if (originHdr) {
+              try {
+                const parsedOrigin = new URL(originHdr);
+                if (
+                  /^(localhost|127\.0\.0\.1)$/i.test(parsedOrigin.hostname) ||
+                  /\.run\.app$/i.test(parsedOrigin.hostname) ||
+                  /^(?:www\.)?vidhyaajewellerystudio\.com$/i.test(parsedOrigin.hostname)
+                ) {
+                  allowedHosts.add(parsedOrigin.hostname.toLowerCase());
+                }
+              } catch {}
+            }
+            const rHost = parsedReturn.hostname.toLowerCase();
             if (
               !['http:', 'https:'].includes(parsedReturn.protocol) ||
-              (reqHostname && parsedReturn.hostname.toLowerCase() !== reqHostname)
+              (allowedHosts.size > 0 && !allowedHosts.has(rHost))
             ) {
               return sendJson(res, 400, {
                 success: false,
@@ -1933,6 +1974,7 @@ export function handleApiMiddleware(req, res, next) {
           }
         }
 
+        const normalizedMethods = sanitizeCashfreePaymentMethods(body.paymentMethods || 'upi,cc,dc');
         const resolvedUserId = admin
           ? (body.userId || customer?.uid || undefined)
           : customer?.uid
@@ -1968,20 +2010,28 @@ export function handleApiMiddleware(req, res, next) {
             orderAmount,
             customerName: String(body.customerName || 'Valued Patron'),
             customerEmail: String(body.customerEmail || 'patron@vidhyaajewellery.com'),
-            customerPhone: String(body.customerPhone || '9758350524'),
+            customerPhone: cleanCustomerMobile,
             returnUrl: validatedReturnUrl,
             notifyUrl,
-            paymentMethods: body.paymentMethods || 'upi,cc,dc,nb',
+            paymentMethods: normalizedMethods,
             orderNote: body.orderNote || `VIDHYAA Jewellery Studio Order ${rawOrderId}`,
             isLiveDomain
           });
 
           if (!cfResult.success || !cfResult.paymentSessionId) {
-            const statusCode = cfResult.blockedOnLiveDomain ? 403 : cfResult.configured === false ? 503 : 502;
+            const statusCode =
+              cfResult.code === 'INVALID_MOBILE_NUMBER'
+                ? 400
+                : cfResult.blockedOnLiveDomain
+                ? 403
+                : cfResult.configured === false
+                ? 503
+                : 502;
             return sendJson(res, statusCode, {
               success: false,
               configured: cfResult.configured,
               blockedOnLiveDomain: cfResult.blockedOnLiveDomain,
+              code: cfResult.code,
               mode: cfResult.mode,
               env: cfResult.env,
               error: cfResult.error || 'Failed to initialize Cashfree checkout session.'
@@ -2003,6 +2053,15 @@ export function handleApiMiddleware(req, res, next) {
 
             const now = new Date().toISOString();
             const paymentEnv = cfResult.env || (cfResult.mode === 'production' ? 'PRODUCTION' : 'SANDBOX');
+            const defaultMethodLabel =
+              normalizedMethods === 'cc'
+                ? 'Credit Card (Cashfree)'
+                : normalizedMethods === 'dc'
+                ? 'Debit Card (Cashfree)'
+                : normalizedMethods === 'upi'
+                ? 'UPI (Cashfree)'
+                : 'Cashfree Online Payment';
+
             const pendingOrder = sanitizeServerOrder({
               id: `order_${gatewayOrderId}`,
               orderNumber: rawOrderId,
@@ -2011,7 +2070,7 @@ export function handleApiMiddleware(req, res, next) {
               userId: resolvedUserId,
               customerName: body.customerName,
               customerEmail: body.customerEmail,
-              customerPhone: body.customerPhone,
+              customerPhone: `+91 ${cleanCustomerMobile}`,
               shippingAddress: body.shippingAddress,
               items: Array.isArray(body.items) ? body.items : [],
               subtotal: pricing.subtotal,
@@ -2020,7 +2079,8 @@ export function handleApiMiddleware(req, res, next) {
               totalAmount: orderAmount,
               ...(pricing.appliedPromo ? { appliedPromo: pricing.appliedPromo } : {}),
               giftItem: body.giftItem,
-              paymentMethod: body.paymentMethod || 'Cashfree Online Payment',
+              paymentMethod: body.paymentMethod || defaultMethodLabel,
+              selectedPaymentChannel: normalizedMethods,
               paymentStatus: 'pending',
               orderStatus: 'Pending',
               paymentEnv,
@@ -2041,6 +2101,7 @@ export function handleApiMiddleware(req, res, next) {
               paymentSessionId: cfResult.paymentSessionId,
               payment_session_id: cfResult.paymentSessionId,
               orderStatus: cfResult.orderStatus || 'ACTIVE',
+              paymentMethods: normalizedMethods,
               mode: cfResult.mode,
               env: paymentEnv,
               isTestOrder: paymentEnv === 'SANDBOX',
@@ -2224,6 +2285,13 @@ export function handleApiMiddleware(req, res, next) {
                 cfOrderId: verification.cfOrderId || base.cfOrderId,
                 cardNetwork: verification.paymentDetails?.cardNetwork || base.cardNetwork,
                 cardType: verification.paymentDetails?.cardType || base.cardType,
+                bankReference: verification.paymentDetails?.bankReference || base.bankReference,
+                paymentGroup: verification.paymentDetails?.paymentGroup || base.paymentGroup,
+                upiReference:
+                  base.upiReference ||
+                  (verification.paymentDetails?.upiChannel || verification.paymentDetails?.paymentGroup === 'upi'
+                    ? verification.paymentDetails?.bankReference || ''
+                    : ''),
                 verifiedAmount: verification.paymentDetails?.paymentAmount ?? verification.orderAmount,
                 currency: verification.paymentDetails?.paymentCurrency || 'INR',
                 paidAt: verification.paymentDetails?.paymentTime || base.paidAt || now,
@@ -2254,6 +2322,7 @@ export function handleApiMiddleware(req, res, next) {
               paymentMethod: paidOrder.paymentMethod,
               cardNetwork: paidOrder.cardNetwork,
               cardType: paidOrder.cardType,
+              bankReference: paidOrder.bankReference,
               env: paymentEnv,
               mode: String(paymentEnv).toLowerCase(),
               isTestOrder,
@@ -2295,6 +2364,9 @@ export function handleApiMiddleware(req, res, next) {
                 cfOrderId: verification.cfOrderId || target.cfOrderId,
                 paymentEnv,
                 isTestOrder,
+                ...(verification.isCancelled
+                  ? { failureReason: verification.error || 'Payment cancelled before completion.' }
+                  : {}),
                 updatedAt: now
               },
               target
@@ -2421,9 +2493,13 @@ export function handleApiMiddleware(req, res, next) {
               });
             }
 
-            const methodLabel = paymentObj.payment_group
-              ? `Cashfree (${String(paymentObj.payment_group).toUpperCase()})`
+            const methodObj = paymentObj.payment_method && typeof paymentObj.payment_method === 'object'
+              ? paymentObj.payment_method
+              : null;
+            const methodLabel = methodObj || paymentObj.payment_group
+              ? formatPaymentMethodLabel(methodObj, paymentObj.payment_group)
               : target.paymentMethod || 'Cashfree Online Payment';
+            const bankRef = paymentObj.bank_reference ? String(paymentObj.bank_reference) : target.bankReference;
 
             const paidOrder = sanitizeServerOrder(
               {
@@ -2436,6 +2512,15 @@ export function handleApiMiddleware(req, res, next) {
                 paymentMethod: methodLabel,
                 paymentId: String(cfPaymentId || target.paymentId || orderId),
                 cfOrderId: orderObj.cf_order_id || target.cfOrderId,
+                cardNetwork: methodObj?.card?.card_network || target.cardNetwork,
+                cardType: methodObj?.card?.card_type || target.cardType,
+                bankReference: bankRef,
+                paymentGroup: paymentObj.payment_group ? String(paymentObj.payment_group) : target.paymentGroup,
+                upiReference:
+                  target.upiReference ||
+                  (methodObj?.upi || String(paymentObj.payment_group || '').toLowerCase() === 'upi'
+                    ? bankRef || ''
+                    : ''),
                 verifiedAmount: paidAmount,
                 currency,
                 paidAt: paymentObj.payment_time || target.paidAt || now,

@@ -154,6 +154,7 @@ $result = vdhWithFileLock('admin_creds', function () use ($data, $rlKey) {
         'success' => true,
         'authenticated' => true,
         'expiresIn' => VDH_ADMIN_TTL_SECONDS,
+        'token' => $token,
         'admin' => $adminInfo,
         '_cookieToken' => $token
     ]];

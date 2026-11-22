@@ -13,6 +13,7 @@ import {
   PhoneCall,
   Check
 } from 'lucide-react';
+import { getAdminAuthHeaders } from '../../lib/adminSessionMemory';
 
 export const AdminSmsSettingsPanel: React.FC = () => {
   const [loading, setLoading] = useState(true);
@@ -38,7 +39,8 @@ export const AdminSmsSettingsPanel: React.FC = () => {
     setError(null);
     try {
       const res = await fetch('/api/admin/sms-config', {
-        credentials: 'include'
+        credentials: 'include',
+        headers: getAdminAuthHeaders()
       });
       const rawText = await res.text();
       let data: any = null;
@@ -73,9 +75,9 @@ export const AdminSmsSettingsPanel: React.FC = () => {
       const res = await fetch('/api/admin/sms-config', {
         method: 'POST',
         credentials: 'include',
-        headers: {
+        headers: getAdminAuthHeaders({
           'Content-Type': 'application/json',
-        },
+        }),
         body: JSON.stringify({
           fast2smsApiKey: fast2smsKey || undefined,
           twofactorApiKey: twofactorKey || undefined,
@@ -127,9 +129,9 @@ export const AdminSmsSettingsPanel: React.FC = () => {
       const res = await fetch('/api/admin/test-sms', {
         method: 'POST',
         credentials: 'include',
-        headers: {
+        headers: getAdminAuthHeaders({
           'Content-Type': 'application/json',
-        },
+        }),
         body: JSON.stringify({ phoneNumber: clean, mobile: clean }),
       });
 

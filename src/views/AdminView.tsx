@@ -1195,6 +1195,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
       String(o.customerPhone || '').toLowerCase().includes(q) ||
       String(o.upiReference || '').toLowerCase().includes(q) ||
       String(o.paymentId || '').toLowerCase().includes(q) ||
+      String(o.bankReference || '').toLowerCase().includes(q) ||
       String(o.cfOrderId || '').toLowerCase().includes(q)
     );
   });
@@ -2141,12 +2142,17 @@ export const AdminView: React.FC<AdminViewProps> = ({
                             </td>
 
                             <td className="py-3.5 px-4 space-y-1">
-                              <span className="block text-[11px] font-semibold text-gray-800 truncate max-w-[150px]">
+                              <span className="block text-[11px] font-semibold text-gray-800 truncate max-w-[165px]">
                                 {ord.paymentMethod || 'Online Payment'}
                               </span>
-                              <span className="block font-mono text-[10px] text-gray-600 truncate max-w-[150px]">
+                              <span className="block font-mono text-[10px] text-gray-600 truncate max-w-[165px]" title={txRef}>
                                 {txRef}
                               </span>
+                              {ord.bankReference && ord.bankReference !== txRef && (
+                                <span className="block font-mono text-[10px] text-gray-500 truncate max-w-[165px]">
+                                  Ref: {ord.bankReference}
+                                </span>
+                              )}
                               <span
                                 className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold border ${
                                   ordPaid
@@ -2816,13 +2822,23 @@ export const AdminView: React.FC<AdminViewProps> = ({
                         : 'PAYMENT PENDING VERIFICATION'}
                     </span>
                     <span className="font-mono text-xs text-gray-800 block">
-                      Transaction / UTR ID:{' '}
+                      Cashfree / Transaction ID:{' '}
                       <strong>
                         {selectedOrderDetails.paymentId ||
                           selectedOrderDetails.upiReference ||
                           (selectedOrderDetails.cfOrderId ? String(selectedOrderDetails.cfOrderId) : 'Pending')}
                       </strong>
                     </span>
+                    {selectedOrderDetails.bankReference && (
+                      <span className="font-mono text-[11px] text-gray-700 block">
+                        Bank / UPI Reference: <strong>{selectedOrderDetails.bankReference}</strong>
+                      </span>
+                    )}
+                    {(selectedOrderDetails.cardNetwork || selectedOrderDetails.cardType) && (
+                      <span className="text-[11px] text-gray-700 block">
+                        Card Details: <strong>{[selectedOrderDetails.cardType, selectedOrderDetails.cardNetwork].filter(Boolean).join(' • ')}</strong>
+                      </span>
+                    )}
                     {selectedOrderDetails.gatewayOrderId && (
                       <span className="font-mono text-[11px] text-gray-600 block">
                         Gateway Order ID: {selectedOrderDetails.gatewayOrderId}

@@ -1,3 +1,5 @@
+import { getAdminMemoryToken } from './adminSessionMemory';
+
 export interface VideoUploadResult {
   url: string;
   storageType: 'firebase' | 'server';
@@ -127,9 +129,10 @@ export async function uploadJewelleryVideo(
 
     xhr.setRequestHeader('x-file-name', encodeURIComponent(file.name));
     xhr.setRequestHeader('x-file-type', file.type || 'video/mp4');
-    if (options?.adminToken) {
-      xhr.setRequestHeader('Authorization', `Bearer ${options.adminToken}`);
-      xhr.setRequestHeader('x-admin-token', options.adminToken);
+    const effectiveAdminToken = options?.adminToken || getAdminMemoryToken();
+    if (effectiveAdminToken) {
+      xhr.setRequestHeader('Authorization', `Bearer ${effectiveAdminToken}`);
+      xhr.setRequestHeader('x-admin-token', effectiveAdminToken);
     }
 
     xhr.upload.onprogress = (event) => {

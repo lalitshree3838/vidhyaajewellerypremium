@@ -12,6 +12,7 @@ import {
   RefreshCw,
   HelpCircle
 } from 'lucide-react';
+import { getAdminAuthHeaders } from '../../lib/adminSessionMemory';
 
 export const AdminCashfreeSettingsPanel: React.FC = () => {
   const [appId, setAppId] = useState('');
@@ -31,7 +32,8 @@ export const AdminCashfreeSettingsPanel: React.FC = () => {
     setErrorMsg(null);
     try {
       const res = await fetch('/api/admin/cashfree-config', {
-        credentials: 'include'
+        credentials: 'include',
+        headers: getAdminAuthHeaders()
       });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -61,9 +63,9 @@ export const AdminCashfreeSettingsPanel: React.FC = () => {
       const res = await fetch('/api/admin/cashfree-config', {
         method: 'POST',
         credentials: 'include',
-        headers: {
+        headers: getAdminAuthHeaders({
           'Content-Type': 'application/json'
-        },
+        }),
         body: JSON.stringify({
           appId: appId.trim() || undefined,
           secretKey: secretKey.trim() || undefined,

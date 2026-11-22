@@ -64,6 +64,7 @@ if ($idToken !== '') {
         'success' => true,
         'authenticated' => true,
         'expiresIn' => VDH_ADMIN_TTL_SECONDS,
+        'token' => $token,
         'admin' => $adminInfo
     ]);
 }
@@ -174,5 +175,6 @@ vdhSendJson(200, [
     'success' => true,
     'authenticated' => true,
     'expiresIn' => VDH_ADMIN_TTL_SECONDS,
+    'token' => $token,
     'admin' => $adminInfo
 ]);
