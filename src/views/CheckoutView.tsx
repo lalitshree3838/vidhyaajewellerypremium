@@ -545,11 +545,6 @@ const WhatsAppOrderConfirmationView: React.FC<WhatsAppOrderConfirmationViewProps
 
   const whatsappUrl = `https://wa.me/917302187770?text=${encodeURIComponent(preparedMessage)}`;
 
-  const handleOpenWhatsApp = () => {
-    window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
-    setHasClickedWhatsApp(true);
-  };
-
   const handleConfirmSent = async () => {
     setIsSubmitting(true);
     try {
@@ -606,14 +601,16 @@ const WhatsAppOrderConfirmationView: React.FC<WhatsAppOrderConfirmationViewProps
 
       {!isConfirmed ? (
         <div className="space-y-3">
-          <button
-            type="button"
-            onClick={handleOpenWhatsApp}
+          <a
+            href={whatsappUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => setHasClickedWhatsApp(true)}
             className="w-full max-w-md mx-auto bg-[#25D366] hover:bg-[#20bd5a] text-white font-black text-xs sm:text-sm px-6 py-3.5 rounded-2xl shadow-md flex items-center justify-center gap-2.5 transition-all cursor-pointer"
           >
             <MessageCircle className="w-5 h-5" />
             <span>SHARE UTR ON WHATSAPP (+91 7302187770)</span>
-          </button>
+          </a>
           {hasClickedWhatsApp && (
             <button
               type="button"

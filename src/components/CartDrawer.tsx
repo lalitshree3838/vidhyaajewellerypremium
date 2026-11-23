@@ -262,7 +262,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onCheckout, onViewShop }
                         </span>
                         <button
                           onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                          className="px-2 py-0.5 text-xs text-[#3B1E22] hover:bg-[#F4EBE1] cursor-pointer"
+                          disabled={item.quantity >= 50}
+                          className="px-2 py-0.5 text-xs text-[#3B1E22] hover:bg-[#F4EBE1] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           +
                         </button>

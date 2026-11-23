@@ -115,6 +115,8 @@ export const ShopView: React.FC<ShopViewProps> = ({
   }, [categories, selectedCategory, products]);
 
   useEffect(() => {
+    setSelectedCategory('all');
+    setSelectedSubcategory('all');
     if (initialCategory) {
       setNavSlug(initialCategory);
       const paramLower = initialCategory.toLowerCase();
@@ -124,9 +126,12 @@ export const ShopView: React.FC<ShopViewProps> = ({
         setSortBy('newest');
       } else if (paramLower === 'trending') {
         setSortBy('rating');
+      } else {
+        setSortBy('featured');
       }
     } else {
       setNavSlug('all');
+      setSortBy('featured');
     }
   }, [initialCategory]);
 

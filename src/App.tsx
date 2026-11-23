@@ -112,7 +112,7 @@ const POLICY_VIEWS = ['about', 'contact', 'shipping', 'returns', 'care-guide', '
 
 const parseLocationRoute = () => {
   if (typeof window === 'undefined') {
-    return { view: 'home', param: undefined as string | undefined, productId: null as string | null, trackingOrder: '' };
+    return { view: 'home', param: undefined as string | undefined, productId: null as string | null, trackingOrder: '', openCartDrawer: false };
   }
   const pathname = window.location.pathname.replace(/\/+$/, '') || '/';
   const hash = window.location.hash || '';
@@ -120,69 +120,79 @@ const parseLocationRoute = () => {
   const queryView = (params.get('view') || '').toLowerCase();
 
   if (pathname.includes('/admin') || hash.includes('admin')) {
-    return { view: 'admin', param: undefined, productId: null, trackingOrder: '' };
+    return { view: 'admin', param: undefined, productId: null, trackingOrder: '', openCartDrawer: false };
   }
   if (params.has('cf_order_id') || queryView === 'checkout' || pathname.startsWith('/checkout')) {
-    return { view: 'checkout', param: undefined, productId: null, trackingOrder: '' };
+    return { view: 'checkout', param: undefined, productId: null, trackingOrder: '', openCartDrawer: false };
   }
   if (queryView === 'orders' || pathname.startsWith('/orders')) {
-    return { view: 'orders', param: undefined, productId: null, trackingOrder: '' };
+    return { view: 'orders', param: undefined, productId: null, trackingOrder: '', openCartDrawer: false };
   }
   if (queryView === 'account' || pathname.startsWith('/account')) {
-    return { view: 'account', param: undefined, productId: null, trackingOrder: '' };
+    return { view: 'account', param: undefined, productId: null, trackingOrder: '', openCartDrawer: false };
   }
   if (queryView === 'wishlist' || pathname.startsWith('/wishlist')) {
-    return { view: 'wishlist', param: undefined, productId: null, trackingOrder: '' };
+    return { view: 'wishlist', param: undefined, productId: null, trackingOrder: '', openCartDrawer: false };
   }
   if (queryView === 'go-live' || pathname.startsWith('/go-live')) {
-    return { view: 'go-live', param: undefined, productId: null, trackingOrder: '' };
+    return { view: 'go-live', param: undefined, productId: null, trackingOrder: '', openCartDrawer: false };
   }
   if (queryView === 'track-order' || pathname.startsWith('/track-order')) {
-    return { view: 'track-order', param: undefined, productId: null, trackingOrder: params.get('order') || '' };
+    return { view: 'track-order', param: undefined, productId: null, trackingOrder: params.get('order') || '', openCartDrawer: false };
   }
 
   const productParam = params.get('product');
   if (productParam) {
-    return { view: 'product-detail', param: undefined, productId: productParam, trackingOrder: '' };
+    return { view: 'product-detail', param: undefined, productId: productParam, trackingOrder: '', openCartDrawer: false };
   }
   if (pathname.startsWith('/product/')) {
     const seg = decodeURIComponent(pathname.split('/').filter(Boolean)[1] || '');
     if (seg) {
-      return { view: 'product-detail', param: undefined, productId: seg, trackingOrder: '' };
+      return { view: 'product-detail', param: undefined, productId: seg, trackingOrder: '', openCartDrawer: false };
     }
   }
 
   if (POLICY_VIEWS.includes(queryView)) {
-    return { view: queryView, param: undefined, productId: null, trackingOrder: '' };
+    return { view: queryView, param: undefined, productId: null, trackingOrder: '', openCartDrawer: false };
   }
   const strippedPath = pathname.replace(/^\//, '').toLowerCase();
   if (POLICY_VIEWS.includes(strippedPath)) {
-    return { view: strippedPath, param: undefined, productId: null, trackingOrder: '' };
+    return { view: strippedPath, param: undefined, productId: null, trackingOrder: '', openCartDrawer: false };
+  }
+
+  if (strippedPath === 'cart' || queryView === 'cart') {
+    return { view: 'shop', param: 'all', productId: null, trackingOrder: '', openCartDrawer: true };
+  }
+  if (strippedPath === 'new-arrivals' || strippedPath === 'best-sellers' || strippedPath === 'trending') {
+    return { view: 'shop', param: strippedPath, productId: null, trackingOrder: '', openCartDrawer: false };
+  }
+  if (strippedPath === 'categories') {
+    return { view: 'shop', param: 'all', productId: null, trackingOrder: '', openCartDrawer: false };
   }
 
   if (pathname.startsWith('/category/')) {
     const seg = decodeURIComponent(pathname.split('/').filter(Boolean)[1] || '');
     if (seg) {
-      return { view: 'category', param: seg, productId: null, trackingOrder: '' };
+      return { view: 'category', param: seg, productId: null, trackingOrder: '', openCartDrawer: false };
     }
   }
 
   if (pathname.startsWith('/collection/') || pathname.startsWith('/collections/')) {
     const seg = decodeURIComponent(pathname.split('/').filter(Boolean)[1] || '');
-    return { view: 'shop', param: seg || 'all', productId: null, trackingOrder: '' };
+    return { view: 'shop', param: seg || 'all', productId: null, trackingOrder: '', openCartDrawer: false };
   }
 
   const catParam = params.get('category') || params.get('collection') || params.get('filter');
   if (pathname.startsWith('/shop') || catParam || hash.toLowerCase() === '#shop') {
-    return { view: 'shop', param: catParam || 'all', productId: null, trackingOrder: '' };
+    return { view: 'shop', param: catParam || 'all', productId: null, trackingOrder: '', openCartDrawer: false };
   }
 
-  return { view: 'home', param: undefined, productId: null, trackingOrder: '' };
+  return { view: 'home', param: undefined, productId: null, trackingOrder: '', openCartDrawer: false };
 };
 
 function MainApp() {
   const { user, patronSession, isAdmin } = useAuth();
-  const { openCart } = useCart();
+  const { openCart, closeCart } = useCart();
 
   const initialRoute = parseLocationRoute();
 
@@ -362,6 +372,9 @@ function MainApp() {
       if (route.productId) {
         setPendingProductId(route.productId);
       }
+      if (route.openCartDrawer) {
+        openCart();
+      }
     };
 
     checkDirectUrl();
@@ -391,6 +404,7 @@ function MainApp() {
     setCurrentView(view);
     setCurrentParam(param);
     if (view === 'admin') {
+      closeCart();
       window.history.pushState({}, '', '/admin/login');
     } else if (view === 'home' && (window.location.pathname !== '/' || window.location.search)) {
       window.history.pushState({}, '', '/');
@@ -402,6 +416,7 @@ function MainApp() {
       const url = param ? `/?view=track-order&order=${encodeURIComponent(param)}` : '/?view=track-order';
       window.history.pushState({}, '', url);
     } else if (view === 'checkout') {
+      closeCart();
       if (!window.location.search.includes('cf_order_id=')) {
         window.history.pushState({}, '', '/?view=checkout');
       }

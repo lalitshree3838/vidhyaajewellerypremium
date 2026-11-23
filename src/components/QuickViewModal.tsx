@@ -47,6 +47,8 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
       setSelectedVariation(initialVariation);
     } else if (product?.variations?.[0]) {
       setSelectedVariation(product.variations[0]);
+    } else {
+      setSelectedVariation(undefined);
     }
     setActiveImageIndex(0);
     setQuantity(1);
@@ -96,7 +98,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
       image: product.images[0],
       active: true
     };
-    addToCart(product, variationToUse, Math.min(quantity, Math.max(1, currentStock)));
+    addToCart(product, variationToUse, Math.min(50, Math.min(quantity, Math.max(1, currentStock))));
     setAdded(true);
     setTimeout(() => {
       setAdded(false);
@@ -344,8 +346,8 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({
                 </span>
                 <button
                   type="button"
-                  disabled={currentStock <= 0 || quantity >= Math.max(1, currentStock)}
-                  onClick={() => setQuantity(Math.min(Math.max(1, currentStock), quantity + 1))}
+                  disabled={currentStock <= 0 || quantity >= Math.min(50, Math.max(1, currentStock))}
+                  onClick={() => setQuantity(Math.min(50, Math.max(1, currentStock), quantity + 1))}
                   className="px-3 py-2 text-sm font-semibold text-[#3B1E22] hover:bg-[#F4EBE1] rounded-r-lg cursor-pointer disabled:opacity-40"
                 >
                   +

@@ -4,7 +4,7 @@ import { getProductPrimaryImage } from '../lib/storageService';
 
 interface CartContextType {
   items: CartItem[];
-  addToCart: (product: Product, variation: ProductVariation, quantity?: number) => void;
+  addToCart: (product: Product, variation: ProductVariation, quantity?: number, openDrawer?: boolean) => void;
   removeFromCart: (itemId: string) => void;
   updateQuantity: (itemId: string, quantity: number) => void;
   clearCart: () => void;
@@ -29,12 +29,55 @@ interface CartContextType {
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
 const STANDARD_DELIVERY_CHARGE = 100; // Fixed shipping charge of ₹100 per order
+const MAX_ITEM_QUANTITY = 50; // Aligned with server-side checkout quantity validation (1..50)
+
+function toSafeFiniteAmount(value: unknown, fallback = 0): number {
+  const num = Number(value);
+  return Number.isFinite(num) && num >= 0 ? num : fallback;
+}
+
+function clampItemQuantity(value: unknown): number {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 1) return 1;
+  return Math.min(MAX_ITEM_QUANTITY, parsed);
+}
+
+function sanitizeCartItems(raw: unknown): CartItem[] {
+  if (!Array.isArray(raw)) return [];
+  const clean: CartItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const item = entry as Partial<CartItem>;
+    const productId = typeof item.productId === 'string' ? item.productId.trim() : '';
+    const id = typeof item.id === 'string' && item.id.trim() ? item.id.trim() : productId;
+    if (!id || !productId) continue;
+    const qty = Math.floor(Number(item.quantity));
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    const price = toSafeFiniteAmount(item.price, -1);
+    if (price < 0) continue;
+    const mrp = Math.max(toSafeFiniteAmount(item.mrp, price), price);
+    clean.push({
+      id,
+      productId,
+      productName: typeof item.productName === 'string' && item.productName.trim() ? item.productName : 'Handcrafted Jewellery',
+      variationId: typeof item.variationId === 'string' && item.variationId.trim() ? item.variationId : 'default',
+      variationName: typeof item.variationName === 'string' && item.variationName.trim() ? item.variationName : 'Standard',
+      price,
+      mrp,
+      quantity: Math.min(MAX_ITEM_QUANTITY, qty),
+      image: typeof item.image === 'string' ? item.image : '',
+      sku: typeof item.sku === 'string' && item.sku.trim() ? item.sku : productId,
+      material: typeof item.material === 'string' ? item.material : ''
+    });
+  }
+  return clean;
+}
 
 export const CartProvider: React.FC<{ products?: Product[]; children: React.ReactNode }> = ({ products, children }) => {
   const [items, setItems] = useState<CartItem[]>(() => {
     try {
       const saved = localStorage.getItem('vidhyaa_cart');
-      return saved ? JSON.parse(saved) : [];
+      return saved ? sanitizeCartItems(JSON.parse(saved)) : [];
     } catch {
       return [];
     }
@@ -87,8 +130,8 @@ export const CartProvider: React.FC<{ products?: Product[]; children: React.Reac
         const updated = prevItems.map((item) => {
           const prod = catalogProducts.find((p) => p.id === item.productId);
           if (prod) {
-            const currentProdPrice = prod.price;
-            const currentProdMrp = Math.max(prod.mrp || prod.price, prod.price);
+            const currentProdPrice = toSafeFiniteAmount(prod.price, item.price);
+            const currentProdMrp = Math.max(toSafeFiniteAmount(prod.mrp, currentProdPrice), currentProdPrice);
             if (item.price !== currentProdPrice || item.mrp !== currentProdMrp) {
               changed = true;
               return {
@@ -128,17 +171,25 @@ export const CartProvider: React.FC<{ products?: Product[]; children: React.Reac
     }
   }, [items]);
 
-  const addToCart = (product: Product, variation: ProductVariation, quantity: number = 1) => {
+  const addToCart = (
+    product: Product,
+    variation: ProductVariation,
+    quantity: number = 1,
+    openDrawer: boolean = true
+  ) => {
     const itemId = `${product.id}_${variation.id}`;
-    const priceToUse = product.price;
-    const mrpToUse = Math.max(product.mrp || product.price, product.price);
+    const priceToUse = toSafeFiniteAmount(product.price, 0);
+    const mrpToUse = Math.max(toSafeFiniteAmount(product.mrp, priceToUse), priceToUse);
+    const safeQty = clampItemQuantity(quantity);
     const imageToUse = getProductPrimaryImage(product, undefined, variation);
 
     setItems((prev) => {
       const existing = prev.find((item) => item.id === itemId);
       if (existing) {
         return prev.map((item) =>
-          item.id === itemId ? { ...item, quantity: item.quantity + quantity } : item
+          item.id === itemId
+            ? { ...item, quantity: Math.min(MAX_ITEM_QUANTITY, item.quantity + safeQty) }
+            : item
         );
       }
       const newItem: CartItem = {
@@ -149,7 +200,7 @@ export const CartProvider: React.FC<{ products?: Product[]; children: React.Reac
         variationName: variation.name,
         price: priceToUse,
         mrp: mrpToUse,
-        quantity,
+        quantity: safeQty,
         image: imageToUse,
         sku: variation.sku,
         material: product.material
@@ -157,7 +208,9 @@ export const CartProvider: React.FC<{ products?: Product[]; children: React.Reac
       return [...prev, newItem];
     });
 
-    setIsCartOpen(true);
+    if (openDrawer) {
+      setIsCartOpen(true);
+    }
   };
 
   const removeFromCart = (itemId: string) => {
@@ -165,12 +218,14 @@ export const CartProvider: React.FC<{ products?: Product[]; children: React.Reac
   };
 
   const updateQuantity = (itemId: string, quantity: number) => {
-    if (quantity <= 0) {
+    const parsed = Math.floor(Number(quantity));
+    if (!Number.isFinite(parsed) || parsed <= 0) {
       removeFromCart(itemId);
       return;
     }
+    const clamped = Math.min(MAX_ITEM_QUANTITY, parsed);
     setItems((prev) =>
-      prev.map((item) => (item.id === itemId ? { ...item, quantity } : item))
+      prev.map((item) => (item.id === itemId ? { ...item, quantity: clamped } : item))
     );
   };
 
@@ -182,12 +237,18 @@ export const CartProvider: React.FC<{ products?: Product[]; children: React.Reac
   const openCart = () => setIsCartOpen(true);
   const closeCart = () => setIsCartOpen(false);
 
-  const originalTotal = items.reduce(
-    (acc, item) => acc + ((item.mrp && item.mrp > 0 ? item.mrp : item.price) * item.quantity),
-    0
-  );
+  const originalTotal = items.reduce((acc, item) => {
+    const safePrice = toSafeFiniteAmount(item.price, 0);
+    const safeMrp = Math.max(toSafeFiniteAmount(item.mrp, safePrice), safePrice);
+    const safeQty = clampItemQuantity(item.quantity);
+    return acc + safeMrp * safeQty;
+  }, 0);
 
-  const subtotal = items.reduce((acc, item) => acc + item.price * item.quantity, 0);
+  const subtotal = items.reduce((acc, item) => {
+    const safePrice = toSafeFiniteAmount(item.price, 0);
+    const safeQty = clampItemQuantity(item.quantity);
+    return acc + safePrice * safeQty;
+  }, 0);
   const productSavings = Math.max(0, originalTotal - subtotal);
 
   const evaluatePromoDiscount = (code: string | null, cartSubtotal: number): { valid: boolean; discountAmount: number; message: string } => {

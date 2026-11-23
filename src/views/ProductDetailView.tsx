@@ -109,6 +109,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       setSelectedVariation(initialVariation);
     } else if (product.variations && product.variations.length > 0) {
       setSelectedVariation(product.variations[0]);
+    } else {
+      setSelectedVariation(undefined);
     }
     setActiveImageIndex(0);
     setImageError(false);
@@ -216,7 +218,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     }
   };
 
-  const handleAddToCart = () => {
+  const handleAddToCart = (openDrawer: boolean = true) => {
     if (currentStock <= 0) return;
     const varToUse = selectedVariation || {
       id: 'default',
@@ -228,14 +230,14 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       image: product.images[0],
       active: true
     };
-    addToCart(product, varToUse, Math.min(quantity, Math.max(1, currentStock)));
+    addToCart(product, varToUse, Math.min(50, Math.min(quantity, Math.max(1, currentStock))), openDrawer);
     setAddedToast(true);
     setTimeout(() => setAddedToast(false), 2000);
   };
 
   const handleBuyNow = () => {
     if (currentStock <= 0) return;
-    handleAddToCart();
+    handleAddToCart(false);
     onBuyNowDirect();
   };
 
@@ -730,8 +732,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                 </span>
                 <button
                   type="button"
-                  disabled={currentStock <= 0 || quantity >= Math.max(1, currentStock)}
-                  onClick={() => setQuantity(Math.min(Math.max(1, currentStock), quantity + 1))}
+                  disabled={currentStock <= 0 || quantity >= Math.min(50, Math.max(1, currentStock))}
+                  onClick={() => setQuantity(Math.min(50, Math.max(1, currentStock), quantity + 1))}
                   className="px-4 py-2.5 text-sm font-bold text-[#3B1E22] hover:bg-[#F4EBE1] rounded-r-xl cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   +
@@ -742,7 +744,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               <button
                 type="button"
                 disabled={currentStock <= 0}
-                onClick={handleAddToCart}
+                onClick={() => handleAddToCart(true)}
                 className="flex-1 btn-teak-green py-3.5 px-5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md hover:shadow-lg active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {currentStock <= 0 ? (

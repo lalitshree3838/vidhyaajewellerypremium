@@ -52676,11 +52676,51 @@ var useAuth = () => {
 // src/context/CartContext.tsx
 var CartContext = (0, import_react.createContext)(void 0);
 var STANDARD_DELIVERY_CHARGE = 100;
+var MAX_ITEM_QUANTITY = 50;
+function toSafeFiniteAmount(value, fallback = 0) {
+	const num = Number(value);
+	return Number.isFinite(num) && num >= 0 ? num : fallback;
+}
+function clampItemQuantity(value) {
+	const parsed = Math.floor(Number(value));
+	if (!Number.isFinite(parsed) || parsed < 1) return 1;
+	return Math.min(MAX_ITEM_QUANTITY, parsed);
+}
+function sanitizeCartItems(raw) {
+	if (!Array.isArray(raw)) return [];
+	const clean = [];
+	for (const entry of raw) {
+		if (!entry || typeof entry !== "object") continue;
+		const item = entry;
+		const productId = typeof item.productId === "string" ? item.productId.trim() : "";
+		const id = typeof item.id === "string" && item.id.trim() ? item.id.trim() : productId;
+		if (!id || !productId) continue;
+		const qty = Math.floor(Number(item.quantity));
+		if (!Number.isFinite(qty) || qty <= 0) continue;
+		const price = toSafeFiniteAmount(item.price, -1);
+		if (price < 0) continue;
+		const mrp = Math.max(toSafeFiniteAmount(item.mrp, price), price);
+		clean.push({
+			id,
+			productId,
+			productName: typeof item.productName === "string" && item.productName.trim() ? item.productName : "Handcrafted Jewellery",
+			variationId: typeof item.variationId === "string" && item.variationId.trim() ? item.variationId : "default",
+			variationName: typeof item.variationName === "string" && item.variationName.trim() ? item.variationName : "Standard",
+			price,
+			mrp,
+			quantity: Math.min(MAX_ITEM_QUANTITY, qty),
+			image: typeof item.image === "string" ? item.image : "",
+			sku: typeof item.sku === "string" && item.sku.trim() ? item.sku : productId,
+			material: typeof item.material === "string" ? item.material : ""
+		});
+	}
+	return clean;
+}
 var CartProvider = ({ products, children }) => {
 	const [items, setItems] = (0, import_react.useState)(() => {
 		try {
 			const saved = localStorage.getItem("vidhyaa_cart");
-			return saved ? JSON.parse(saved) : [];
+			return saved ? sanitizeCartItems(JSON.parse(saved)) : [];
 		} catch {
 			return [];
 		}
@@ -52721,8 +52761,8 @@ var CartProvider = ({ products, children }) => {
 				const updated = prevItems.map((item) => {
 					const prod = catalogProducts.find((p) => p.id === item.productId);
 					if (prod) {
-						const currentProdPrice = prod.price;
-						const currentProdMrp = Math.max(prod.mrp || prod.price, prod.price);
+						const currentProdPrice = toSafeFiniteAmount(prod.price, item.price);
+						const currentProdMrp = Math.max(toSafeFiniteAmount(prod.mrp, currentProdPrice), currentProdPrice);
 						if (item.price !== currentProdPrice || item.mrp !== currentProdMrp) {
 							changed = true;
 							return {
@@ -52753,15 +52793,16 @@ var CartProvider = ({ products, children }) => {
 			console.error("Failed to save cart to storage", e);
 		}
 	}, [items]);
-	const addToCart = (product, variation, quantity = 1) => {
+	const addToCart = (product, variation, quantity = 1, openDrawer = true) => {
 		const itemId = `${product.id}_${variation.id}`;
-		const priceToUse = product.price;
-		const mrpToUse = Math.max(product.mrp || product.price, product.price);
+		const priceToUse = toSafeFiniteAmount(product.price, 0);
+		const mrpToUse = Math.max(toSafeFiniteAmount(product.mrp, priceToUse), priceToUse);
+		const safeQty = clampItemQuantity(quantity);
 		const imageToUse = getProductPrimaryImage(product, void 0, variation);
 		setItems((prev) => {
 			if (prev.find((item) => item.id === itemId)) return prev.map((item) => item.id === itemId ? {
 				...item,
-				quantity: item.quantity + quantity
+				quantity: Math.min(MAX_ITEM_QUANTITY, item.quantity + safeQty)
 			} : item);
 			const newItem = {
 				id: itemId,
@@ -52771,26 +52812,28 @@ var CartProvider = ({ products, children }) => {
 				variationName: variation.name,
 				price: priceToUse,
 				mrp: mrpToUse,
-				quantity,
+				quantity: safeQty,
 				image: imageToUse,
 				sku: variation.sku,
 				material: product.material
 			};
 			return [...prev, newItem];
 		});
-		setIsCartOpen(true);
+		if (openDrawer) setIsCartOpen(true);
 	};
 	const removeFromCart = (itemId) => {
 		setItems((prev) => prev.filter((item) => item.id !== itemId));
 	};
 	const updateQuantity = (itemId, quantity) => {
-		if (quantity <= 0) {
+		const parsed = Math.floor(Number(quantity));
+		if (!Number.isFinite(parsed) || parsed <= 0) {
 			removeFromCart(itemId);
 			return;
 		}
+		const clamped = Math.min(MAX_ITEM_QUANTITY, parsed);
 		setItems((prev) => prev.map((item) => item.id === itemId ? {
 			...item,
-			quantity
+			quantity: clamped
 		} : item));
 	};
 	const clearCart = () => {
@@ -52799,8 +52842,13 @@ var CartProvider = ({ products, children }) => {
 	};
 	const openCart = () => setIsCartOpen(true);
 	const closeCart = () => setIsCartOpen(false);
-	const originalTotal = items.reduce((acc, item) => acc + (item.mrp && item.mrp > 0 ? item.mrp : item.price) * item.quantity, 0);
-	const subtotal = items.reduce((acc, item) => acc + item.price * item.quantity, 0);
+	const originalTotal = items.reduce((acc, item) => {
+		const safePrice = toSafeFiniteAmount(item.price, 0);
+		return acc + Math.max(toSafeFiniteAmount(item.mrp, safePrice), safePrice) * clampItemQuantity(item.quantity);
+	}, 0);
+	const subtotal = items.reduce((acc, item) => {
+		return acc + toSafeFiniteAmount(item.price, 0) * clampItemQuantity(item.quantity);
+	}, 0);
 	const productSavings = Math.max(0, originalTotal - subtotal);
 	const evaluatePromoDiscount = (code, cartSubtotal) => {
 		if (!code) return {
@@ -57254,6 +57302,7 @@ var QuickViewModal = ({ product, initialVariation, onClose, onViewFullProduct })
 	(0, import_react.useEffect)(() => {
 		if (initialVariation) setSelectedVariation(initialVariation);
 		else if (product?.variations?.[0]) setSelectedVariation(product.variations[0]);
+		else setSelectedVariation(void 0);
 		setActiveImageIndex(0);
 		setQuantity(1);
 		setImageError(false);
@@ -57291,7 +57340,7 @@ var QuickViewModal = ({ product, initialVariation, onClose, onViewFullProduct })
 			image: product.images[0],
 			active: true
 		};
-		addToCart(product, variationToUse, Math.min(quantity, Math.max(1, currentStock)));
+		addToCart(product, variationToUse, Math.min(50, Math.min(quantity, Math.max(1, currentStock))));
 		setAdded(true);
 		setTimeout(() => {
 			setAdded(false);
@@ -57534,8 +57583,8 @@ var QuickViewModal = ({ product, initialVariation, onClose, onViewFullProduct })
 										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 											type: "button",
-											disabled: currentStock <= 0 || quantity >= Math.max(1, currentStock),
-											onClick: () => setQuantity(Math.min(Math.max(1, currentStock), quantity + 1)),
+											disabled: currentStock <= 0 || quantity >= Math.min(50, Math.max(1, currentStock)),
+											onClick: () => setQuantity(Math.min(50, Math.max(1, currentStock), quantity + 1)),
 											className: "px-3 py-2 text-sm font-semibold text-[#3B1E22] hover:bg-[#F4EBE1] rounded-r-lg cursor-pointer disabled:opacity-40",
 											children: "+"
 										})
@@ -57840,7 +57889,8 @@ var CartDrawer = ({ onCheckout, onViewShop }) => {
 											}),
 											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 												onClick: () => updateQuantity(item.id, item.quantity + 1),
-												className: "px-2 py-0.5 text-xs text-[#3B1E22] hover:bg-[#F4EBE1] cursor-pointer",
+												disabled: item.quantity >= 50,
+												className: "px-2 py-0.5 text-xs text-[#3B1E22] hover:bg-[#F4EBE1] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed",
 												children: "+"
 											})
 										]
@@ -62493,13 +62543,19 @@ var ShopView = ({ products, categories, initialCategory = "all", onSelectProduct
 		products
 	]);
 	(0, import_react.useEffect)(() => {
+		setSelectedCategory("all");
+		setSelectedSubcategory("all");
 		if (initialCategory) {
 			setNavSlug(initialCategory);
 			const paramLower = initialCategory.toLowerCase();
 			if (paramLower === "bestsellers" || paramLower === "bestseller" || paramLower === "best-sellers") setSortBy("bestseller");
 			else if (paramLower === "new" || paramLower === "new-arrivals") setSortBy("newest");
 			else if (paramLower === "trending") setSortBy("rating");
-		} else setNavSlug("all");
+			else setSortBy("featured");
+		} else {
+			setNavSlug("all");
+			setSortBy("featured");
+		}
 	}, [initialCategory]);
 	const genuineProducts = (0, import_react.useMemo)(() => {
 		return products.filter((p) => isGenuineProduct(p) && p.active !== false && p.status !== "draft");
@@ -63123,6 +63179,7 @@ var ProductDetailView = ({ product, allProducts, initialVariation, onSelectProdu
 		if (!isValidProduct) return;
 		if (initialVariation) setSelectedVariation(initialVariation);
 		else if (product.variations && product.variations.length > 0) setSelectedVariation(product.variations[0]);
+		else setSelectedVariation(void 0);
 		setActiveImageIndex(0);
 		setImageError(false);
 		setActiveMedia("image");
@@ -63228,7 +63285,7 @@ var ProductDetailView = ({ product, allProducts, initialVariation, onSelectProdu
 			setTimeout(() => setShareCopied(false), 2200);
 		}
 	};
-	const handleAddToCart = () => {
+	const handleAddToCart = (openDrawer = true) => {
 		if (currentStock <= 0) return;
 		const varToUse = selectedVariation || {
 			id: "default",
@@ -63240,13 +63297,13 @@ var ProductDetailView = ({ product, allProducts, initialVariation, onSelectProdu
 			image: product.images[0],
 			active: true
 		};
-		addToCart(product, varToUse, Math.min(quantity, Math.max(1, currentStock)));
+		addToCart(product, varToUse, Math.min(50, Math.min(quantity, Math.max(1, currentStock))), openDrawer);
 		setAddedToast(true);
 		setTimeout(() => setAddedToast(false), 2e3);
 	};
 	const handleBuyNow = () => {
 		if (currentStock <= 0) return;
-		handleAddToCart();
+		handleAddToCart(false);
 		onBuyNowDirect();
 	};
 	const checkPincode = (e) => {
@@ -63715,8 +63772,8 @@ var ProductDetailView = ({ product, allProducts, initialVariation, onSelectProdu
 											}),
 											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 												type: "button",
-												disabled: currentStock <= 0 || quantity >= Math.max(1, currentStock),
-												onClick: () => setQuantity(Math.min(Math.max(1, currentStock), quantity + 1)),
+												disabled: currentStock <= 0 || quantity >= Math.min(50, Math.max(1, currentStock)),
+												onClick: () => setQuantity(Math.min(50, Math.max(1, currentStock), quantity + 1)),
 												className: "px-4 py-2.5 text-sm font-bold text-[#3B1E22] hover:bg-[#F4EBE1] rounded-r-xl cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed",
 												children: "+"
 											})
@@ -63725,7 +63782,7 @@ var ProductDetailView = ({ product, allProducts, initialVariation, onSelectProdu
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 										type: "button",
 										disabled: currentStock <= 0,
-										onClick: handleAddToCart,
+										onClick: () => handleAddToCart(true),
 										className: "flex-1 btn-teak-green py-3.5 px-5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md hover:shadow-lg active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed",
 										children: currentStock <= 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Out of Stock" }) : addedToast ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Check, { className: "w-4 h-4 text-white" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Added to Bag!" })] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShoppingBag, { className: "w-4 h-4 text-white" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Add to Shopping Bag" })] })
 									}),
@@ -66323,10 +66380,6 @@ var WhatsAppOrderConfirmationView = ({ order, onViewMyOrders, onTrackOrder, onCo
 	const transactionId = order?.upiReference || order?.paymentId || "Pending UTR Verification";
 	const preparedMessage = `Vidhyaa Jewellery Studio\nORDER VERIFICATION REQUEST\n\nOrder ID: ${orderId}\nOrder Date and Time: ${orderDateTime}\n\nCustomer Details:\n• Customer Name: ${customerName}\n• Customer Mobile Number: ${customerMobile}\n• Customer Email: ${customerEmail}\n\nComplete Delivery Address:\n${address}\n\nProducts Ordered:\n${itemsFormatted}\n\nFinancial Breakdown:\n• Subtotal: ₹${subtotal.toLocaleString("en-IN")}\n• Discount: ₹${discount.toLocaleString("en-IN")}\n• Shipping Charges: ₹${deliveryCharge.toLocaleString("en-IN")}\n• Order Total: ₹${totalAmount.toLocaleString("en-IN")}\n\nPayment Information:\n• Payment Method: ${paymentMethod}\n• UTR / Reference: ${transactionId}\n• Payment Status: PENDING STUDIO VERIFICATION\n\nPlease verify this UPI transfer for dispatch.`;
 	const whatsappUrl = `https://wa.me/917302187770?text=${encodeURIComponent(preparedMessage)}`;
-	const handleOpenWhatsApp = () => {
-		window.open(whatsappUrl, "_blank", "noopener,noreferrer");
-		setHasClickedWhatsApp(true);
-	};
 	const handleConfirmSent = async () => {
 		setIsSubmitting(true);
 		try {
@@ -66400,9 +66453,11 @@ var WhatsAppOrderConfirmationView = ({ order, onViewMyOrders, onTrackOrder, onCo
 			}),
 			!isConfirmed ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "space-y-3",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-					type: "button",
-					onClick: handleOpenWhatsApp,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
+					href: whatsappUrl,
+					target: "_blank",
+					rel: "noopener noreferrer",
+					onClick: () => setHasClickedWhatsApp(true),
 					className: "w-full max-w-md mx-auto bg-[#25D366] hover:bg-[#20bd5a] text-white font-black text-xs sm:text-sm px-6 py-3.5 rounded-2xl shadow-md flex items-center justify-center gap-2.5 transition-all cursor-pointer",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageCircle, { className: "w-5 h-5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "SHARE UTR ON WHATSAPP (+91 7302187770)" })]
 				}), hasClickedWhatsApp && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -81325,7 +81380,8 @@ var parseLocationRoute = () => {
 		view: "home",
 		param: void 0,
 		productId: null,
-		trackingOrder: ""
+		trackingOrder: "",
+		openCartDrawer: false
 	};
 	const pathname = window.location.pathname.replace(/\/+$/, "") || "/";
 	const hash = window.location.hash || "";
@@ -81335,50 +81391,58 @@ var parseLocationRoute = () => {
 		view: "admin",
 		param: void 0,
 		productId: null,
-		trackingOrder: ""
+		trackingOrder: "",
+		openCartDrawer: false
 	};
 	if (params.has("cf_order_id") || queryView === "checkout" || pathname.startsWith("/checkout")) return {
 		view: "checkout",
 		param: void 0,
 		productId: null,
-		trackingOrder: ""
+		trackingOrder: "",
+		openCartDrawer: false
 	};
 	if (queryView === "orders" || pathname.startsWith("/orders")) return {
 		view: "orders",
 		param: void 0,
 		productId: null,
-		trackingOrder: ""
+		trackingOrder: "",
+		openCartDrawer: false
 	};
 	if (queryView === "account" || pathname.startsWith("/account")) return {
 		view: "account",
 		param: void 0,
 		productId: null,
-		trackingOrder: ""
+		trackingOrder: "",
+		openCartDrawer: false
 	};
 	if (queryView === "wishlist" || pathname.startsWith("/wishlist")) return {
 		view: "wishlist",
 		param: void 0,
 		productId: null,
-		trackingOrder: ""
+		trackingOrder: "",
+		openCartDrawer: false
 	};
 	if (queryView === "go-live" || pathname.startsWith("/go-live")) return {
 		view: "go-live",
 		param: void 0,
 		productId: null,
-		trackingOrder: ""
+		trackingOrder: "",
+		openCartDrawer: false
 	};
 	if (queryView === "track-order" || pathname.startsWith("/track-order")) return {
 		view: "track-order",
 		param: void 0,
 		productId: null,
-		trackingOrder: params.get("order") || ""
+		trackingOrder: params.get("order") || "",
+		openCartDrawer: false
 	};
 	const productParam = params.get("product");
 	if (productParam) return {
 		view: "product-detail",
 		param: void 0,
 		productId: productParam,
-		trackingOrder: ""
+		trackingOrder: "",
+		openCartDrawer: false
 	};
 	if (pathname.startsWith("/product/")) {
 		const seg = decodeURIComponent(pathname.split("/").filter(Boolean)[1] || "");
@@ -81386,21 +81450,45 @@ var parseLocationRoute = () => {
 			view: "product-detail",
 			param: void 0,
 			productId: seg,
-			trackingOrder: ""
+			trackingOrder: "",
+			openCartDrawer: false
 		};
 	}
 	if (POLICY_VIEWS.includes(queryView)) return {
 		view: queryView,
 		param: void 0,
 		productId: null,
-		trackingOrder: ""
+		trackingOrder: "",
+		openCartDrawer: false
 	};
 	const strippedPath = pathname.replace(/^\//, "").toLowerCase();
 	if (POLICY_VIEWS.includes(strippedPath)) return {
 		view: strippedPath,
 		param: void 0,
 		productId: null,
-		trackingOrder: ""
+		trackingOrder: "",
+		openCartDrawer: false
+	};
+	if (strippedPath === "cart" || queryView === "cart") return {
+		view: "shop",
+		param: "all",
+		productId: null,
+		trackingOrder: "",
+		openCartDrawer: true
+	};
+	if (strippedPath === "new-arrivals" || strippedPath === "best-sellers" || strippedPath === "trending") return {
+		view: "shop",
+		param: strippedPath,
+		productId: null,
+		trackingOrder: "",
+		openCartDrawer: false
+	};
+	if (strippedPath === "categories") return {
+		view: "shop",
+		param: "all",
+		productId: null,
+		trackingOrder: "",
+		openCartDrawer: false
 	};
 	if (pathname.startsWith("/category/")) {
 		const seg = decodeURIComponent(pathname.split("/").filter(Boolean)[1] || "");
@@ -81408,32 +81496,36 @@ var parseLocationRoute = () => {
 			view: "category",
 			param: seg,
 			productId: null,
-			trackingOrder: ""
+			trackingOrder: "",
+			openCartDrawer: false
 		};
 	}
 	if (pathname.startsWith("/collection/") || pathname.startsWith("/collections/")) return {
 		view: "shop",
 		param: decodeURIComponent(pathname.split("/").filter(Boolean)[1] || "") || "all",
 		productId: null,
-		trackingOrder: ""
+		trackingOrder: "",
+		openCartDrawer: false
 	};
 	const catParam = params.get("category") || params.get("collection") || params.get("filter");
 	if (pathname.startsWith("/shop") || catParam || hash.toLowerCase() === "#shop") return {
 		view: "shop",
 		param: catParam || "all",
 		productId: null,
-		trackingOrder: ""
+		trackingOrder: "",
+		openCartDrawer: false
 	};
 	return {
 		view: "home",
 		param: void 0,
 		productId: null,
-		trackingOrder: ""
+		trackingOrder: "",
+		openCartDrawer: false
 	};
 };
 function MainApp() {
 	const { user, patronSession, isAdmin } = useAuth();
-	const { openCart } = useCart();
+	const { openCart, closeCart } = useCart();
 	const initialRoute = parseLocationRoute();
 	const [currentView, setCurrentView] = (0, import_react.useState)(initialRoute.view);
 	const [currentParam, setCurrentParam] = (0, import_react.useState)(initialRoute.param);
@@ -81555,6 +81647,7 @@ function MainApp() {
 			setCurrentParam(route.param);
 			if (route.trackingOrder) setTrackingOrderNumber(route.trackingOrder);
 			if (route.productId) setPendingProductId(route.productId);
+			if (route.openCartDrawer) openCart();
 		};
 		checkDirectUrl();
 		const handlePopState = () => {
@@ -81584,14 +81677,17 @@ function MainApp() {
 		setPendingProductId(null);
 		setCurrentView(view);
 		setCurrentParam(param);
-		if (view === "admin") window.history.pushState({}, "", "/admin/login");
-		else if (view === "home" && (window.location.pathname !== "/" || window.location.search)) window.history.pushState({}, "", "/");
+		if (view === "admin") {
+			closeCart();
+			window.history.pushState({}, "", "/admin/login");
+		} else if (view === "home" && (window.location.pathname !== "/" || window.location.search)) window.history.pushState({}, "", "/");
 		else if (view === "orders" || view === "account" || view === "wishlist" || view === "go-live") window.history.pushState({}, "", `/?view=${view}`);
 		else if (POLICY_VIEWS.includes(view)) window.history.pushState({}, "", `/?view=${view}`);
 		else if (view === "track-order") {
 			const url = param ? `/?view=track-order&order=${encodeURIComponent(param)}` : "/?view=track-order";
 			window.history.pushState({}, "", url);
 		} else if (view === "checkout") {
+			closeCart();
 			if (!window.location.search.includes("cf_order_id=")) window.history.pushState({}, "", "/?view=checkout");
 		} else if (view === "category") window.history.pushState({}, "", `/category/${encodeURIComponent(param || "necklaces")}`);
 		else if (view === "collections" || view === "collection") {
