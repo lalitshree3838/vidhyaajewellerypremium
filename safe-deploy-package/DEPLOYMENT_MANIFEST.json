@@ -1,7 +1,7 @@
 {
   "project": "Vidhyaa Jewellery Studio",
   "domain": "https://vidhyaajewellerystudio.com",
-  "generatedAt": "2026-11-23T03:27:38.349Z",
+  "generatedAt": "2026-11-23T08:25:57.649Z",
   "deploymentMode": "ADDITIVE_SAFE_ONLY",
   "excludedFromPackage": [
     "data/",
@@ -19,8 +19,8 @@
   "files": [
     {
       "path": ".htaccess",
-      "bytes": 6236,
-      "sha256": "cbb698404a565c3a099cc03b0e26d1cb885c9f81d2a02b08229bbda7956fa757"
+      "bytes": 6389,
+      "sha256": "f7e0a97372a95434c516027f40f51be9cc5f914a23f2c620f1fe3309dc54a986"
     },
     {
       "path": "api/admin/_auth.php",
@@ -108,14 +108,14 @@
       "sha256": "192a10f7d637ee20e4d6a9a0f5a5e13802e1674d71e443cf06cb2e1a7f46768f"
     },
     {
+      "path": "assets/index-BC6P70Qo.js",
+      "bytes": 11079127,
+      "sha256": "502974fdf86402b56609e37840bbd3559a94de56b0989de33d19c7f96bfb9b68"
+    },
+    {
       "path": "assets/index-D4xP2FD6.css",
       "bytes": 157339,
       "sha256": "d7659f7c0d21caf3445c026026638c1aa2ed49423fac7369b77f8c55c05e9bda"
-    },
-    {
-      "path": "assets/index-DCYiIUSR.js",
-      "bytes": 11078881,
-      "sha256": "4dc8d33d51b13f7b971c951d8bd6ecc1d32a7d7947249e679d35a1e3c968b9b8"
     },
     {
       "path": "assets/vidhyaa-home-hero.jpg",
@@ -140,7 +140,7 @@
     {
       "path": "index.html",
       "bytes": 1861,
-      "sha256": "b039b7ccbef6d94bbde785dd5ccaceb7cdeccfb8af0cd1118b2e3232f5d7ebd2"
+      "sha256": "8fa89bcf8c15f862a479fd2fd4a9d561d787dc616e02cb692449002a6f84581a"
     },
     {
       "path": "vidhyaa-home-hero.jpg",

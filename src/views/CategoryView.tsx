@@ -73,6 +73,16 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
   const [failedGalleryIds, setFailedGalleryIds] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
+    setSelectedSubcategory('all');
+    setCurationFilter('all');
+    setSortBy('featured');
+    setSearchQuery('');
+    setInStockOnly(false);
+    setActiveLightboxImage(null);
+    setActiveVideo(null);
+  }, [category.id]);
+
+  useEffect(() => {
     if (!activeLightboxImage && !activeVideo) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {

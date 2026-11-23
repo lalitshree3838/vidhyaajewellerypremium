@@ -80379,6 +80379,15 @@ var CategoryView = ({ category, categories, products, onSelectProduct, onOpenQui
 	const [failedBannerUrls, setFailedBannerUrls] = (0, import_react.useState)({});
 	const [failedGalleryIds, setFailedGalleryIds] = (0, import_react.useState)({});
 	(0, import_react.useEffect)(() => {
+		setSelectedSubcategory("all");
+		setCurationFilter("all");
+		setSortBy("featured");
+		setSearchQuery("");
+		setInStockOnly(false);
+		setActiveLightboxImage(null);
+		setActiveVideo(null);
+	}, [category.id]);
+	(0, import_react.useEffect)(() => {
 		if (!activeLightboxImage && !activeVideo) return;
 		const handleKeyDown = (e) => {
 			if (e.key === "Escape") {

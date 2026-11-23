@@ -97,6 +97,9 @@
   RewriteRule ^api/payments/webhook/?$ /api/payments/cashfree.php?action=webhook [QSA,L]
   RewriteRule ^api/admin/cashfree-config/?$ /api/payments/cashfree.php?action=admin-config [QSA,L]
 
+  # Route /categories SPA page to index.html before Apache checks the physical categories/ image directory
+  RewriteRule ^categories/?$ /index.html [L]
+
   # Serve existing physical files and directories directly
   RewriteCond %{REQUEST_FILENAME} -f [OR]
   RewriteCond %{REQUEST_FILENAME} -d

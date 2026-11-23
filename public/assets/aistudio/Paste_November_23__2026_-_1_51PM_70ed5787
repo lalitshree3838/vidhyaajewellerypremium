@@ -1,0 +1,1275 @@
+# ONE FINAL LIVE WEBSITE ACTIVATION MASTER PROMPT
+## VIDHYAA JEWELLERY STUDIO — FINAL PRODUCTION ACTIVATION, COMPLETE FUNCTIONALITY, LIVE DEPLOYMENT & VERIFICATION
+
+**Production Website:** https://vidhyaajewellerystudio.com  
+**Project:** Vidhyaa Jewellery Studio  
+**Repository:** https://github.com/lalitshree3838/vidhyaajewellerypremium  
+**Hosting:** Hostinger  
+**Deployment:** GitHub Auto Deployment / existing approved deployment method
+
+---
+
+## YOUR MISSION
+
+Act as a senior full-stack engineer, production deployment engineer, security auditor, QA automation engineer, ecommerce specialist, and live website troubleshooting expert.
+
+Your mission is to bring the EXISTING Vidhyaa Jewellery Studio website to its final production-ready state.
+
+The website must be fully functional, responsive, secure, and usable by real customers and the website owner.
+
+Do not simply produce an audit report, recommendations, mockups, or a list of possible fixes.
+
+You must inspect the existing application, identify actual problems, fix them with minimal safe changes, build, test, prepare deployment, deploy only when the authorized deployment access is available, and verify the actual production website.
+
+This is the FINAL INTEGRATED ACTIVATION TASK.
+
+Do not make me run separate prompts for each feature or repeat the same troubleshooting steps.
+
+---
+
+# PHASE 1 — STRICT DATA AND WEBSITE PRESERVATION
+
+Before making any changes:
+
+1. Inspect the entire existing project and current deployment configuration.
+2. Identify the current production code, API endpoints, deployment package, database, media files, and existing configuration.
+3. Preserve the existing architecture wherever possible.
+4. Take a backup of code and deployment files before modifying them, where the available environment permits.
+5. Record the initial status of existing data and deployment files.
+6. Identify the exact current production build and deployment artifacts.
+
+### ABSOLUTELY PROHIBITED
+
+- Do not rebuild the website from scratch.
+- Do not replace the existing website with a template.
+- Do not reset Firebase or Firestore.
+- Do not create a new database.
+- Do not seed or insert duplicate products.
+- Do not delete, overwrite, migrate, or restructure existing production data.
+- Do not remove existing customer accounts.
+- Do not remove existing orders or payment records.
+- Do not delete product variations.
+- Do not delete images or videos.
+- Do not replace authentic jewellery images with AI-generated images, stock images, placeholders, or unrelated images.
+- Do not change existing product IDs.
+- Do not change product prices without authorization.
+- Do not change order totals or historical order records.
+- Do not remove working functionality in order to fix another feature.
+- Do not overwrite production configuration with Preview configuration.
+- Do not expose API keys, passwords, session secrets, Firebase credentials, Cashfree secrets, or customer information.
+- Do not perform destructive Git operations.
+- Do not use git reset --hard, force push, database reset, bulk deletion, or destructive synchronization.
+
+Every code change must be additive, minimal, reversible, and compatible with existing data.
+
+---
+
+# PHASE 2 — FULL WEBSITE FUNCTIONALITY AUDIT
+
+Inspect every page, component, route, API, form, button, link, navigation menu, modal, and interactive element.
+
+Verify and fix actual problems.
+
+## A. HOME PAGE
+
+Verify:
+
+- Homepage loads without blank screens.
+- Header and navigation display correctly.
+- Logo loads.
+- Main banner loads.
+- Hero section works.
+- New Arrivals section works.
+- Best Sellers section works.
+- Trending section works.
+- Featured products display.
+- Categories display.
+- Shopping Video section displays actual videos.
+- Product cards load correctly.
+- Product navigation works.
+- Offers and promotional sections display correctly.
+- Footer works.
+- No broken links.
+- No missing assets.
+- No console-breaking JavaScript errors.
+- No overlapping sections.
+- No infinite loading.
+- No unexpected page redirects.
+
+## B. HEADER, NAVIGATION AND MENU
+
+Test every navigation element:
+
+- Home
+- New Arrivals
+- Shop
+- Collections
+- Best Seller
+- Trending
+- More
+- Search
+- Categories
+- Cart
+- Account / Login
+- Wishlist, if implemented
+- All submenu items
+- Mobile navigation
+- Desktop navigation
+
+Ensure:
+
+- Every menu item navigates to the correct destination.
+- Active navigation is correct.
+- Back button works.
+- Forward button works.
+- Browser history works.
+- Refreshing a route does not produce a 404.
+- Deep links work.
+- Category selection does not conflict with another category filter.
+- Menus close correctly after selection.
+- Mobile menu is usable.
+
+## C. PRODUCT CATALOG — CRITICAL
+
+There are 60 existing products.
+
+Preserve all existing products, IDs, prices, variations, descriptions, stock information, images, and product data.
+
+Test:
+
+- All products load from the correct source.
+- Product count is not unintentionally reduced.
+- Product cards display actual images.
+- Product title is correct.
+- Product price is correct.
+- MRP is correct where present.
+- Discount calculations are correct.
+- Product details are correct.
+- Product stock state is respected.
+- Category filters work.
+- Subcategory filters work.
+- Sorting works.
+- Search works.
+- Pagination or infinite scroll works, if present.
+- Clicking a product opens the correct product.
+- Direct product URLs work.
+- Product IDs remain stable.
+- Product variations work.
+- Selecting a variation changes the correct price, image, SKU, and available information.
+- Variation selection does not carry over from another product.
+- No products are accidentally duplicated.
+- No products disappear after refreshing.
+- No product information is fabricated.
+
+## D. PRODUCT DETAIL PAGE
+
+Verify all functions:
+
+- Product image display.
+- Image gallery.
+- Image zoom, if implemented.
+- Variation selection.
+- Quantity selector.
+- Add to Cart.
+- Buy Now.
+- Wishlist, if implemented.
+- Product description.
+- Price and MRP.
+- Discount.
+- Availability.
+- Related products.
+- Breadcrumb navigation.
+- Back to Shop.
+- Share product.
+- Mobile layout.
+
+Fix all genuine interaction issues.
+
+When Buy Now is clicked, the customer must be taken to checkout with the correct product and quantity.
+
+The Cart Drawer must not remain stuck over the checkout page.
+
+## E. CART — CRITICAL
+
+Verify:
+
+- Add to Cart works.
+- Cart opens.
+- Cart closes.
+- Quantity increases.
+- Quantity decreases.
+- Quantity cannot become zero or negative.
+- Remove item works.
+- Product variation is retained.
+- Correct product image is shown.
+- Correct prices are shown.
+- Subtotal is correct.
+- Discounts are calculated correctly.
+- Delivery charge is calculated correctly.
+- Final total is correct.
+- Cart survives refresh appropriately.
+- Cart does not contain invalid products.
+- Multiple products calculate correctly.
+- Duplicate additions behave correctly.
+- Checkout button works.
+- Empty cart displays properly.
+- Buy Now and regular Add to Cart behavior do not conflict.
+
+Prevent NaN, negative values, incorrect quantities, stale product data, and invalid totals.
+
+## F. CHECKOUT
+
+Test the complete checkout flow.
+
+Verify:
+
+- Customer name validation.
+- Mobile number validation.
+- Address validation.
+- PIN code validation.
+- State and city fields.
+- Required field validation.
+- Order summary.
+- Selected variations.
+- Product quantities.
+- Product prices.
+- Subtotal.
+- Discount.
+- Delivery fee.
+- Final amount.
+- Payment method.
+- Payment button.
+- Loading states.
+- Duplicate submission prevention.
+- Error handling.
+- Successful payment return handling.
+- Order creation.
+- Order ID generation.
+- Order confirmation page.
+- Refresh behavior.
+- Back button behavior.
+
+Never trust prices supplied by the browser.
+
+The server must calculate or validate order prices using trusted product information.
+
+Do not allow manipulated quantities, prices, discounts, or totals to create fraudulent orders.
+
+---
+
+# PHASE 3 — PAYMENT SYSTEM VERIFICATION
+
+Inspect the existing Cashfree integration without replacing it.
+
+Verify:
+
+- Cashfree SDK integration.
+- Payment order creation.
+- Server-side order amount validation.
+- Payment status verification.
+- Payment callback.
+- Webhook signature verification.
+- Duplicate webhook prevention.
+- Payment failure handling.
+- Cancelled payment handling.
+- Pending payment handling.
+- Successful payment handling.
+- Order/payment relationship.
+- Payment status display.
+- Error handling.
+- Secure API communication.
+
+### PAYMENT SAFETY
+
+Do not make any real payment.
+
+Do not charge a card or UPI account.
+
+Do not generate fake successful payment records.
+
+Use sandbox/test mode for automated verification.
+
+If production credentials are missing, clearly identify the exact missing configuration without exposing secrets.
+
+If production payment verification requires a real transaction, STOP before conducting it and report that owner authorization is required.
+
+Do not mark an order as PAID or CONFIRMED based only on a browser redirect.
+
+Only verified server-side payment status may establish a successful payment.
+
+---
+
+# PHASE 4 — ORDER MANAGEMENT
+
+Test the complete order lifecycle.
+
+Verify:
+
+- Order creation.
+- Unique order ID.
+- Order details.
+- Customer details.
+- Product details.
+- Variation details.
+- Quantity.
+- Price.
+- Payment status.
+- Order history.
+- Admin order list.
+- Admin order details.
+- Customer order history.
+- Order refresh.
+- Order data persistence.
+- Failed payment orders.
+- Pending payment orders.
+- Paid orders.
+
+Ensure:
+
+- Existing orders remain untouched.
+- New orders do not duplicate.
+- Order IDs remain unique.
+- Customer and order records remain linked.
+- Payment records remain linked correctly.
+
+A payment-pending order must never be falsely marked as confirmed.
+
+---
+
+# PHASE 5 — CUSTOMER ACCOUNT AND AUTHENTICATION
+
+Test the existing customer authentication system.
+
+Verify:
+
+- Customer registration.
+- Login.
+- Logout.
+- Email/password login.
+- Mobile/password login if already implemented.
+- Password visibility toggle.
+- Validation errors.
+- Invalid login handling.
+- Session persistence.
+- Session expiry.
+- Account information.
+- Customer order history.
+- Protected pages.
+- Forgot-password flow, if implemented.
+
+Do not introduce SMS OTP, paid authentication services, or new authentication providers.
+
+Do not break existing customer accounts.
+
+---
+
+# PHASE 6 — ADMIN PANEL — CRITICAL
+
+Inspect and verify every Admin function.
+
+## Admin login
+
+- Admin login page loads.
+- Authentication works.
+- Session is secure.
+- Login errors are handled.
+- Session persists correctly.
+- Logout works.
+- Unauthorized visitors cannot access admin functions.
+
+If Admin credentials or server-side configuration are missing:
+
+- Do not invent credentials.
+- Do not disable security.
+- Do not enable public admin registration.
+- Do not expose the admin password.
+- Do not bypass authentication.
+- Identify the exact missing Hostinger configuration.
+- Provide the safe configuration instructions.
+
+## Admin dashboard
+
+Verify:
+
+- Dashboard loads.
+- Products count.
+- Orders count.
+- Customers.
+- Payment information.
+- Statistics.
+- Dashboard navigation.
+- Admin menus.
+- Data refresh.
+
+## Product management
+
+Verify:
+
+- Product list.
+- Search.
+- Edit product.
+- Add product.
+- Product description.
+- Price.
+- MRP.
+- Category.
+- Subcategory.
+- Stock.
+- Variations.
+- Images.
+- Save changes.
+- Cancel changes.
+- Delete controls.
+
+Do not execute product deletion during testing.
+
+Any deletion function must require a deliberate confirmation and must never be triggered automatically.
+
+## Product image upload
+
+Test:
+
+- File selection.
+- Preview.
+- File type validation.
+- File size validation.
+- Upload progress.
+- Successful upload.
+- Failed upload.
+- Image URL persistence.
+- Image display after refresh.
+
+Never overwrite existing images without explicit authorization.
+
+## Video upload
+
+Test the existing upload endpoint and functionality.
+
+Verify:
+
+- MP4 upload.
+- File validation.
+- Actual binary file verification.
+- Upload progress.
+- Server response.
+- Correct URL generation.
+- Video persistence.
+- Playback after upload.
+- Video playback on production, if accessible.
+
+Reject fake MP4 files containing HTML or invalid content.
+
+Do not delete existing videos.
+
+## Admin orders
+
+Verify:
+
+- Order list.
+- Order details.
+- Customer details.
+- Product details.
+- Payment status.
+- Order filtering.
+- Order search.
+- Refresh.
+- Status updates, where supported.
+
+Do not alter existing production order statuses as part of testing.
+
+---
+
+# PHASE 7 — PRODUCT IMAGES RESTORATION
+
+CURRENT KNOWN STATUS:
+
+- 42 out of 60 product images were previously verified as working.
+- 18 product image records require additional investigation/restoration.
+- Some images may exist in Hostinger but not in the current AI Studio workspace.
+- Some products have empty image arrays.
+- Some variations also have empty image arrays.
+
+The known affected product IDs include:
+
+prod-user-003  
+prod-user-034  
+prod-user-027  
+prod-user-023  
+prod-user-026  
+prod-user-025  
+prod-user-024  
+prod-user-022  
+prod-user-021  
+prod-user-018  
+prod-user-017  
+prod-user-030  
+prod-user-006  
+prod-user-020  
+prod-user-019  
+prod-user-004  
+prod-user-002  
+prod-user-001
+
+### IMAGE RESTORATION RULES
+
+1. Inspect current product records.
+2. Inspect existing image paths.
+3. Inspect existing public/product upload directories where access is available.
+4. Verify whether missing image files exist on the live Hostinger server.
+5. Check the correct image URL and HTTP response.
+6. Check browser loading and image rendering.
+7. Restore an authentic image only when the correct original file is identified.
+8. Preserve existing working images.
+9. Preserve variation images.
+10. Never replace authentic product images with generic jewellery images.
+11. Never invent image URLs.
+12. Never use AI-generated jewellery images to pretend they are actual products.
+13. Never delete or clear image arrays to solve an image-loading error.
+14. Never rewrite all 60 product records just to repair missing images.
+
+If the authentic image cannot be recovered, leave the product data untouched and create a clear report listing exactly which product images require owner upload.
+
+Do not falsely declare all images restored.
+
+---
+
+# PHASE 8 — SHOPPING VIDEO SECTION
+
+There are 6 existing shopping videos.
+
+Preserve all 6 videos.
+
+Verify:
+
+- All 6 video records remain available.
+- Correct video URLs.
+- Correct MIME type.
+- MP4 streaming.
+- Range requests.
+- HTTP 206 Partial Content where applicable.
+- Actual video playback.
+- Play button.
+- Pause button.
+- Muted autoplay behavior, if applicable.
+- Manual sound control.
+- Mobile playback.
+- Video aspect ratio.
+- Video card dimensions.
+- Video scrolling.
+- Product link from video.
+- Video section navigation.
+
+The Shopping Video section must play actual videos, not just posters or static images.
+
+Ensure the Shopping Video section remains separate from the regular product gallery and Feature Jewellery sections.
+
+Fix:
+
+- Blank video frames.
+- Black screens.
+- 0x0 video dimensions.
+- Unresponsive play buttons.
+- Incorrect video MIME type.
+- Broken streaming.
+- Browser autoplay restrictions.
+- Incorrect click targets.
+- Overlay controls blocking playback.
+
+Do not delete or replace any existing video.
+
+---
+
+# PHASE 9 — SEARCH, FILTERS, CATEGORY AND COLLECTIONS
+
+Verify:
+
+- Search opens.
+- Search input works.
+- Search results are correct.
+- Search by product name.
+- Search by category.
+- Search by relevant product details, if supported.
+- Clear search.
+- No-results message.
+- Search results navigation.
+
+Verify all categories and subcategories.
+
+Category navigation must not interfere with:
+
+- Shop category filter.
+- Subcategory selection.
+- Sorting.
+- Search state.
+- Browser navigation.
+
+Ensure stale filters are cleared appropriately when the user changes the primary category.
+
+---
+
+# PHASE 10 — WHATSAPP ORDER CONFIRMATION
+
+The website uses MANUAL WhatsApp Click-to-Chat.
+
+Owner WhatsApp number:
+
++91 7302187770
+
+Use the existing Click-to-Chat system only.
+
+Verify:
+
+- WhatsApp button works.
+- Correct WhatsApp destination.
+- Correct order information is prefilled.
+- Product details are accurate.
+- Order ID is correct.
+- Total is correct.
+- UTR/payment reference field, if present, is correctly handled.
+- Mobile WhatsApp opens correctly.
+- Desktop WhatsApp Web opens correctly.
+- No popup blocker issue.
+- Correct URL encoding.
+- Customer can manually press Send.
+
+Do not implement:
+
+- Meta WhatsApp Cloud API.
+- Paid WhatsApp APIs.
+- Automatic message sending.
+- Telegram.
+- Fake message delivery confirmation.
+
+Do not claim an order is confirmed merely because WhatsApp was opened.
+
+---
+
+# PHASE 11 — RESPONSIVE AND MOBILE FUNCTIONALITY
+
+Test the website at:
+
+- Desktop screen.
+- Laptop.
+- Tablet.
+- Mobile portrait.
+- Mobile landscape.
+
+Verify:
+
+- Header.
+- Navigation.
+- Menu.
+- Search.
+- Categories.
+- Product cards.
+- Product details.
+- Image galleries.
+- Shopping videos.
+- Cart.
+- Checkout.
+- Forms.
+- Admin pages.
+- Buttons.
+- Modals.
+- Footer.
+
+Fix:
+
+- Horizontal overflow.
+- Text overflow.
+- Broken layout.
+- Small tap targets.
+- Overlapping elements.
+- Buttons hidden below screen.
+- Fixed elements blocking checkout.
+- Modal overflow.
+- Image distortion.
+- Incorrect card widths.
+- Mobile navigation problems.
+
+The website must remain visually premium and consistent with the existing Vidhyaa Jewellery Studio branding.
+
+Do not redesign the website unnecessarily.
+
+---
+
+# PHASE 12 — BUTTON AND INTERACTION AUDIT
+
+Create a comprehensive internal inventory of all clickable controls.
+
+Test every button, link, icon, card, tab, dropdown, filter, modal trigger, submit button, navigation item, and CTA.
+
+For every control verify:
+
+1. It is visible.
+2. It is clickable.
+3. It performs the correct action.
+4. It does not trigger the wrong action.
+5. It does not navigate to an incorrect page.
+6. It does not cause duplicate submissions.
+7. It has a proper loading state where necessary.
+8. It has a proper error state where necessary.
+9. It works on mobile.
+10. It does not produce JavaScript errors.
+
+Pay particular attention to:
+
+- Add to Cart.
+- Buy Now.
+- Checkout.
+- Payment.
+- Search.
+- Product selection.
+- Variation selection.
+- Quantity controls.
+- Cart remove.
+- Login.
+- Logout.
+- Admin login.
+- Save product.
+- Upload product image.
+- Upload video.
+- Order details.
+- WhatsApp.
+- Category navigation.
+- Browser back button.
+- Close buttons.
+- All modal buttons.
+
+Do not mark a button working merely because its page returns HTTP 200.
+
+Where real browser automation is available, use it to perform genuine UI interaction.
+
+Where browser automation is not available, clearly state that the interaction could not be tested and do not claim success.
+
+---
+
+# PHASE 13 — API, SERVER AND SECURITY AUDIT
+
+Inspect every existing API endpoint.
+
+Verify:
+
+- Correct HTTP methods.
+- Correct responses.
+- Valid JSON.
+- Correct authentication.
+- Correct authorization.
+- Input validation.
+- Error handling.
+- File upload validation.
+- Secure session handling.
+- CSRF protections.
+- Origin protections.
+- Rate limiting where implemented.
+- No secret leakage.
+- No PHP warnings.
+- No Node errors.
+- No invalid server paths.
+- No exposed sensitive files.
+
+Verify the production hosting configuration:
+
+- PHP compatibility.
+- .htaccess rules.
+- API routing.
+- Rewrite rules.
+- MIME types.
+- Cache headers.
+- Video range support.
+- Static assets.
+- File permissions.
+- Session configuration.
+- Public/private file boundaries.
+
+Do not expose:
+
+- Admin credentials.
+- Environment files.
+- Secret configuration.
+- Backup files.
+- Internal server files.
+- Customer information.
+
+---
+
+# PHASE 14 — PERFORMANCE AND STABILITY
+
+Inspect and fix genuine performance problems without damaging existing data.
+
+Verify:
+
+- Homepage loading.
+- Product catalog loading.
+- Image loading.
+- Video loading.
+- API response time.
+- Repeated API requests.
+- Infinite loops.
+- React errors.
+- Memory issues.
+- localStorage quota errors.
+- Large Base64 payload problems.
+- Unnecessary rerenders.
+- Broken caching.
+- Stale data.
+- Duplicate network calls.
+- Loading indicators.
+- Error recovery.
+
+Never solve localStorage quota problems by silently deleting customer data, product images, or product records.
+
+Maintain a safe image and media loading strategy.
+
+---
+
+# PHASE 15 — BUILD AND AUTOMATED TESTS
+
+Run all available tests.
+
+### Required checks
+
+- TypeScript.
+- Production build.
+- Lint.
+- Existing automated tests.
+- Route tests.
+- API tests.
+- Product data validation.
+- Cart calculations.
+- Checkout calculations.
+- Payment safeguards.
+- Order creation.
+- Authentication.
+- Upload validation.
+- Media streaming.
+- Deployment package verification.
+
+Resolve all genuine critical and high-priority errors.
+
+Do not hide errors by disabling lint, removing tests, weakening validation, or suppressing error messages.
+
+Do not claim a test passed unless it was actually executed.
+
+---
+
+# PHASE 16 — DEPLOYMENT PACKAGE VALIDATION
+
+Before deployment:
+
+1. Inspect the current deployment package.
+2. Verify package contents.
+3. Verify build output.
+4. Verify index.html references the correct JavaScript and CSS files.
+5. Verify assets exist.
+6. Verify all required PHP endpoints exist.
+7. Verify .htaccess routing.
+8. Verify deployment manifest.
+9. Verify checksums.
+10. Confirm the package contains the latest fixes.
+11. Confirm no stale JavaScript or CSS is being deployed.
+12. Confirm no development configuration is being deployed.
+13. Confirm no production data directories are included.
+14. Confirm no secrets are included.
+15. Confirm no unnecessary files are included.
+
+Use the existing safe deployment allowlist.
+
+Do not delete Hostinger directories.
+
+Do not perform a destructive full-site sync.
+
+Do not replace:
+
+- Products.
+- Uploads.
+- Videos.
+- Orders.
+- Customers.
+- Database files.
+- Payment records.
+- Secrets.
+- Admin configuration.
+
+Only update verified application code and necessary static assets.
+
+---
+
+# PHASE 17 — LIVE WEBSITE DEPLOYMENT
+
+If deployment tools and authorized production access are available:
+
+1. Confirm the current production backup.
+2. Confirm the exact deployment package.
+3. Confirm only intended application files will be changed.
+4. Preserve all existing data directories.
+5. Deploy the approved files additively.
+6. Do not delete existing production files unless a specific obsolete file has been proven safe to remove and deletion is explicitly approved.
+7. Verify deployment completion.
+8. Verify live assets.
+9. Verify API responses.
+10. Verify actual production functionality.
+
+If Hostinger access is unavailable:
+
+- Do not pretend to deploy.
+- Do not claim the live site was changed.
+- Finish all code fixes and build verification possible in the current environment.
+- Produce the exact verified deployment package.
+- Identify the precise remaining manual action.
+- Give simple, step-by-step Hostinger deployment instructions.
+- Do not ask me to repeat the entire audit.
+
+---
+
+# PHASE 18 — LIVE PRODUCTION SMOKE TEST
+
+After deployment, test the ACTUAL production domain:
+
+https://vidhyaajewellerystudio.com
+
+Test the following URLs where applicable:
+
+- /
+- /shop
+- /new-arrivals
+- /best-sellers
+- /trending
+- /categories
+- /cart
+- /admin
+- /api/products
+- /api/admin/auth-status
+- /api/payments/cashfree/status
+- /api/videos/available
+
+Verify:
+
+- HTTPS.
+- Domain.
+- Correct application.
+- No stale build.
+- No blank screen.
+- No redirect loop.
+- No JavaScript errors.
+- Correct assets.
+- Correct APIs.
+- Correct media.
+- Correct routing.
+- Correct mobile behavior.
+
+An HTTP 200 response is not proof that the page or feature is functional.
+
+Where actual browser testing is available, perform real interactions.
+
+---
+
+# PHASE 19 — COMPLETE REAL CUSTOMER JOURNEY TEST
+
+Perform a non-destructive test using test data and sandbox payments wherever possible.
+
+Simulate the following journey:
+
+1. Open live homepage.
+2. Browse categories.
+3. Open a product.
+4. Select a variation.
+5. Change quantity.
+6. Add product to cart.
+7. Add another product.
+8. Open cart.
+9. Change quantity.
+10. Remove an item.
+11. Verify subtotal and total.
+12. Proceed to checkout.
+13. Enter test customer information.
+14. Validate checkout.
+15. Test payment flow in sandbox only.
+16. Verify payment failure behavior.
+17. Verify pending behavior.
+18. Verify successful sandbox payment behavior.
+19. Verify order ID.
+20. Verify order details.
+21. Verify customer order history.
+22. Verify Admin order display, if access is available.
+23. Verify WhatsApp order link and prefilled message.
+24. Verify browser back button.
+25. Verify refresh behavior.
+
+Do not use real customer information.
+
+Do not make a real payment.
+
+Do not send a WhatsApp message.
+
+Do not modify existing customer orders.
+
+---
+
+# PHASE 20 — FINAL DEFECT RESOLUTION
+
+Prioritize defects using this order:
+
+### P0 — CRITICAL
+
+- Website unavailable.
+- Data loss risk.
+- Payment security vulnerability.
+- Admin security vulnerability.
+- Customer information exposure.
+- Checkout creates incorrect orders.
+- Payment incorrectly marked successful.
+- Database corruption.
+
+### P1 — HIGH
+
+- Product catalog broken.
+- Cart broken.
+- Checkout broken.
+- Admin login broken.
+- Product uploads broken.
+- Order management broken.
+- Major image/video issues.
+- API failures.
+
+### P2 — MEDIUM
+
+- Search issues.
+- Filter issues.
+- Responsive layout issues.
+- Navigation problems.
+- Non-critical buttons.
+- Performance issues.
+
+### P3 — LOW
+
+- Cosmetic issues.
+- Minor spacing.
+- Small visual improvements.
+
+Fix P0 and P1 problems first.
+
+Fix P2 problems where safe and possible.
+
+Do not waste time making unnecessary cosmetic changes while critical functionality remains broken.
+
+---
+
+# PHASE 21 — FINAL PRODUCTION READINESS GATE
+
+The website may be declared LIVE AND VERIFIED only if all critical requirements have actual evidence.
+
+The following must be independently evaluated:
+
+| Feature | Required status |
+|---|---|
+| Homepage | Verified |
+| Routing | Verified |
+| Product catalog | Verified |
+| Product data integrity | Verified |
+| Product images | Verified or exceptions clearly listed |
+| Categories | Verified |
+| Search | Verified |
+| Filters | Verified |
+| Product details | Verified |
+| Variations | Verified |
+| Add to Cart | Verified |
+| Buy Now | Verified |
+| Cart calculations | Verified |
+| Checkout | Verified |
+| Payment integration | Verified or clearly blocked |
+| Order creation | Verified |
+| Customer login | Verified or clearly blocked |
+| Admin login | Verified or owner configuration required |
+| Admin dashboard | Verified or clearly blocked |
+| Product management | Verified or clearly blocked |
+| Image upload | Verified or clearly blocked |
+| Video upload | Verified or clearly blocked |
+| Video playback | Verified |
+| WhatsApp | Verified |
+| Mobile responsiveness | Verified |
+| API endpoints | Verified |
+| Security | Audited |
+| Production build | Passed |
+| Live deployment | Confirmed |
+| Live browser testing | Completed or limitation disclosed |
+| Existing data preservation | Verified |
+
+Do not use a green status for untested features.
+
+Do not mark features as PASS merely because code exists.
+
+---
+
+# PHASE 22 — FINAL REPORT
+
+At the end, provide one comprehensive report in the following format:
+
+## VIDHYAA JEWELLERY STUDIO
+### FINAL LIVE WEBSITE ACTIVATION REPORT
+
+**1. Overall Status**
+
+Choose only one:
+
+- LIVE — FULLY VERIFIED
+- LIVE — PARTIALLY VERIFIED
+- DEPLOYMENT COMPLETED — LIVE TESTING REQUIRED
+- READY TO DEPLOY — DEPLOYMENT ACCESS REQUIRED
+- BLOCKED — OWNER CONFIGURATION REQUIRED
+- BLOCKED — TECHNICAL ISSUE
+
+**2. Work Completed**
+
+List actual files modified and the exact fixes completed.
+
+**3. Build Status**
+
+- Build result.
+- TypeScript result.
+- Lint result.
+- Automated test result.
+
+**4. Live Deployment**
+
+- Deployment method.
+- Exact deployment status.
+- Production build version.
+- Deployment date/time.
+- Whether the live domain is serving the latest build.
+
+**5. Functional Test Results**
+
+Provide a PASS / FAIL / BLOCKED / NOT TESTED table for all major website features.
+
+**6. Products and Data Preservation**
+
+Report:
+
+- Original product count.
+- Final product count.
+- Product IDs preserved.
+- Variations preserved.
+- Existing order records preserved.
+- Existing customer data preserved.
+- Videos preserved.
+- Database changes, if any.
+
+Clearly disclose any data that could not be verified.
+
+**7. Product Image Report**
+
+Report:
+
+- Total products.
+- Images working.
+- Images missing.
+- Authentic images recovered.
+- Images requiring owner upload.
+
+**8. Video Report**
+
+Report all 6 existing videos individually where possible:
+
+- Video file.
+- HTTP status.
+- MIME type.
+- Streaming.
+- Actual playback.
+- Mobile playback.
+- Upload verification.
+
+**9. Admin Report**
+
+- Login.
+- Dashboard.
+- Product management.
+- Orders.
+- Image uploads.
+- Video uploads.
+- Authentication/security.
+
+**10. Payment Report**
+
+- Cashfree configuration.
+- Sandbox verification.
+- Production configuration.
+- Webhook verification.
+- Live transaction status.
+
+Never claim real payment success unless an actual authorized payment was completed.
+
+**11. Security Report**
+
+List verified protections and any unresolved vulnerabilities.
+
+**12. Remaining Blockers**
+
+Only list genuine remaining blockers.
+
+For every blocker, include:
+
+- Exact issue.
+- Why it remains unresolved.
+- Whether it requires owner action.
+- Exact next action.
+- Where to perform that action.
+
+**13. Final Activation Verdict**
+
+Clearly state:
+
+- Whether customers can browse.
+- Whether customers can purchase.
+- Whether checkout is operational.
+- Whether payments are operational.
+- Whether orders are recorded correctly.
+- Whether the Admin panel is operational.
+- Whether uploads work.
+- Whether the live site is verified.
+
+---
+
+# FINAL EXECUTION INSTRUCTIONS
+
+Do not stop after creating an audit report.
+
+Do not stop after fixing frontend files.
+
+Do not stop after a successful build.
+
+Do not stop after generating a deployment package.
+
+Continue through every phase that is technically possible in the current environment.
+
+Fix actual issues safely.
+
+Run the tests.
+
+Verify the production build.
+
+Verify deployment package integrity.
+
+Deploy only if authorized access is available.
+
+Test the actual live website after deployment.
+
+If any step is blocked by missing Hostinger access, server configuration, credentials, original images, unavailable browser automation, or external payment configuration, do not fabricate a successful result.
+
+Complete everything else possible and provide the exact remaining owner action.
+
+## FINAL GOAL
+
+The existing Vidhyaa Jewellery Studio website must be stable, secure, fully functional, responsive, data-preserving, and production-ready.
+
+All existing working functionality must continue working.
+
+All genuine critical defects must be fixed.
+
+All accessible features must be tested.
+
+All deployment changes must be safe and reversible.
+
+The live website must be verified using real production evidence.
+
+**Begin with a complete inspection of the current project and latest deployment artifacts. Continue automatically through all safe phases. Do not ask for unnecessary confirmations or stop to provide intermediate reports. Do not rebuild the website. Preserve all existing customer, product, order, payment, image, video, and admin data.**
