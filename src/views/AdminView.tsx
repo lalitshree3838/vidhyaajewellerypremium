@@ -2955,6 +2955,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                       <option value="Delhivery Logistics">Delhivery Logistics</option>
                       <option value="DTDC Express">DTDC Express</option>
                       <option value="India Post Speed Post">India Post Speed Post</option>
+                      <option value="Shree Tirupati Courier">Shree Tirupati Courier</option>
                     </select>
                   </div>
 
