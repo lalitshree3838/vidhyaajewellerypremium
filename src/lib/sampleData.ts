@@ -172,23 +172,28 @@ export function isGenuineProduct(product?: Product | null): boolean {
 }
 
 const CATEGORY_IMAGE_FALLBACKS: Record<string, string> = {
-  necklaces: '/categories/necklaces_category.jpg',
-  'necklaces-sets': '/categories/necklaces_category.jpg',
-  mangalsutra: '/categories/mangalsutra_category.jpg',
-  rings: '/categories/rings_category.jpg',
-  'devotional-rings': '/categories/devotional_category.jpg',
-  'devotional-jewellery': '/categories/devotional_category.jpg',
-  'kangan-kada-bracelet': '/categories/kada_bangles_category.jpg',
-  'kangan-kada-and-bracelet': '/categories/kada_bangles_category.jpg',
-  'kada-bangles': '/categories/kada_bangles_category.jpg',
-  watches: '/categories/watches_category.jpg',
-  'oxidised-jewellery': '/categories/oxidised_jewellery_category.jpg'
+  necklaces: '/categories/thumb_necklaces.jpg',
+  'necklaces-sets': '/categories/thumb_necklaces.jpg',
+  'earrings-cuffs': '/categories/thumb_earrings_cuffs.jpg',
+  'earring-cuffs': '/categories/thumb_earrings_cuffs.jpg',
+  mangalsutra: '/categories/thumb_mangalsutra.jpg',
+  rings: '/categories/thumb_rings.jpg',
+  'devotional-rings': '/categories/thumb_devotional.jpg',
+  'devotional-jewellery': '/categories/thumb_devotional.jpg',
+  'kangan-kada-bracelet': '/categories/thumb_kada_bangles.jpg',
+  'kangan-kada-and-bracelet': '/categories/thumb_kada_bangles.jpg',
+  'kada-bangles': '/categories/thumb_kada_bangles.jpg',
+  watches: '/categories/thumb_watches.jpg',
+  'oxidised-jewellery': '/categories/thumb_oxidised.jpg',
+  choker: '/categories/thumb_choker.jpg',
+  'choker-sets': '/categories/thumb_choker.jpg',
+  'chocker-set': '/categories/thumb_choker.jpg'
 };
 
 export function resolveCategoryCoverImage(catId?: string, slug?: string, rawImg?: string): string {
   const trimmed = typeof rawImg === 'string' ? rawImg.trim() : '';
   if (trimmed && isGenuineImageUrl(trimmed)) return trimmed;
-  return CATEGORY_IMAGE_FALLBACKS[catId || ''] || CATEGORY_IMAGE_FALLBACKS[slug || ''] || '/categories/necklaces_category.jpg';
+  return CATEGORY_IMAGE_FALLBACKS[catId || ''] || CATEGORY_IMAGE_FALLBACKS[slug || ''] || '/categories/thumb_necklaces.jpg';
 }
 
 export const INITIAL_CATEGORIES: Category[] = (categoriesJson as unknown as Category[]).map((cat) => {

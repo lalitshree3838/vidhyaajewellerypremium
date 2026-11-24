@@ -194,142 +194,130 @@ export const HomeView: React.FC<HomeViewProps> = ({
         </div>
       </section>
 
-      {/* 2. Jewellery Category Section - 7 Circular Category Cards */}
+      {/* 2. Jewellery Category Section - 9 Large Circular Category Thumbnails (5+4 Desktop, 2-Col Centered Mobile) */}
       <div id="shop-by-category" />
-      <section id="categories-section" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
-        <div className="text-center max-w-2xl mx-auto mb-8 sm:mb-10">
+      <section id="categories-section" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
+        <div className="text-center max-w-2xl mx-auto mb-10 sm:mb-12">
           <span className="text-xs font-bold tracking-[0.25em] text-[#0F4C4A] uppercase">
             Curated For You
           </span>
-          <h2 className="font-serif text-3xl sm:text-4xl font-bold text-[#241C1A] mt-1">
+          <h2 className="font-serif text-3xl sm:text-4xl font-bold text-[#241C1A] mt-1.5 text-balance">
             Shop by Category
           </h2>
-          <div className="w-16 h-0.5 bg-[#DFB982] mx-auto mt-3"></div>
+          <div className="w-16 h-0.5 bg-[#DFB982] mx-auto mt-3.5" />
         </div>
 
         {(() => {
           const storefrontCategories = [
+            // First Row (5 categories on desktop)
             {
-              name: 'Necklaces',
+              name: 'Necklace Sets',
               slug: 'necklaces',
-              image: '/categories/necklaces_category.jpg',
-              subtitle: 'Heritage Chokers & Sets'
+              image: '/categories/thumb_necklaces.jpg'
+            },
+            {
+              name: 'Earrings / Cuffs',
+              slug: 'earrings-cuffs',
+              image: '/categories/thumb_earrings_cuffs.jpg'
             },
             {
               name: 'Kada & Bangles',
               slug: 'kada-bangles',
-              image: '/categories/kada_bangles_category.jpg',
-              subtitle: 'Openable Kadas & Bangles'
+              image: '/categories/thumb_kada_bangles.jpg'
             },
             {
               name: 'Rings',
               slug: 'rings',
-              image: '/categories/rings_category.jpg',
-              subtitle: 'Solitaire & Cocktail Rings'
+              image: '/categories/thumb_rings.jpg'
             },
             {
               name: 'Mangalsutra',
               slug: 'mangalsutra',
-              image: '/categories/mangalsutra_category.jpg',
-              subtitle: 'Sunburst & Black Bead Sets'
+              image: '/categories/thumb_mangalsutra.jpg'
             },
+            // Second Row (4 centered categories on desktop)
             {
               name: 'Devotional Jewellery',
               slug: 'devotional-jewellery',
-              image: '/categories/devotional_category.jpg',
-              subtitle: 'Ganesha Temple Heirlooms'
+              image: '/categories/thumb_devotional.jpg'
             },
             {
               name: 'Watches',
               slug: 'watches',
-              image: '/categories/watches_category.jpg',
-              subtitle: 'Luxury Royal Timepieces'
+              image: '/categories/thumb_watches.jpg'
             },
             {
               name: 'Oxidised Jewellery',
               slug: 'oxidised-jewellery',
-              image: '/categories/oxidised_jewellery_category.jpg',
-              subtitle: 'Antique Silver Heirlooms'
+              image: '/categories/thumb_oxidised.jpg'
+            },
+            {
+              name: 'Choker',
+              slug: 'choker',
+              image: '/categories/thumb_choker.jpg'
             }
           ];
 
           return (
-            <div>
-              {/* Desktop View: All 7 Categories in a Single Balanced Horizontal Row */}
-              <div className="hidden lg:grid lg:grid-cols-7 gap-4 xl:gap-6 max-w-6xl mx-auto items-start">
-                {storefrontCategories.map((cat) => (
-                  <button
-                    key={cat.slug}
-                    type="button"
-                    onClick={() => onNavigate('collections', cat.slug)}
-                    className="flex flex-col items-center group cursor-pointer text-center focus:outline-none transition-transform active:scale-95"
-                    title={`Explore ${cat.name}`}
-                  >
-                    <div className="w-28 h-28 xl:w-32 xl:h-32 rounded-full p-1.5 border-2 border-[#DFB982]/80 bg-gradient-to-b from-[#FFFDF9] via-[#FAF6F0] to-[#F5ECE0] shadow-sm group-hover:border-[#802336] group-hover:shadow-xl group-hover:scale-105 transition-all duration-300 flex items-center justify-center">
-                      <div className="w-full h-full rounded-full overflow-hidden bg-[#FAF7F2] relative aspect-square">
-                        {(() => {
-                          const catImgUrl = resolveSafeProductImageUrl(cat.image, mediaInventory);
-                          const effectiveCatImg =
-                            failedImageUrls.has(cat.image) || catImgUrl === JEWELLERY_PLACEHOLDER_IMAGE
-                              ? resolveCategoryCoverImage(cat.slug, cat.slug)
-                              : catImgUrl;
-                          return (
-                            <img
-                              src={failedImageUrls.has(effectiveCatImg) ? JEWELLERY_PLACEHOLDER_IMAGE : effectiveCatImg}
-                              alt={cat.name}
-                              className="w-full h-full object-cover object-center group-hover:scale-110 transition-transform duration-500 ease-out"
-                              loading="eager"
-                              referrerPolicy={effectiveCatImg.startsWith('http') ? 'no-referrer' : undefined}
-                              onError={() => handleImageError(effectiveCatImg)}
-                            />
-                          );
-                        })()}
-                      </div>
-                    </div>
-                    <span className="font-serif text-sm xl:text-[15px] font-semibold text-[#241C1A] group-hover:text-[#802336] transition-colors text-center leading-snug mt-3">
-                      {cat.name}
-                    </span>
-                  </button>
-                ))}
-              </div>
+            <div className="grid grid-cols-2 lg:grid-cols-10 gap-x-5 gap-y-8 sm:gap-x-8 sm:gap-y-10 lg:gap-x-4 lg:gap-y-12 xl:gap-x-6 xl:gap-y-14 max-w-7xl mx-auto items-start justify-items-center">
+              {storefrontCategories.map((cat, idx) => {
+                const catImgUrl = resolveSafeProductImageUrl(cat.image, mediaInventory);
+                const effectiveCatImg =
+                  failedImageUrls.has(cat.image) || catImgUrl === JEWELLERY_PLACEHOLDER_IMAGE
+                    ? resolveCategoryCoverImage(cat.slug, cat.slug)
+                    : catImgUrl;
+                const finalSrc = failedImageUrls.has(effectiveCatImg)
+                  ? JEWELLERY_PLACEHOLDER_IMAGE
+                  : effectiveCatImg;
 
-              {/* Mobile & Tablet View: Smooth Touch-Friendly Horizontal Scroll */}
-              <div className="flex lg:hidden overflow-x-auto gap-4 sm:gap-6 pb-4 pt-1 px-4 sm:px-6 scrollbar-none snap-x snap-mandatory touch-pan-x -mx-4 sm:-mx-6">
-                {storefrontCategories.map((cat) => (
+                // Desktop 5 + 4 balanced alignment: each item spans 2 of 10 tracks;
+                // item 6 (index 5) starts at track 2 so the 4 second-row items sit centered with equal left/right margins.
+                // Mobile 2-column layout: the 9th item spans both columns and centers horizontally.
+                const gridPlacementClass =
+                  idx === 5
+                    ? 'lg:col-start-2 lg:col-span-2'
+                    : idx === 8
+                      ? 'col-span-2 lg:col-span-2'
+                      : 'lg:col-span-2';
+
+                return (
                   <button
                     key={cat.slug}
                     type="button"
                     onClick={() => onNavigate('collections', cat.slug)}
-                    className="flex-shrink-0 w-24 sm:w-28 flex flex-col items-center snap-center group cursor-pointer text-center focus:outline-none transition-transform active:scale-95"
+                    aria-label={`Explore ${cat.name}`}
                     title={`Explore ${cat.name}`}
+                    className={`${gridPlacementClass} group flex flex-col items-center text-center cursor-pointer rounded-2xl p-1 w-full max-w-[180px] sm:max-w-[210px] lg:max-w-none focus:outline-none focus-visible:ring-2 focus-visible:ring-[#802336] focus-visible:ring-offset-4 focus-visible:ring-offset-[#FAF7F2] transition-transform duration-200 ease-out active:scale-[0.97]`}
                   >
-                    <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full p-1 sm:p-1.5 border-2 border-[#DFB982]/80 bg-gradient-to-b from-[#FFFDF9] via-[#FAF6F0] to-[#F5ECE0] shadow-sm group-hover:border-[#802336] group-hover:shadow-md transition-all duration-300 flex items-center justify-center">
-                      <div className="w-full h-full rounded-full overflow-hidden bg-[#FAF7F2] relative aspect-square">
-                        {(() => {
-                          const catImgUrl = resolveSafeProductImageUrl(cat.image, mediaInventory);
-                          const effectiveCatImg =
-                            failedImageUrls.has(cat.image) || catImgUrl === JEWELLERY_PLACEHOLDER_IMAGE
-                              ? resolveCategoryCoverImage(cat.slug, cat.slug)
-                              : catImgUrl;
-                          return (
-                            <img
-                              src={failedImageUrls.has(effectiveCatImg) ? JEWELLERY_PLACEHOLDER_IMAGE : effectiveCatImg}
-                              alt={cat.name}
-                              className="w-full h-full object-cover object-center group-hover:scale-110 transition-transform duration-500 ease-out"
-                              loading="eager"
-                              referrerPolicy={effectiveCatImg.startsWith('http') ? 'no-referrer' : undefined}
-                              onError={() => handleImageError(effectiveCatImg)}
-                            />
-                          );
-                        })()}
+                    {/* Large Circular Luxury Jewellery Medallion (identical dimensions across all 9 categories) */}
+                    <div className="w-36 h-36 sm:w-44 sm:h-44 lg:w-40 lg:h-40 xl:w-48 xl:h-48 rounded-full p-[6px] sm:p-2 bg-gradient-to-br from-[#F7E8CF] via-[#FFFDF9] to-[#DFB982]/75 ring-1 ring-[#DFB982]/90 shadow-[0_12px_30px_-14px_rgba(36,28,26,0.22)] transition-all duration-300 ease-out lg:group-hover:-translate-y-1 group-hover:ring-[#802336]/75 group-hover:shadow-[0_20px_40px_-16px_rgba(128,35,54,0.28)] flex items-center justify-center shrink-0">
+                      <div className="w-full h-full rounded-full overflow-hidden bg-[#F5EFE6] ring-1 ring-white/90 relative aspect-square">
+                        <img
+                          src={finalSrc}
+                          alt={cat.name}
+                          className="w-full h-full object-cover object-center transition-transform duration-500 ease-out group-hover:scale-[1.06]"
+                          loading="eager"
+                          referrerPolicy="no-referrer"
+                          onError={() => handleImageError(effectiveCatImg)}
+                        />
+                        <div
+                          aria-hidden="true"
+                          className="pointer-events-none absolute inset-0 rounded-full ring-1 ring-inset ring-black/[0.04] group-hover:ring-[#DFB982]/30 transition-colors duration-300"
+                        />
                       </div>
                     </div>
-                    <span className="font-serif text-xs sm:text-sm font-semibold text-[#241C1A] group-hover:text-[#802336] transition-colors text-center leading-tight mt-2.5">
+
+                    {/* Clear Category Name Below Circle */}
+                    <span className="font-serif text-[15px] sm:text-base lg:text-[17px] xl:text-[18px] font-semibold text-[#241C1A] group-hover:text-[#802336] transition-colors duration-200 leading-snug tracking-[0.01em] mt-3.5 sm:mt-4 px-1">
                       {cat.name}
                     </span>
+                    <span
+                      aria-hidden="true"
+                      className="block h-[1.5px] w-0 bg-[#DFB982] group-hover:w-10 transition-all duration-300 ease-out mt-1.5 rounded-full"
+                    />
                   </button>
-                ))}
-              </div>
+                );
+              })}
             </div>
           );
         })()}

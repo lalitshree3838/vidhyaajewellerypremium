@@ -94,8 +94,27 @@ export function filterProductsByNavSlug(products: Product[], slug: string): Prod
     if (f === 'mangalsutra') {
       return pCatId === 'mangalsutra' || text.includes('mangalsutra');
     }
-    if (f === 'earrings-cuffs' || f === 'earrings' || f === 'cuffs') {
-      return pCatId === 'earrings-cuffs' || text.includes('earring') || text.includes('jhumka') || text.includes('cuff');
+    if (f === 'earrings-cuffs' || f === 'earring-cuffs' || f === 'earrings' || f === 'cuffs') {
+      if (
+        pCatId === 'earring-cuffs' ||
+        pCatId === 'earrings-cuffs' ||
+        pCatId === 'earrings' ||
+        pCatId === 'earring' ||
+        pCatId === 'cuffs' ||
+        pCatId === 'cuff' ||
+        pCatId === 'ear-cuffs'
+      ) {
+        return true;
+      }
+      const nameSub = `${p.name} ${p.subcategory || ''}`.toLowerCase();
+      const isNeckOrMangalsutra =
+        pCatId === 'necklaces' ||
+        pCatId === 'mangalsutra' ||
+        /\b(necklace|choker|mangalsutra|haar|pendant set|bridal set)\b/.test(nameSub);
+      if (isNeckOrMangalsutra) {
+        return false;
+      }
+      return /\b(earring|earrings|earing|earings|jhumka|jhumkas|jhoomki|chandbali|stud|studs|ear\s*cuff|ear\s*cuffs|cuff|cuffs)\b/.test(nameSub);
     }
     if (
       f === 'kada-bangles' ||
@@ -368,11 +387,18 @@ export function getNavHeadingInfo(slug: string): { title: string; subtitle: stri
     return CURATED_HEADINGS[f];
   }
 
-  // Explicit handling for the 7 primary storefront categories
+  // Explicit handling for the 9 primary storefront categories
   if (f === 'necklaces' || f === 'necklace') {
     return {
-      title: 'Necklaces',
-      subtitle: 'Handcrafted 22K micro gold plated choker sets, rani haar, and royal bridal necklaces.',
+      title: 'Necklace Sets',
+      subtitle: 'Handcrafted 22K micro gold plated choker sets, rani haar, and royal bridal necklace sets.',
+      isCategory: true,
+    };
+  }
+  if (f === 'earrings-cuffs' || f === 'earring-cuffs' || f === 'earrings' || f === 'cuffs') {
+    return {
+      title: 'Earrings / Cuffs',
+      subtitle: 'Handcrafted royal jhumkas, floral diamond earrings, statement drops, and sculpted ear cuffs.',
       isCategory: true,
     };
   }
@@ -415,6 +441,13 @@ export function getNavHeadingInfo(slug: string): { title: string; subtitle: stri
     return {
       title: 'Oxidised Jewellery',
       subtitle: 'Handcrafted antique oxidised silver necklaces, traditional jhumkas, and ethnic jewellery.',
+      isCategory: true,
+    };
+  }
+  if (f === 'choker' || f === 'chokers' || f === 'choker-set' || f === 'chocker-set') {
+    return {
+      title: 'Choker',
+      subtitle: 'Handcrafted royal bridal chokers, kundan collars, and pearl-draped choker sets.',
       isCategory: true,
     };
   }
