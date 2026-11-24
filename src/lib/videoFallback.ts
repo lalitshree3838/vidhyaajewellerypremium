@@ -181,10 +181,10 @@ export function normalizeVideoUrl(url?: string | null): string {
   let cleaned = url.trim();
   if (!cleaned) return '';
 
-  // Normalize same-domain production video URLs to canonical relative /videos/uploads/...
+  // Preserve canonical HTTPS Hostinger production video URLs without stripping the domain
   const prodMatch = cleaned.match(PRODUCTION_VIDEO_HOST_RE);
   if (prodMatch && prodMatch[1]) {
-    cleaned = prodMatch[1];
+    return `https://vidhyaajewellerystudio.com${prodMatch[1]}`;
   }
 
   // Normalize localhost/127.0.0.1 paths strictly for local /videos/uploads/ assets
@@ -616,18 +616,38 @@ export function getProductVideoCandidates(product?: Partial<Product> | null): st
     product.videoUrl || (product as any).video || (product as any).videoURL || '';
   const candidates: string[] = [];
 
+  const pushUnique = (u: string) => {
+    if (u && !candidates.includes(u)) {
+      candidates.push(u);
+    }
+  };
+
   if (rawInput && typeof rawInput === 'string' && rawInput.trim()) {
     const check = validateDirectPlayableVideoUrl(rawInput);
     if (check.valid && check.normalizedUrl) {
-      candidates.push(check.normalizedUrl);
+      pushUnique(check.normalizedUrl);
+      // If this is a canonical Hostinger production URL, also allow same-origin relative path fallback on production hosts
+      const prodMatch = check.normalizedUrl.match(PRODUCTION_VIDEO_HOST_RE);
+      if (prodMatch && prodMatch[1]) {
+        if (!isPreviewEnvironmentHost()) {
+          pushUnique(prodMatch[1]);
+        }
+      } else if (check.normalizedUrl.startsWith('/videos/uploads/')) {
+        // If this is a relative /videos/uploads/ path, also allow canonical Hostinger HTTPS URL fallback
+        // (essential when viewing Homepage Shopping Videos from Preview or www. host)
+        pushUnique(`https://vidhyaajewellerystudio.com${check.normalizedUrl}`);
+      }
     }
   }
 
   const fallback = getCatalogFallbackVideoUrl(product, candidates[0]);
   if (fallback && !candidates.includes(fallback)) {
     const fbCheck = validateDirectPlayableVideoUrl(fallback);
-    if (fbCheck.valid && fbCheck.normalizedUrl && !candidates.includes(fbCheck.normalizedUrl)) {
-      candidates.push(fbCheck.normalizedUrl);
+    if (fbCheck.valid && fbCheck.normalizedUrl) {
+      pushUnique(fbCheck.normalizedUrl);
+      if (fbCheck.normalizedUrl.startsWith('/videos/uploads/')) {
+        pushUnique(`https://vidhyaajewellerystudio.com${fbCheck.normalizedUrl}`);
+      }
     }
   }
   return candidates;
@@ -650,10 +670,15 @@ export function invalidateVideoInventoryCache(): void {
 
 export function registerAvailableVideoUrl(url?: string | null): void {
   const normalized = normalizeVideoUrl(url);
-  if (!normalized || !normalized.startsWith('/videos/uploads/')) return;
+  if (!normalized) return;
+  const prodMatch = normalized.match(PRODUCTION_VIDEO_HOST_RE);
+  const relPath = prodMatch && prodMatch[1] ? prodMatch[1] : normalized;
+  if (!relPath.startsWith('/videos/uploads/')) return;
   sessionUploadedVideos.add(normalized);
+  sessionUploadedVideos.add(relPath);
   if (cachedInventory && cachedInventory.supported) {
     cachedInventory.availableSet.add(normalized);
+    cachedInventory.availableSet.add(relPath);
   }
 }
 
@@ -769,6 +794,8 @@ export function resolveCandidatesWithInventory(
   }
 
   const playable = normalizedCandidates.filter((url) => {
+    // Canonical HTTPS Hostinger production URLs are always valid remote/live streams
+    if (PRODUCTION_VIDEO_HOST_RE.test(url)) return true;
     if (!url.startsWith('/videos/uploads/')) return true;
     return inventory.availableSet.has(url) || sessionUploadedVideos.has(url);
   });

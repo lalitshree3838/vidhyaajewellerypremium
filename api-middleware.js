@@ -52,6 +52,14 @@ import {
   clearAdminSessionCookie,
   verifyCsrfOriginForCookieRequest
 } from './src/server/sessionAuth.js';
+import {
+  getProductionGatewayStatus,
+  forwardImageUploadToProduction,
+  forwardVideoChunkToProduction,
+  forwardProductSaveToProduction,
+  fetchProductionProductById,
+  verifyLiveProductionMediaUrl
+} from './src/server/productionGateway.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -913,6 +921,268 @@ export function handleApiMiddleware(req, res, next) {
       // 2. Auth status check
       if (pathname === '/api/auth/status' && req.method === 'GET') {
         return sendJson(res, 200, { ready: true });
+      }
+
+      // 2a. Production Upload Gateway Routes (Preview Server -> Hostinger Production)
+      // Strictly requires a cryptographically verified Preview Admin session before signing or forwarding.
+      // Note: AI Studio's Nginx proxy intercepts upstream 403/502/503/504 with `error_page ... = /warmup.html`
+      // (rewriting JSON errors to HTTP 200 HTML). Mapping intercepted codes to 422/500 preserves pure JSON.
+      const sendProductionGatewayJson = (statusCode, bodyObj) => {
+        const numericStatus = Number(statusCode) || 500;
+        let transportStatus = numericStatus;
+        if (numericStatus === 403 || numericStatus === 503) {
+          transportStatus = 422;
+        } else if (numericStatus === 502 || numericStatus === 504) {
+          transportStatus = 500;
+        }
+        const payload =
+          bodyObj && typeof bodyObj === 'object'
+            ? {
+                ...bodyObj,
+                httpStatus: bodyObj.httpStatus ?? numericStatus,
+                message: bodyObj.message ?? bodyObj.error ?? (bodyObj.success ? 'OK' : 'Gateway request failed.')
+              }
+            : bodyObj;
+        return sendJson(res, transportStatus, payload, req, {
+          'X-Vidhyaa-Gateway-Status': String(numericStatus)
+        });
+      };
+
+      if (pathname === '/api/production/gateway-status' && req.method === 'GET') {
+        const admin = await authenticateAdminRequest(req);
+        if (!admin) {
+          return sendProductionGatewayJson(401, {
+            success: false,
+            code: 'ADMIN_UNAUTHORIZED',
+            error: 'Unauthorized: Verified Administrator session required to check Production Gateway status.'
+          });
+        }
+        const checkLive = parsedUrl.searchParams.get('checkLive') !== '0';
+        const status = await getProductionGatewayStatus(checkLive);
+        return sendProductionGatewayJson(200, { success: true, ...status });
+      }
+
+      if (pathname === '/api/production/media/upload' && req.method === 'POST') {
+        const admin = await authenticateAdminRequest(req);
+        if (!admin) {
+          return sendProductionGatewayJson(401, {
+            success: false,
+            code: 'ADMIN_UNAUTHORIZED',
+            error: 'Unauthorized: Verified Administrator session required for Hostinger Production image upload.'
+          });
+        }
+        const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+        if (!csrfCheck.ok) {
+          return sendProductionGatewayJson(403, {
+            success: false,
+            code: 'CSRF_ORIGIN_BLOCKED',
+            error: csrfCheck.error
+          });
+        }
+
+        const contentType = String(req.headers['content-type'] || '');
+        let rawBuf;
+        try {
+          rawBuf = await readRawBody(req, MAX_IMAGE_UPLOAD_BYTES + 256 * 1024);
+        } catch (err) {
+          return sendProductionGatewayJson(err?.statusCode || 413, {
+            success: false,
+            code: 'IMAGE_TOO_LARGE',
+            error: 'Image exceeds the 10 MB maximum upload limit.'
+          });
+        }
+
+        let imageBuffer = rawBuf;
+        let fileName = '';
+        if (/multipart\/form-data/i.test(contentType)) {
+          const parsedFiles = parseMultipartFiles(rawBuf, contentType);
+          if (!parsedFiles.length) {
+            return sendProductionGatewayJson(400, {
+              success: false,
+              code: 'MISSING_IMAGE_FILE',
+              error: 'No image file found in upload payload.'
+            });
+          }
+          imageBuffer = parsedFiles[0].data;
+          fileName = parsedFiles[0].fileName || 'jewellery.jpg';
+        } else {
+          const hdrName = String(req.headers['x-file-name'] || '').trim();
+          try {
+            fileName = hdrName ? decodeURIComponent(hdrName) : 'jewellery.jpg';
+          } catch {
+            fileName = hdrName || 'jewellery.jpg';
+          }
+        }
+
+        const gwResult = await forwardImageUploadToProduction({
+          buffer: imageBuffer,
+          fileName,
+          actor: admin.email
+        });
+        return sendProductionGatewayJson(gwResult.status, gwResult.body);
+      }
+
+      if (pathname === '/api/production/videos/upload' && req.method === 'POST') {
+        const uploadId = parsedUrl.searchParams.get('uploadId') || '';
+        const chunkIndexRaw = parsedUrl.searchParams.get('chunkIndex');
+        const totalChunksRaw = parsedUrl.searchParams.get('totalChunks');
+        const safeChunkIdx = Number.isInteger(Number(chunkIndexRaw)) ? Number(chunkIndexRaw) : 0;
+        const safeTotalChunks = Number.isInteger(Number(totalChunksRaw)) ? Number(totalChunksRaw) : 0;
+
+        const videoErr = (status, code, msg) =>
+          sendProductionGatewayJson(status, {
+            success: false,
+            uploadId,
+            chunkIndex: safeChunkIdx,
+            receivedChunk: safeChunkIdx,
+            totalChunks: safeTotalChunks,
+            completed: false,
+            videoUrl: null,
+            url: null,
+            code,
+            error: msg,
+            message: msg,
+            retryable: false
+          });
+
+        const admin = await authenticateAdminRequest(req);
+        if (!admin) {
+          return videoErr(
+            401,
+            'ADMIN_UNAUTHORIZED',
+            'Unauthorized: Verified Administrator session required for Hostinger Production video upload.'
+          );
+        }
+        const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+        if (!csrfCheck.ok) {
+          return videoErr(403, 'CSRF_ORIGIN_BLOCKED', csrfCheck.error || 'Origin verification failed.');
+        }
+
+        let fileName = parsedUrl.searchParams.get('fileName') || '';
+        if (!fileName) {
+          const hdrName = String(req.headers['x-file-name'] || '').trim();
+          try {
+            fileName = hdrName ? decodeURIComponent(hdrName) : 'vidhyaa_video.mp4';
+          } catch {
+            fileName = hdrName || 'vidhyaa_video.mp4';
+          }
+        }
+
+        let rawBuf;
+        try {
+          rawBuf = await readRawBody(req, MAX_VIDEO_CHUNK_BYTES + 256 * 1024);
+        } catch (err) {
+          return videoErr(
+            err?.statusCode || 413,
+            'CHUNK_TOO_LARGE',
+            'Video chunk exceeds maximum allowed chunk size.'
+          );
+        }
+
+        const contentType = String(req.headers['content-type'] || '');
+        let chunkBuffer = rawBuf;
+        if (/multipart\/form-data/i.test(contentType)) {
+          const parsedVid = parseMultipartVideo(rawBuf, contentType);
+          if (!parsedVid) {
+            return videoErr(400, 'MISSING_VIDEO_CHUNK', 'No video chunk found in multipart payload.');
+          }
+          chunkBuffer = parsedVid.data;
+          if (!fileName && parsedVid.fileName) fileName = parsedVid.fileName;
+        }
+
+        const gwResult = await forwardVideoChunkToProduction({
+          buffer: chunkBuffer,
+          uploadId,
+          chunkIndex: chunkIndexRaw,
+          totalChunks: totalChunksRaw,
+          fileName,
+          actor: admin.email
+        });
+        return sendProductionGatewayJson(gwResult.status, gwResult.body);
+      }
+
+      if ((pathname === '/api/production/products' || pathname.startsWith('/api/production/products/')) && (req.method === 'GET' || req.method === 'POST' || req.method === 'PUT')) {
+        const admin = await authenticateAdminRequest(req);
+        if (!admin) {
+          return sendProductionGatewayJson(401, {
+            success: false,
+            code: 'ADMIN_UNAUTHORIZED',
+            error: 'Unauthorized: Verified Administrator session required for Hostinger Production product catalog operations.'
+          });
+        }
+
+        if (req.method === 'GET') {
+          const idFromPath = pathname.startsWith('/api/production/products/')
+            ? decodeURIComponent(pathname.replace('/api/production/products/', ''))
+            : parsedUrl.searchParams.get('id') || '';
+          const readRes = await fetchProductionProductById(idFromPath);
+          return sendProductionGatewayJson(
+            readRes.status || (readRes.ok ? 200 : 502),
+            readRes.ok
+              ? { success: true, product: readRes.product, error: null, message: 'Product read-back verified.' }
+              : { success: false, error: readRes.error, message: readRes.error }
+          );
+        }
+
+        const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+        if (!csrfCheck.ok) {
+          return sendProductionGatewayJson(403, {
+            success: false,
+            code: 'CSRF_ORIGIN_BLOCKED',
+            error: csrfCheck.error
+          });
+        }
+
+        const body = await parseBody(req, PRODUCT_JSON_BODY_LIMIT_BYTES);
+        if (body?.__tooLarge) {
+          return sendProductionGatewayJson(413, {
+            success: false,
+            code: 'PAYLOAD_TOO_LARGE',
+            error: 'Product payload exceeds maximum allowed size.'
+          });
+        }
+        const productPayload = body?.product && typeof body.product === 'object' ? body.product : body;
+        if (!productPayload || typeof productPayload !== 'object' || !productPayload.id) {
+          return sendProductionGatewayJson(400, {
+            success: false,
+            code: 'INVALID_PRODUCT_PAYLOAD',
+            error: 'Invalid product payload (missing id).'
+          });
+        }
+
+        const gwResult = await forwardProductSaveToProduction({
+          product: productPayload,
+          actor: admin.email
+        });
+        return sendProductionGatewayJson(gwResult.status, gwResult.body);
+      }
+
+      if (pathname === '/api/production/verify-media' && req.method === 'POST') {
+        const admin = await authenticateAdminRequest(req);
+        if (!admin) {
+          return sendProductionGatewayJson(401, {
+            success: false,
+            code: 'ADMIN_UNAUTHORIZED',
+            error: 'Unauthorized: Verified Administrator session required.'
+          });
+        }
+        const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+        if (!csrfCheck.ok) {
+          return sendProductionGatewayJson(403, {
+            success: false,
+            code: 'CSRF_ORIGIN_BLOCKED',
+            error: csrfCheck.error
+          });
+        }
+        const body = await parseBody(req);
+        const url = String(body?.url || '').trim();
+        const kind = body?.kind === 'video' ? 'video' : 'image';
+        const expectedSizeBytes = Number(body?.expectedSizeBytes || 0);
+        const verifyRes = await verifyLiveProductionMediaUrl(url, kind, expectedSizeBytes);
+        return sendProductionGatewayJson(verifyRes.ok ? 200 : 502, {
+          success: verifyRes.ok,
+          ...verifyRes
+        });
       }
 
       // 2b. Admin Auth Capabilities & First-Run Setup Status

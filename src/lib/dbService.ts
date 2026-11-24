@@ -257,10 +257,12 @@ export function __normVidUrl(u?: string): string {
   if (!u || typeof u !== 'string') return '';
   let s = u.trim();
   if (!s) return '';
-  s = s.replace(
-    /^https?:\/\/(?:www\.)?vidhyaajewellerystudio\.com(\/videos\/uploads\/[^\s?#]+(?:\?[^\s#]*)?)$/i,
-    '$1'
+  const prodMatch = s.match(
+    /^https?:\/\/(?:www\.)?vidhyaajewellerystudio\.com(\/videos\/uploads\/[^\s?#]+(?:\?[^\s#]*)?)$/i
   );
+  if (prodMatch && prodMatch[1]) {
+    return `https://vidhyaajewellerystudio.com${prodMatch[1]}`;
+  }
   if (/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\/videos\/uploads\//i.test(s)) {
     s = s.replace(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?(\/.*)$/i, '$1');
   }
@@ -1228,7 +1230,18 @@ export async function saveProduct(product: Product): Promise<Product> {
   }
   unmarkProductDeleted(sanitized.id);
 
-  // 1. Persist authoritatively to server REST API /api/products (via HttpOnly admin cookie)
+  // 1. Persist authoritatively to Hostinger Production
+  //    - On Google AI Studio Preview: strictly via /api/production/products (HMAC gateway + Hostinger read-back)
+  //    - On Live Hostinger domain: directly via /api/products
+  //    Never silently fall back to local Preview products.json if Hostinger save fails.
+  const isPreviewHost =
+    typeof window !== 'undefined' &&
+    (/^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/i.test(window.location.hostname || '') ||
+      /(?:^|\.)(?:ais-dev-[a-z0-9-]+\.run\.app|ais-pre-[a-z0-9-]+\.run\.app|run\.app|webcontainer\.io|stackblitz\.io|csb\.app)$/i.test(
+        window.location.hostname || ''
+      ));
+  const productSaveEndpoint = isPreviewHost ? '/api/production/products' : '/api/products';
+
   let serverSuccess = false;
   let serverAuthError: string | null = null;
   let serverError: string | null = null;
@@ -1236,7 +1249,7 @@ export async function saveProduct(product: Product): Promise<Product> {
 
   try {
     if (typeof fetch !== 'undefined') {
-      const resp = await fetch('/api/products', {
+      const resp = await fetch(productSaveEndpoint, {
         method: 'POST',
         credentials: 'include',
         headers: getAdminAuthHeaders({
@@ -1245,32 +1258,54 @@ export async function saveProduct(product: Product): Promise<Product> {
         body: JSON.stringify({ product: sanitized })
       });
 
-      const rawText = await resp.text();
+      const rawText = (await resp.text()).trim();
+      const isHtml =
+        rawText.startsWith('<!') ||
+        rawText.startsWith('<html') ||
+        rawText.startsWith('<HTML') ||
+        rawText.startsWith('<');
       let data: any = null;
-      try {
-        data = rawText ? JSON.parse(rawText) : null;
-      } catch {
-        data = null;
+      if (!isHtml) {
+        try {
+          data = rawText ? JSON.parse(rawText) : null;
+        } catch {
+          data = null;
+        }
       }
 
-      if (resp.status === 401 || resp.status === 403) {
+      const effectiveStatus =
+        typeof data?.httpStatus === 'number' && data.httpStatus >= 100
+          ? data.httpStatus
+          : resp.status;
+
+      if (isHtml) {
+        serverError = `Production Product Gateway returned HTML instead of JSON (HTTP ${resp.status}). Ensure the Preview dev server is running and VIDHYAA_PROD_UPLOAD_SECRET is configured.`;
+      } else if (effectiveStatus === 401 || effectiveStatus === 403) {
         serverAuthError = data?.error || 'Administrator session expired or unauthorized. Please sign in again.';
-      } else if (resp.ok) {
-        serverSuccess = true;
-        if (data?.product && typeof data.product === 'object') {
-          finalSavedProduct = sanitizeProductForFirestore(__mergeProductMedia(data.product as Product, sanitized));
+      } else if (effectiveStatus === 503 || data?.code === 'GATEWAY_NOT_CONFIGURED') {
+        serverError =
+          data?.error ||
+          'Hostinger Production Gateway is not configured on this Preview server. Set VIDHYAA_PROD_UPLOAD_SECRET in AI Studio Secrets and Hostinger outside public_html.';
+      } else if (resp.ok && data?.success) {
+        if (isPreviewHost && !data?.verifiedReadBack) {
+          serverError = 'Hostinger Production save did not return read-back verification.';
+        } else {
+          serverSuccess = true;
+          if (data?.product && typeof data.product === 'object') {
+            finalSavedProduct = sanitizeProductForFirestore(__mergeProductMedia(data.product as Product, sanitized));
+          }
+          console.log(`[Hostinger Production] Product "${finalSavedProduct.name}" (${finalSavedProduct.id}) saved and read-back verified.`);
         }
-        console.log(`[Server] Product "${finalSavedProduct.name}" (${finalSavedProduct.id}) saved to server store.`);
       } else {
-        serverError = data?.error || `Server rejected product save (HTTP ${resp.status}).`;
+        serverError = data?.error || `Hostinger Production rejected product save (HTTP ${effectiveStatus}).`;
       }
     }
   } catch (serverErr: any) {
-    serverError = serverErr?.message || 'Unable to reach product catalog server.';
+    serverError = serverErr?.message || 'Unable to reach Hostinger Production product catalog API.';
     console.warn('[Server] Notice saving product to server endpoint:', serverErr);
   }
 
-  // Never allow a rejected server write (401/403/4xx/5xx) to be masked as success
+  // Never allow a rejected server write (401/403/503/4xx/5xx) to be masked as success
   if (serverAuthError) {
     throw new Error(serverAuthError);
   }

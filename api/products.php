@@ -1,8 +1,11 @@
 <?php
 // VIDHYAA Jewellery Studio - Persistent Product Catalog API (Hostinger Production)
-require_once __DIR__ . '/admin/_auth.php';
+require_once __DIR__ . '/admin/_gateway_auth.php';
 
-vdhApplyCorsHeaders('GET, POST, PUT, DELETE, OPTIONS', 'Content-Type, Authorization, x-admin-token');
+vdhApplyCorsHeaders(
+    'GET, POST, PUT, DELETE, OPTIONS',
+    'Content-Type, Authorization, x-admin-token, X-Vidhyaa-Gateway-Auth'
+);
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 header('Expires: 0');
@@ -44,7 +47,7 @@ function writeProductsCatalog($products, $dataFile, $apiFile) {
     return $okData || $okApi;
 }
 
-function isPreviewOnlyVideoUrl($url) {
+function isPreviewOnlyMediaUrl($url) {
     if (!is_string($url)) return false;
     $trimmed = trim($url);
     if (!preg_match('#^https?://#i', $trimmed)) return false;
@@ -54,17 +57,111 @@ function isPreviewOnlyVideoUrl($url) {
     return (bool)preg_match('/(?:^|\.)(?:ais-dev-[a-z0-9-]+\.run\.app|ais-pre-[a-z0-9-]+\.run\.app|run\.app|webcontainer\.io|stackblitz\.io|csb\.app)$/i', $host);
 }
 
+/**
+ * Preserves canonical https://vidhyaajewellerystudio.com/videos/uploads/... URLs AND
+ * existing relative /videos/uploads/... URLs without rewriting untouched legacy values.
+ */
 function normalizeVideoUrl($url) {
     if (!is_string($url)) return null;
     $trimmed = trim($url);
     if ($trimmed === '') return null;
     if (preg_match('#^https?://(?:www\.)?vidhyaajewellerystudio\.com(/videos/uploads/[^\s?\#]+(?:\?[^\s\#]*)?)$#i', $trimmed, $m)) {
-        $trimmed = $m[1];
+        return 'https://vidhyaajewellerystudio.com' . $m[1];
     }
     if (preg_match('#^(videos/uploads/.*)$#i', $trimmed)) {
-        $trimmed = '/' . $trimmed;
+        return '/' . $trimmed;
     }
     return $trimmed;
+}
+
+/**
+ * Collects all image strings already present on an existing product record so legacy Base64
+ * and existing relative URLs remain 100% untouched during delta-only validation.
+ */
+function collectProductImageSet(?array $prod): array {
+    $set = [];
+    if (!is_array($prod)) return $set;
+    if (isset($prod['images']) && is_array($prod['images'])) {
+        foreach ($prod['images'] as $img) {
+            if (is_string($img) && trim($img) !== '') {
+                $set[trim($img)] = true;
+            }
+        }
+    }
+    if (isset($prod['variations']) && is_array($prod['variations'])) {
+        foreach ($prod['variations'] as $v) {
+            if (!is_array($v)) continue;
+            if (is_string($v['image'] ?? null) && trim($v['image']) !== '') {
+                $set[trim($v['image'])] = true;
+            }
+            if (isset($v['additionalImages']) && is_array($v['additionalImages'])) {
+                foreach ($v['additionalImages'] as $ai) {
+                    if (is_string($ai) && trim($ai) !== '') {
+                        $set[trim($ai)] = true;
+                    }
+                }
+            }
+        }
+    }
+    return $set;
+}
+
+/**
+ * Delta-only validation: preserves untouched legacy Base64 & existing URLs verbatim,
+ * while blocking newly introduced Preview/localhost URLs or newly introduced Base64 strings.
+ */
+function validateIncomingProductMediaDelta(array $incoming, ?array $existing): ?string {
+    $existingImages = collectProductImageSet($existing);
+
+    $candidateImages = [];
+    if (isset($incoming['images']) && is_array($incoming['images'])) {
+        foreach ($incoming['images'] as $img) {
+            if (is_string($img) && trim($img) !== '') {
+                $candidateImages[] = trim($img);
+            }
+        }
+    }
+    if (isset($incoming['variations']) && is_array($incoming['variations'])) {
+        foreach ($incoming['variations'] as $v) {
+            if (!is_array($v)) continue;
+            if (is_string($v['image'] ?? null) && trim($v['image']) !== '') {
+                $candidateImages[] = trim($v['image']);
+            }
+            if (isset($v['additionalImages']) && is_array($v['additionalImages'])) {
+                foreach ($v['additionalImages'] as $ai) {
+                    if (is_string($ai) && trim($ai) !== '') {
+                        $candidateImages[] = trim($ai);
+                    }
+                }
+            }
+        }
+    }
+
+    foreach ($candidateImages as $imgUrl) {
+        // Untouched legacy value already stored on this product — preserve without modification
+        if (isset($existingImages[$imgUrl])) {
+            continue;
+        }
+        if (isPreviewOnlyMediaUrl($imgUrl)) {
+            return 'Preview or localhost image URLs cannot be saved as production product images.';
+        }
+        if (str_starts_with(strtolower($imgUrl), 'data:image/')) {
+            return 'New product images cannot be saved as inline Base64 data. Upload images to Hostinger production storage first.';
+        }
+        if (str_starts_with(strtolower($imgUrl), 'blob:')) {
+            return 'Temporary browser blob image URLs cannot be saved as production product images.';
+        }
+    }
+
+    $rawVid = $incoming['videoUrl'] ?? ($incoming['video'] ?? ($incoming['videoURL'] ?? null));
+    if (is_string($rawVid) && trim($rawVid) !== '') {
+        $existingVid = is_array($existing) ? trim((string)($existing['videoUrl'] ?? '')) : '';
+        if (trim($rawVid) !== $existingVid && isPreviewOnlyMediaUrl($rawVid)) {
+            return 'Preview or localhost video URLs cannot be saved as production video URLs.';
+        }
+    }
+
+    return null;
 }
 
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -87,10 +184,10 @@ if ($method === 'GET') {
 }
 
 if ($method === 'POST' || $method === 'PUT') {
-    vdhRequireAdmin();
+    $rawInput = (string)(file_get_contents('php://input') ?: '');
+    $adminActor = vdhRequireAdminOrProductionGateway('products:write', $rawInput, '/api/products.php');
 
-    $rawInput = file_get_contents('php://input');
-    $payload = json_decode((string)$rawInput, true);
+    $payload = json_decode($rawInput, true);
     if (!is_array($payload)) {
         vdhSendJson(400, ['success' => false, 'error' => 'Invalid JSON product payload.']);
     }
@@ -101,7 +198,7 @@ if ($method === 'POST' || $method === 'PUT') {
     }
 
     $rawVidInput = $incoming['videoUrl'] ?? ($incoming['video'] ?? ($incoming['videoURL'] ?? null));
-    if (is_string($rawVidInput) && trim($rawVidInput) !== '' && isPreviewOnlyVideoUrl($rawVidInput)) {
+    if (is_string($rawVidInput) && trim($rawVidInput) !== '' && isPreviewOnlyMediaUrl($rawVidInput)) {
         vdhSendJson(400, [
             'success' => false,
             'error' => 'Preview or localhost video URLs cannot be saved as production video URLs.'
@@ -120,46 +217,81 @@ if ($method === 'POST' || $method === 'PUT') {
         $incoming['showInShoppingVideos'] = false;
     }
 
-    $saved = vdhWithFileLock('products', function () use ($dataProductsFile, $apiProductsFile, $incoming, $vid, $videoCleared) {
+    $saveResult = vdhWithFileLock('products', function () use ($dataProductsFile, $apiProductsFile, $incoming, $vid, $videoCleared) {
         $now = gmdate('Y-m-d\TH:i:s.000\Z');
         $products = readProductsCatalog($dataProductsFile, $apiProductsFile);
-        $found = false;
+        $existingMatch = null;
+        $existingIdx = null;
         foreach ($products as $idx => $existing) {
             if (($existing['id'] ?? '') === $incoming['id']) {
-                $merged = array_merge($existing, $incoming);
-                $merged['updatedAt'] = $now;
-                if ($videoCleared) {
-                    unset($merged['videoUrl'], $merged['video'], $merged['videoURL'], $merged['_videoCleared']);
-                } elseif ($vid === null && !array_key_exists('videoUrl', $incoming) && !empty($existing['videoUrl'])) {
-                    $merged['videoUrl'] = $existing['videoUrl'];
-                }
-                $products[$idx] = $merged;
-                $incoming = $merged;
-                $found = true;
+                $existingMatch = $existing;
+                $existingIdx = $idx;
                 break;
             }
         }
 
-        if (!$found) {
+        // Delta-only validation preserves all untouched legacy Base64 & existing URLs verbatim
+        $deltaError = validateIncomingProductMediaDelta($incoming, $existingMatch);
+        if ($deltaError !== null) {
+            return ['status' => 400, 'error' => $deltaError];
+        }
+
+        if ($existingMatch !== null && $existingIdx !== null) {
+            $merged = array_merge($existingMatch, $incoming);
+            $merged['id'] = $existingMatch['id'];
+            $merged['updatedAt'] = $now;
+            if ($videoCleared) {
+                unset($merged['videoUrl'], $merged['video'], $merged['videoURL'], $merged['_videoCleared']);
+            } elseif ($vid === null && !array_key_exists('videoUrl', $incoming) && !empty($existingMatch['videoUrl'])) {
+                $merged['videoUrl'] = $existingMatch['videoUrl'];
+            }
+            $products[$existingIdx] = $merged;
+            $savedTarget = $merged;
+        } else {
             if (empty($incoming['createdAt'])) $incoming['createdAt'] = $now;
-            if (empty($incoming['updatedAt'])) $incoming['updatedAt'] = $now;
+            $incoming['updatedAt'] = $now;
             array_unshift($products, $incoming);
+            $savedTarget = $incoming;
         }
 
         if (!writeProductsCatalog($products, $dataProductsFile, $apiProductsFile)) {
-            return null;
+            return ['status' => 500, 'error' => 'Failed to persist product catalog on Hostinger server.'];
         }
-        return $incoming;
+
+        // Read-back verification from disk before declaring success
+        $reloaded = readProductsCatalog($dataProductsFile, $apiProductsFile);
+        $verifiedRecord = null;
+        foreach ($reloaded as $item) {
+            if (($item['id'] ?? '') === $savedTarget['id']) {
+                $verifiedRecord = $item;
+                break;
+            }
+        }
+        if ($verifiedRecord === null || ($verifiedRecord['updatedAt'] ?? '') !== $savedTarget['updatedAt']) {
+            return ['status' => 500, 'error' => 'Product save failed post-write read-back verification on Hostinger.'];
+        }
+
+        return ['status' => 200, 'product' => $verifiedRecord];
     });
 
-    if ($saved === null) {
-        vdhSendJson(500, ['success' => false, 'error' => 'Failed to persist product catalog on server.']);
+    if (($saveResult['status'] ?? 500) !== 200) {
+        vdhSendJson((int)($saveResult['status'] ?? 500), [
+            'success' => false,
+            'error' => (string)($saveResult['error'] ?? 'Failed to persist product catalog on server.')
+        ]);
     }
 
-    vdhSendJson(200, ['success' => true, 'product' => $saved]);
+    vdhSendJson(200, [
+        'success' => true,
+        'product' => $saveResult['product'],
+        'verifiedReadBack' => true,
+        'storageTarget' => 'hostinger-production',
+        'authMethod' => $adminActor['authMethod'] ?? 'session',
+    ]);
 }
 
 if ($method === 'DELETE') {
+    // DELETE remains strictly on existing Admin session auth — Production Upload Gateway cannot delete products.
     vdhRequireAdmin();
 
     $idParam = trim($_GET['id'] ?? '');

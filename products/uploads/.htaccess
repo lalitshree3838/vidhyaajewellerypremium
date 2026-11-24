@@ -1,0 +1,20 @@
+# VIDHYAA Jewellery Studio - Hostinger LiteSpeed/LSAPI-Safe Upload Protection
+# Blocks script execution and directory listing in /products/uploads/
+# Intentionally avoids php_flag, php_value, SetHandler, and RemoveHandler for LiteSpeed compatibility.
+
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule \.(?:php|phtml|php\d+|phar|cgi|pl|py|sh|exe|jsp|asp|aspx|htaccess)$ - [F,L,NC]
+</IfModule>
+
+<FilesMatch "\.(?:php|phtml|php\d+|phar|cgi|pl|py|sh|exe|jsp|asp|aspx)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>

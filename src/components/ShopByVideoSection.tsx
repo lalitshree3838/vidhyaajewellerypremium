@@ -637,9 +637,12 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
             tryPlay();
           }
         }}
-        onCanPlay={() => {
+        onCanPlay={(ev) => {
           hasErrRef.current = false;
           setHasErr(false);
+          if (ev.currentTarget.readyState >= 2) {
+            setHasRenderedFrame(true);
+          }
           if (inViewRef.current && !userPausedRef.current) {
             tryPlay();
           }
@@ -897,9 +900,14 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
     const seenProductIds = new Set<string>();
 
     const pushProduct = (p: Product) => {
-      if (!p || !p.id || BANNED_PRODUCT_IDS.has(p.id) || p.showInShoppingVideos === false) return;
+      if (!p || !p.id || BANNED_PRODUCT_IDS.has(p.id)) return;
       if (seenProductIds.has(p.id)) return;
+      // Record seen ID BEFORE visibility checks so INITIAL_PRODUCTS never re-inserts
+      // a product whose "Show in Homepage Shopping Videos" toggle was unchecked or drafted.
       seenProductIds.add(p.id);
+      if (p.showInShoppingVideos === false || p.active === false || (p as any)._videoCleared === true) {
+        return;
+      }
       allSourceProducts.push(p);
     };
 

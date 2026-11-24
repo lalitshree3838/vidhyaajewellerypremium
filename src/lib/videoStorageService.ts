@@ -4,16 +4,23 @@ import { auth } from './firebase';
 export interface VideoUploadResult {
   url: string;
   storageType: 'firebase' | 'server';
+  storageTarget?: string;
   fileName: string;
   sizeBytes: number;
   mimeType?: string;
   thumbnailUrl?: string;
+  liveVerified?: boolean;
+  rangeSupported?: boolean;
+  idempotentReplay?: boolean;
 }
 
 export interface VideoUploadOptions {
   onProgress?: (progressPercent: number) => void;
   onStatusChange?: (stage: 'uploading' | 'verifying') => void;
+  onChunkProgress?: (chunkIndex: number, totalChunks: number, uploadId: string) => void;
   adminToken?: string;
+  resumeUploadId?: string;
+  startChunkIndex?: number;
 }
 
 // Allowed video MIME types and extensions
@@ -439,11 +446,293 @@ async function postUploadPayload(
   throw lastError || new Error('Video upload failed after multiple retries.');
 }
 
+function isPreviewHostnameForVideo(): boolean {
+  if (typeof window === 'undefined') return false;
+  const host = (window.location.hostname || '').toLowerCase();
+  return (
+    /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/i.test(host) ||
+    /(?:^|\.)(?:ais-dev-[a-z0-9-]+\.run\.app|ais-pre-[a-z0-9-]+\.run\.app|run\.app|webcontainer\.io|stackblitz\.io|csb\.app)$/i.test(
+      host
+    )
+  );
+}
+
+interface ExpectedChunkMeta {
+  uploadId: string;
+  chunkIndex: number;
+  totalChunks: number;
+  isFinalChunk: boolean;
+}
+
+const NON_RETRYABLE_GATEWAY_CODES = new Set([
+  'GATEWAY_NOT_CONFIGURED',
+  'ADMIN_AUTH_REQUIRED',
+  'CSRF_ORIGIN_MISMATCH',
+  'HOSTINGER_AUTH_REJECTED',
+  'HOSTINGER_HTML_RESPONSE',
+  'HOSTINGER_MALFORMED_RESPONSE',
+  'HOSTINGER_MISSING_VIDEO_URL',
+  'HOSTINGER_BAD_REQUEST',
+  'GATEWAY_HTML_RESPONSE',
+  'GATEWAY_EMPTY_RESPONSE',
+  'GATEWAY_MALFORMED_RESPONSE',
+  'GATEWAY_INVALID_SCHEMA',
+  'CHUNK_TOO_LARGE',
+  'INVALID_CHUNK_INDEX',
+  'INVALID_CHUNK_PAYLOAD',
+  'UPLOAD_INCOMPLETE'
+]);
+
+function makeGatewayError(
+  message: string,
+  meta: {
+    status?: number;
+    code?: string;
+    retryable?: boolean;
+    missingChunks?: number[];
+    uploadId?: string;
+    failedChunkIndex?: number;
+    totalChunks?: number;
+    isFinalChunk?: boolean;
+  }
+): Error {
+  const err: any = new Error(message);
+  if (typeof meta.status === 'number') err.status = meta.status;
+  if (meta.code) err.code = meta.code;
+  err.retryable = Boolean(meta.retryable);
+  if (Array.isArray(meta.missingChunks)) err.missingChunks = meta.missingChunks;
+  if (meta.uploadId) err.uploadId = meta.uploadId;
+  if (typeof meta.failedChunkIndex === 'number') err.failedChunkIndex = meta.failedChunkIndex;
+  if (typeof meta.totalChunks === 'number') err.totalChunks = meta.totalChunks;
+  if (typeof meta.isFinalChunk === 'boolean') err.isFinalChunk = meta.isFinalChunk;
+  return err;
+}
+
+async function postRawGatewayChunk(
+  querySuffix: string,
+  chunkBlob: Blob,
+  fileName: string,
+  token: string | null,
+  expected: ExpectedChunkMeta
+): Promise<any> {
+  const sendOnce = async () => {
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      'Content-Type': 'application/octet-stream',
+      'X-File-Name': encodeURIComponent(fileName)
+    };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(`/api/production/videos/upload${querySuffix}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+        body: chunkBlob
+      });
+    } catch {
+      throw makeGatewayError(
+        `Network connection interrupted while sending chunk ${expected.chunkIndex + 1} of ${expected.totalChunks} to Hostinger Production.`,
+        {
+          code: 'NETWORK_INTERRUPTED',
+          retryable: true,
+          uploadId: expected.uploadId,
+          failedChunkIndex: expected.chunkIndex,
+          totalChunks: expected.totalChunks,
+          isFinalChunk: expected.isFinalChunk
+        }
+      );
+    }
+
+    const contentType = res.headers.get('content-type');
+    const text = await res.text();
+
+    // 1. Explicitly reject HTML or proxy error pages BEFORE JSON.parse (never treat HTTP 200 HTML as success)
+    if (isHtmlPayload(text, contentType)) {
+      const hint = res.redirected
+        ? 'The upload request was redirected to an HTML sign-in page. Refresh and sign in to the Admin Panel again.'
+        : `Production Video Gateway returned an HTML page instead of JSON (HTTP ${res.status}). Check that the Preview dev server is running and VIDHYAA_PROD_UPLOAD_SECRET is configured in AI Studio Secrets.`;
+      throw makeGatewayError(hint, {
+        status: res.status,
+        code: 'GATEWAY_HTML_RESPONSE',
+        retryable: false,
+        uploadId: expected.uploadId,
+        failedChunkIndex: expected.chunkIndex,
+        totalChunks: expected.totalChunks,
+        isFinalChunk: expected.isFinalChunk
+      });
+    }
+
+    // 2. Explicitly reject empty responses
+    if (!text || !text.trim()) {
+      throw makeGatewayError(
+        `Production Video Gateway returned an empty response for chunk ${expected.chunkIndex + 1} (HTTP ${res.status}).`,
+        {
+          status: res.status,
+          code: 'GATEWAY_EMPTY_RESPONSE',
+          retryable: false,
+          uploadId: expected.uploadId,
+          failedChunkIndex: expected.chunkIndex,
+          totalChunks: expected.totalChunks,
+          isFinalChunk: expected.isFinalChunk
+        }
+      );
+    }
+
+    // 3. Strictly parse JSON object
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw makeGatewayError(
+        `Production Video Gateway returned invalid JSON for chunk ${expected.chunkIndex + 1} (HTTP ${res.status}).`,
+        {
+          status: res.status,
+          code: 'GATEWAY_MALFORMED_RESPONSE',
+          retryable: false,
+          uploadId: expected.uploadId,
+          failedChunkIndex: expected.chunkIndex,
+          totalChunks: expected.totalChunks,
+          isFinalChunk: expected.isFinalChunk
+        }
+      );
+    }
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof parsed.success !== 'boolean') {
+      throw makeGatewayError(
+        `Production Video Gateway returned an unexpected response schema for chunk ${expected.chunkIndex + 1} (HTTP ${res.status}).`,
+        {
+          status: res.status,
+          code: 'GATEWAY_INVALID_SCHEMA',
+          retryable: false,
+          uploadId: expected.uploadId,
+          failedChunkIndex: expected.chunkIndex,
+          totalChunks: expected.totalChunks,
+          isFinalChunk: expected.isFinalChunk
+        }
+      );
+    }
+
+    const effectiveStatus =
+      typeof parsed.httpStatus === 'number' && parsed.httpStatus >= 100
+        ? parsed.httpStatus
+        : res.status;
+    const errorCode = typeof parsed.code === 'string' ? parsed.code : undefined;
+
+    // 4. Handle any non-2xx or success !== true deterministically
+    if (!res.ok || parsed.success !== true) {
+      const explicitNonRetryable = Boolean(errorCode && NON_RETRYABLE_GATEWAY_CODES.has(errorCode));
+      const isTransientStatus =
+        effectiveStatus === 429 || effectiveStatus === 504 || effectiveStatus === 408;
+      const retryable =
+        !explicitNonRetryable &&
+        (parsed.retryable === true || (parsed.retryable !== false && isTransientStatus));
+
+      const msg =
+        parsed.error ||
+        parsed.message ||
+        `Production video chunk ${expected.chunkIndex + 1} of ${expected.totalChunks} failed (HTTP ${effectiveStatus}).`;
+
+      throw makeGatewayError(String(msg), {
+        status: effectiveStatus,
+        code: errorCode,
+        retryable,
+        missingChunks: Array.isArray(parsed.missingChunks) ? parsed.missingChunks : undefined,
+        uploadId: expected.uploadId,
+        failedChunkIndex: expected.chunkIndex,
+        totalChunks: expected.totalChunks,
+        isFinalChunk: expected.isFinalChunk
+      });
+    }
+
+    // 5. Enforce strict success contract so mismatched / incomplete payloads are NEVER accepted as success
+    if (expected.isFinalChunk) {
+      const canonicalUrl = String(parsed.videoUrl || parsed.url || '').trim();
+      if (parsed.completed !== true || !canonicalUrl) {
+        throw makeGatewayError(
+          parsed.error ||
+            'Finalization succeeded without a completed canonical Hostinger videoUrl.',
+          {
+            status: effectiveStatus,
+            code: 'HOSTINGER_MISSING_VIDEO_URL',
+            retryable: false,
+            uploadId: expected.uploadId,
+            failedChunkIndex: expected.chunkIndex,
+            totalChunks: expected.totalChunks,
+            isFinalChunk: true
+          }
+        );
+      }
+      if (parsed.liveVerified !== true) {
+        throw makeGatewayError(
+          parsed.error ||
+            'Video finalized on Hostinger, but live HTTP 200/206 playback verification did not pass.',
+          {
+            status: effectiveStatus,
+            code: 'LIVE_VERIFICATION_FAILED',
+            retryable: false,
+            uploadId: expected.uploadId,
+            failedChunkIndex: expected.chunkIndex,
+            totalChunks: expected.totalChunks,
+            isFinalChunk: true
+          }
+        );
+      }
+    } else {
+      const ackChunkIndex =
+        typeof parsed.chunkIndex === 'number'
+          ? parsed.chunkIndex
+          : typeof parsed.receivedChunk === 'number'
+            ? parsed.receivedChunk
+            : -1;
+      if (
+        parsed.completed !== false ||
+        ackChunkIndex !== expected.chunkIndex ||
+        (parsed.uploadId && String(parsed.uploadId) !== expected.uploadId)
+      ) {
+        throw makeGatewayError(
+          `Production Video Gateway returned an inconsistent acknowledgement for chunk ${expected.chunkIndex + 1} of ${expected.totalChunks}.`,
+          {
+            status: effectiveStatus,
+            code: 'GATEWAY_INVALID_SCHEMA',
+            retryable: false,
+            uploadId: expected.uploadId,
+            failedChunkIndex: expected.chunkIndex,
+            totalChunks: expected.totalChunks,
+            isFinalChunk: false
+          }
+        );
+      }
+    }
+
+    return parsed;
+  };
+
+  let lastErr: any = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, attempt === 1 ? 600 : 1400));
+    }
+    try {
+      return await sendOnce();
+    } catch (err: any) {
+      lastErr = err;
+      if (!err?.retryable) {
+        throw err;
+      }
+    }
+  }
+  throw lastErr || new Error('Video chunk upload failed after transient network retries.');
+}
+
 /**
- * Upload video file to persistent storage via authenticated Admin API
- * (automatically using 2 MiB chunked uploads for videos > 2 MiB to avoid proxy/PHP body limits),
- * then verify the returned video URL is publicly accessible (HTTP 200/206 + video/*)
- * before reporting upload success.
+ * Upload video file directly to Hostinger Production Storage (`/public_html/videos/uploads/`)
+ * using 2 MiB chunked uploads with per-chunk HMAC signing on Preview hosts,
+ * duplicate-safe finalization, and live HTTP 200 + HTTP 206 Range verification.
+ * NEVER falls back to local Preview disk or Base64.
  */
 export async function uploadJewelleryVideo(
   file: File,
@@ -462,10 +751,106 @@ export async function uploadJewelleryVideo(
   options?.onStatusChange?.('uploading');
   options?.onProgress?.(2);
 
-  // Verify or transparently refresh the Admin session before uploading video bytes
   const { token, preferPhpEndpoint } = await resolveUploadSession(options?.adminToken);
-  let activeEndpoint = preferPhpEndpoint ? '/api/videos/upload.php' : '/api/videos/upload';
 
+  // Preview Host Path: strictly use Production Upload Gateway (/api/production/videos/upload)
+  if (isPreviewHostnameForVideo()) {
+    const uploadId = options?.resumeUploadId || generateUploadId();
+    const totalChunks = Math.max(1, Math.ceil(file.size / VIDEO_CHUNK_SIZE_BYTES));
+    const encodedName = encodeURIComponent(file.name);
+    const startIdx = Math.max(0, Math.min(totalChunks - 1, options?.startChunkIndex || 0));
+
+    const sendSingleChunk = async (idx: number) => {
+      const start = idx * VIDEO_CHUNK_SIZE_BYTES;
+      const end = Math.min(file.size, start + VIDEO_CHUNK_SIZE_BYTES);
+      const chunkBlob = file.slice(start, end, file.type || 'video/mp4');
+      const query = `?chunked=1&uploadId=${encodeURIComponent(uploadId)}&chunkIndex=${idx}&totalChunks=${totalChunks}&fileName=${encodedName}`;
+      const isFinalChunk = idx === totalChunks - 1;
+      options?.onChunkProgress?.(idx, totalChunks, uploadId);
+      if (isFinalChunk) {
+        options?.onStatusChange?.('verifying');
+      }
+      try {
+        return await postRawGatewayChunk(query, chunkBlob, file.name, token, {
+          uploadId,
+          chunkIndex: idx,
+          totalChunks,
+          isFinalChunk
+        });
+      } catch (chunkErr: any) {
+        chunkErr.uploadId = uploadId;
+        chunkErr.failedChunkIndex = idx;
+        chunkErr.totalChunks = totalChunks;
+        chunkErr.isFinalChunk = isFinalChunk;
+        throw chunkErr;
+      }
+    };
+
+    let finalResponse: any = null;
+    for (let chunkIndex = startIdx; chunkIndex < totalChunks; chunkIndex++) {
+      let data: any;
+      try {
+        data = await sendSingleChunk(chunkIndex);
+      } catch (err: any) {
+        // If Hostinger reported specific missing chunks on finalization (HTTP 409),
+        // re-send ONLY those missing chunks without deleting valid chunks, then re-finalize.
+        if (
+          chunkIndex === totalChunks - 1 &&
+          err?.status === 409 &&
+          Array.isArray(err?.missingChunks) &&
+          err.missingChunks.length > 0
+        ) {
+          for (const missingIdx of err.missingChunks) {
+            if (typeof missingIdx === 'number' && missingIdx >= 0 && missingIdx < totalChunks - 1) {
+              await sendSingleChunk(missingIdx);
+            }
+          }
+          data = await sendSingleChunk(chunkIndex);
+        } else {
+          throw err;
+        }
+      }
+
+      const pct = Math.min(96, Math.max(5, Math.round(((chunkIndex + 1) / totalChunks) * 96)));
+      options?.onProgress?.(pct);
+
+      if (chunkIndex === totalChunks - 1) {
+        finalResponse = data;
+      }
+    }
+
+    const finalUrl = String(finalResponse?.videoUrl || finalResponse?.url || '').trim();
+    if (!finalResponse?.success || !finalResponse?.completed || !finalUrl || !finalResponse?.liveVerified) {
+      throw makeGatewayError(
+        finalResponse?.error ||
+          'Video upload completed on Hostinger, but live HTTP 200/206 verification did not pass.',
+        {
+          code: 'LIVE_VERIFICATION_FAILED',
+          retryable: false,
+          uploadId,
+          failedChunkIndex: totalChunks - 1,
+          totalChunks,
+          isFinalChunk: true
+        }
+      );
+    }
+
+    options?.onProgress?.(100);
+    return {
+      url: finalUrl,
+      storageType: 'server',
+      storageTarget: 'Hostinger Production',
+      fileName: finalResponse.fileName || file.name,
+      sizeBytes: finalResponse.sizeBytes || file.size,
+      mimeType: finalResponse.mimeType || file.type,
+      liveVerified: true,
+      rangeSupported: Boolean(finalResponse.liveVerification?.rangeSupported),
+      idempotentReplay: Boolean(finalResponse.idempotentReplay)
+    };
+  }
+
+  // Live Production Host Path (already running directly on vidhyaajewellerystudio.com)
+  let activeEndpoint = preferPhpEndpoint ? '/api/videos/upload.php' : '/api/videos/upload';
   let finalServerResponse: any = null;
 
   if (file.size <= VIDEO_CHUNK_SIZE_BYTES) {
@@ -481,25 +866,62 @@ export async function uploadJewelleryVideo(
     finalServerResponse = data;
     options?.onProgress?.(95);
   } else {
-    const uploadId = generateUploadId();
+    const uploadId = options?.resumeUploadId || generateUploadId();
     const totalChunks = Math.ceil(file.size / VIDEO_CHUNK_SIZE_BYTES);
     const encodedName = encodeURIComponent(file.name);
+    const startIdx = Math.max(0, Math.min(totalChunks - 1, options?.startChunkIndex || 0));
 
-    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-      const start = chunkIndex * VIDEO_CHUNK_SIZE_BYTES;
+    const sendLiveChunk = async (idx: number) => {
+      const start = idx * VIDEO_CHUNK_SIZE_BYTES;
       const end = Math.min(file.size, start + VIDEO_CHUNK_SIZE_BYTES);
       const chunkBlob = file.slice(start, end, file.type || 'video/mp4');
-      const query = `?chunked=1&uploadId=${encodeURIComponent(uploadId)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}&fileName=${encodedName}`;
+      const query = `?chunked=1&uploadId=${encodeURIComponent(uploadId)}&chunkIndex=${idx}&totalChunks=${totalChunks}&fileName=${encodedName}`;
+      const isFinalChunk = idx === totalChunks - 1;
+      options?.onChunkProgress?.(idx, totalChunks, uploadId);
+      if (isFinalChunk) {
+        options?.onStatusChange?.('verifying');
+      }
+      try {
+        const result = await postUploadPayload(
+          activeEndpoint,
+          query,
+          chunkBlob,
+          file.name,
+          token,
+          idx === 0 && !preferPhpEndpoint
+        );
+        activeEndpoint = result.resolvedEndpoint;
+        return result.data;
+      } catch (chunkErr: any) {
+        chunkErr.uploadId = uploadId;
+        chunkErr.failedChunkIndex = idx;
+        chunkErr.totalChunks = totalChunks;
+        chunkErr.isFinalChunk = isFinalChunk;
+        throw chunkErr;
+      }
+    };
 
-      const { data, resolvedEndpoint } = await postUploadPayload(
-        activeEndpoint,
-        query,
-        chunkBlob,
-        file.name,
-        token,
-        chunkIndex === 0 && !preferPhpEndpoint
-      );
-      activeEndpoint = resolvedEndpoint;
+    for (let chunkIndex = startIdx; chunkIndex < totalChunks; chunkIndex++) {
+      let data: any;
+      try {
+        data = await sendLiveChunk(chunkIndex);
+      } catch (err: any) {
+        if (
+          chunkIndex === totalChunks - 1 &&
+          err?.status === 409 &&
+          Array.isArray(err?.missingChunks) &&
+          err.missingChunks.length > 0
+        ) {
+          for (const missingIdx of err.missingChunks) {
+            if (typeof missingIdx === 'number' && missingIdx >= 0 && missingIdx < totalChunks - 1) {
+              await sendLiveChunk(missingIdx);
+            }
+          }
+          data = await sendLiveChunk(chunkIndex);
+        } else {
+          throw err;
+        }
+      }
 
       const pct = Math.min(95, Math.max(5, Math.round(((chunkIndex + 1) / totalChunks) * 95)));
       options?.onProgress?.(pct);
@@ -507,18 +929,28 @@ export async function uploadJewelleryVideo(
       if (chunkIndex === totalChunks - 1) {
         finalServerResponse = data;
       } else if (!data?.success) {
-        throw new Error(data?.error || `Server rejected video chunk ${chunkIndex + 1} of ${totalChunks}.`);
+        throw makeGatewayError(
+          data?.error || `Server rejected video chunk ${chunkIndex + 1} of ${totalChunks}.`,
+          {
+            uploadId,
+            failedChunkIndex: chunkIndex,
+            totalChunks,
+            isFinalChunk: false
+          }
+        );
       }
     }
   }
 
-  if (!finalServerResponse?.success || !finalServerResponse?.url) {
+  const finalLiveUrl = String(finalServerResponse?.videoUrl || finalServerResponse?.url || '').trim();
+  if (!finalServerResponse?.success || !finalLiveUrl) {
     throw new Error(finalServerResponse?.error || 'Server rejected video upload.');
   }
 
   const rawResult: VideoUploadResult = {
-    url: finalServerResponse.url,
+    url: finalLiveUrl,
     storageType: 'server',
+    storageTarget: 'Hostinger Production',
     fileName: finalServerResponse.fileName || file.name,
     sizeBytes: finalServerResponse.sizeBytes || file.size,
     mimeType: finalServerResponse.mimeType || file.type
@@ -536,6 +968,9 @@ export async function uploadJewelleryVideo(
     );
   }
 
+  rawResult.liveVerified = true;
+  rawResult.rangeSupported = accessibility.status === 206;
   if (options?.onProgress) options.onProgress(100);
   return rawResult;
 }
+

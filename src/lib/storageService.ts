@@ -1,6 +1,4 @@
 import { useEffect, useState } from 'react';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { storage } from './firebase';
 import { isGenuineImageUrl } from './sampleData';
 import type { Product, ProductVariation } from '../types';
 import { getAdminAuthHeaders } from './adminSessionMemory';
@@ -332,100 +330,240 @@ export async function compressImageToDataUrl(
   });
 }
 
+const STRICT_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
+const STRICT_IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp'];
+
+async function validateStrictImageFile(file: File): Promise<{ valid: boolean; error?: string }> {
+  if (!file) {
+    return { valid: false, error: 'Please choose an image file to upload.' };
+  }
+  if (file.size <= 0) {
+    return { valid: false, error: `Image "${file.name}" is empty.` };
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    return { valid: false, error: `Image "${file.name}" exceeds the 10 MB maximum file size.` };
+  }
+  const lower = file.name.toLowerCase();
+  const hasAllowedExt = STRICT_IMAGE_EXTENSIONS.some((ext) => lower.endsWith(ext));
+  const hasAllowedMime = !file.type || STRICT_IMAGE_MIMES.includes(file.type.toLowerCase());
+  if (!hasAllowedExt && !STRICT_IMAGE_MIMES.includes(file.type.toLowerCase())) {
+    return {
+      valid: false,
+      error: `Unsupported image format for "${file.name}". Only JPG/JPEG, PNG, and WebP images up to 10 MB are allowed.`
+    };
+  }
+  if (!hasAllowedMime && !hasAllowedExt) {
+    return {
+      valid: false,
+      error: `Unsupported MIME type "${file.type}". Only JPG, PNG, and WebP images are allowed.`
+    };
+  }
+
+  // Binary magic-byte check before sending bytes to gateway
+  if (typeof file.slice === 'function') {
+    try {
+      const buf = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+      if (buf.length < 12) {
+        return { valid: false, error: `Image "${file.name}" is too small or corrupted.` };
+      }
+      const isJpeg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+      const isPng =
+        buf[0] === 0x89 &&
+        buf[1] === 0x50 &&
+        buf[2] === 0x4e &&
+        buf[3] === 0x47 &&
+        buf[4] === 0x0d &&
+        buf[5] === 0x0a &&
+        buf[6] === 0x1a &&
+        buf[7] === 0x0a;
+      const isWebp =
+        String.fromCharCode(buf[0], buf[1], buf[2], buf[3]) === 'RIFF' &&
+        String.fromCharCode(buf[8], buf[9], buf[10], buf[11]) === 'WEBP';
+      if (!isJpeg && !isPng && !isWebp) {
+        return {
+          valid: false,
+          error: `File "${file.name}" does not have a genuine JPG, PNG, or WebP header.`
+        };
+      }
+    } catch {
+      // Server also performs full magic + getimagesizefromstring structural validation
+    }
+  }
+
+  return { valid: true };
+}
+
+function isPreviewHostname(): boolean {
+  if (typeof window === 'undefined') return false;
+  const host = (window.location.hostname || '').toLowerCase();
+  return (
+    /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/i.test(host) ||
+    /(?:^|\.)(?:ais-dev-[a-z0-9-]+\.run\.app|ais-pre-[a-z0-9-]+\.run\.app|run\.app|webcontainer\.io|stackblitz\.io|csb\.app)$/i.test(
+      host
+    )
+  );
+}
+
+export interface ProductImageUploadProgressOptions {
+  onProgress?: (percent: number) => void;
+  onStage?: (stage: 'uploading' | 'verifying' | 'verified') => void;
+}
+
 /**
- * Uploads a product image persistently to server storage (/api/media/upload -> /products/uploads/...)
- * using HttpOnly admin session cookies. Falls back to Firebase Storage or compressed data URL
- * ONLY when running purely client-side without a server media endpoint.
+ * Uploads a product image directly to Hostinger Production Storage (/public_html/products/uploads/).
+ * - On Google AI Studio Preview: routes through the authenticated server-side Production Upload Gateway
+ *   (`/api/production/media/upload`) which signs, uploads to Hostinger, and verifies live HTTP 200 delivery.
+ * - On Live Hostinger: uploads directly to `/api/media/upload`.
+ * - NEVER silently falls back to Preview disk, Base64 data URLs, or Firebase Storage.
  */
 export async function uploadProductImageToStorage(
   file: File,
-  productTitle?: string
+  productTitle?: string,
+  options?: ProductImageUploadProgressOptions
 ): Promise<string> {
-  if (!file) {
-    throw new Error('Please choose an image file to upload.');
-  }
-  if (file.size > 10 * 1024 * 1024) {
-    throw new Error(`Image "${file.name}" exceeds the 10 MB maximum file size.`);
+  const check = await validateStrictImageFile(file);
+  if (!check.valid) {
+    throw new Error(check.error || 'Invalid image file.');
   }
 
-  // 1. Primary path: persistent server media endpoint (/products/uploads/...)
-  try {
-    const formData = new FormData();
-    formData.append('image', file, file.name);
-    if (productTitle) {
-      formData.append('productTitle', productTitle);
+  const usePreviewGateway = isPreviewHostname();
+  const uploadEndpoint = usePreviewGateway ? '/api/production/media/upload' : '/api/media/upload';
+
+  options?.onStage?.('uploading');
+  options?.onProgress?.(10);
+
+  const authHeaders = getAdminAuthHeaders({
+    Accept: 'application/json',
+    'X-File-Name': encodeURIComponent(file.name),
+    'X-File-Type': file.type || 'application/octet-stream',
+    ...(productTitle ? { 'X-Product-Title': encodeURIComponent(productTitle) } : {})
+  });
+
+  // Use XMLHttpRequest when in browser for real upload progress tracking
+  const response = await new Promise<{ status: number; text: string }>((resolve, reject) => {
+    if (typeof XMLHttpRequest !== 'undefined') {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', uploadEndpoint, true);
+      xhr.withCredentials = true;
+      Object.entries(authHeaders).forEach(([k, v]) => {
+        xhr.setRequestHeader(k, v);
+      });
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable && ev.total > 0) {
+          const pct = Math.min(85, Math.max(10, Math.round((ev.loaded / ev.total) * 85)));
+          options?.onProgress?.(pct);
+        }
+      };
+      xhr.upload.onload = () => {
+        options?.onStage?.('verifying');
+        options?.onProgress?.(90);
+      };
+      xhr.onload = () => {
+        resolve({ status: xhr.status, text: xhr.responseText || '' });
+      };
+      xhr.onerror = () => {
+        reject(new Error('Network connection interrupted while uploading image to Hostinger Production.'));
+      };
+      xhr.ontimeout = () => {
+        reject(new Error('Timed out waiting for Hostinger Production image upload verification.'));
+      };
+      xhr.timeout = 60000;
+      xhr.send(file);
+      return;
     }
 
-    const res = await fetch('/api/media/upload', {
+    // Fallback to fetch if XMLHttpRequest is unavailable
+    fetch(uploadEndpoint, {
       method: 'POST',
       credentials: 'include',
-      headers: getAdminAuthHeaders(),
-      body: formData
-    });
+      headers: {
+        ...authHeaders,
+        'Content-Type': 'application/octet-stream'
+      },
+      body: file
+    })
+      .then(async (res) => resolve({ status: res.status, text: await res.text() }))
+      .catch((err) => reject(err));
+  });
 
-    const rawText = await res.text();
-    let data: any = null;
-    try {
-      data = rawText ? JSON.parse(rawText) : null;
-    } catch {
-      data = null;
-    }
-
-    if (res.status === 401 || res.status === 403) {
-      throw new Error(data?.error || 'Administrator session expired or unauthorized. Please sign in again before uploading images.');
-    }
-    if (res.status === 400 || res.status === 413 || res.status === 415) {
-      throw new Error(data?.error || `Image upload rejected (${res.status}). Only valid JPG, PNG, WebP, or GIF images up to 10 MB are accepted.`);
-    }
-
-    if (res.ok && data?.success && data?.url) {
-      const normalizedUrl = normalizeImageUrl(String(data.url));
-      addUploadedProductImageToCache(normalizedUrl);
-      return normalizedUrl;
-    }
-
-    if (res.status !== 404) {
-      throw new Error(data?.error || `Failed to save uploaded image (HTTP ${res.status}).`);
-    }
-  } catch (err: any) {
-    const msg = String(err?.message || '');
-    if (/unauthorized|session expired|rejected|unsupported|exceeds|10 mb|invalid image|forbidden/i.test(msg)) {
-      throw err;
-    }
+  const trimmedText = (response.text || '').trim();
+  if (trimmedText.startsWith('<!') || trimmedText.startsWith('<html') || trimmedText.startsWith('<HTML') || trimmedText.startsWith('<')) {
+    throw new Error(
+      `Production Image Gateway returned HTML instead of JSON (HTTP ${response.status}). Ensure the Preview dev server is running and VIDHYAA_PROD_UPLOAD_SECRET is configured.`
+    );
   }
 
-  // 2. Secondary fallback (Firebase Storage or compressed Data URL only if server route unavailable)
+  let data: any = null;
   try {
-    const cleanFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const timestamp = Date.now();
-    const storagePath = `products/${timestamp}_${cleanFileName}`;
-    const storageRef = ref(storage, storagePath);
-
-    const metadata = {
-      contentType: file.type || 'image/jpeg',
-      customMetadata: {
-        product: productTitle || 'Vidhyaa Jewellery Piece',
-        uploadedAt: new Date().toISOString()
-      }
-    };
-
-    const snapshot = await uploadBytes(storageRef, file, metadata);
-    const downloadUrl = await getDownloadURL(snapshot.ref);
-    addUploadedProductImageToCache(downloadUrl);
-    return downloadUrl;
+    data = trimmedText ? JSON.parse(trimmedText) : null;
   } catch {
-    return await compressImageToDataUrl(file);
+    data = null;
   }
+
+  const effectiveStatus =
+    typeof data?.httpStatus === 'number' && data.httpStatus >= 100
+      ? data.httpStatus
+      : response.status;
+
+  if (effectiveStatus === 401 || effectiveStatus === 403) {
+    throw new Error(
+      data?.error ||
+        'Administrator session expired or unauthorized. Please sign in to the Admin Panel before uploading to Hostinger Production.'
+    );
+  }
+  if (effectiveStatus === 503 || data?.code === 'GATEWAY_NOT_CONFIGURED') {
+    throw new Error(
+      data?.error ||
+        'Hostinger Production Upload Gateway is not configured yet. Configure VIDHYAA_PROD_UPLOAD_SECRET in Google AI Studio Secrets and Hostinger outside public_html.'
+    );
+  }
+  if (response.status < 200 || response.status >= 300 || !data?.success || !data?.url) {
+    throw new Error(
+      data?.error ||
+        `Hostinger Production image upload failed (HTTP ${effectiveStatus}). No Preview or Base64 fallback was applied.`
+    );
+  }
+
+  const finalUrl = normalizeImageUrl(String(data.url));
+  if (
+    !finalUrl ||
+    finalUrl.startsWith('data:image/') ||
+    finalUrl.startsWith('blob:') ||
+    /(?:run\.app|localhost|127\.0\.0\.1)/i.test(finalUrl)
+  ) {
+    throw new Error(
+      'Server returned a non-production image URL. Only verified Hostinger Production URLs are accepted.'
+    );
+  }
+
+  options?.onStage?.('verified');
+  options?.onProgress?.(100);
+  addUploadedProductImageToCache(finalUrl);
+  return finalUrl;
 }
 
 export async function uploadMultipleProductImages(
   files: File[],
-  productTitle?: string
+  productTitle?: string,
+  options?: {
+    onFileProgress?: (fileIndex: number, totalFiles: number, percent: number) => void;
+    onStage?: (stage: 'uploading' | 'verifying' | 'verified') => void;
+  }
 ): Promise<string[]> {
   const uploaded: string[] = [];
-  for (const file of files) {
-    const url = await uploadProductImageToStorage(file, productTitle);
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const url = await uploadProductImageToStorage(file, productTitle, {
+      onProgress: (pct) => {
+        const overall = Math.round(((i + pct / 100) / Math.max(1, files.length)) * 100);
+        options?.onFileProgress?.(i, files.length, overall);
+      },
+      onStage: options?.onStage
+    });
     if (url) uploaded.push(url);
   }
   return uploaded;
 }
+

@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Film, X, RefreshCw, CheckCircle2, AlertCircle, FileVideo, Link, Check, AlertTriangle } from 'lucide-react';
+import { Upload, Film, X, RefreshCw, CheckCircle2, AlertCircle, FileVideo, Link, Check } from 'lucide-react';
 import {
   validateVideoFile,
+  validateVideoFileSignature,
   formatFileSize,
   uploadJewelleryVideo,
   captureVideoThumbnail,
@@ -15,12 +16,23 @@ import {
   validateDirectPlayableVideoUrl
 } from '../../lib/videoFallback';
 
+export interface VideoPipelineEvent {
+  stage: 'validating' | 'validated' | 'chunk_uploading' | 'verifying' | 'file_verified' | 'error';
+  errorStage?: 'gateway_ready' | 'video_validation' | 'chunk_upload' | 'file_verified';
+  detail?: string;
+  progress?: number;
+  url?: string;
+}
+
 interface VideoDropzoneUploaderProps {
   onVideoUploaded: (result: VideoUploadResult) => void;
   currentVideoUrl?: string;
   currentVideoName?: string;
   onClearVideo?: () => void;
   disabled?: boolean;
+  onPipelineEvent?: (event: VideoPipelineEvent) => void;
+  gatewayConfigured?: boolean;
+  hostingerGatewayDeployed?: boolean;
 }
 
 export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
@@ -28,7 +40,10 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
   currentVideoUrl,
   currentVideoName,
   onClearVideo,
-  disabled = false
+  disabled = false,
+  onPipelineEvent,
+  gatewayConfigured,
+  hostingerGatewayDeployed
 }) => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [localPreviewUrl, setLocalPreviewUrl] = useState<string | null>(null);
@@ -37,6 +52,13 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
   const [uploadStage, setUploadStage] = useState<'uploading' | 'verifying'>('uploading');
   const [isValidatingUrl, setIsValidatingUrl] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [chunkProgress, setChunkProgress] = useState<{ current: number; total: number; uploadId: string } | null>(null);
+  const [resumableState, setResumableState] = useState<{
+    uploadId: string;
+    startChunkIndex: number;
+    totalChunks: number;
+    isFinalChunk?: boolean;
+  } | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successInfo, setSuccessInfo] = useState<string | null>(null);
   const [inputMode, setInputMode] = useState<'upload' | 'url'>('upload');
@@ -45,6 +67,7 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoPreviewRef = useRef<HTMLVideoElement>(null);
+  const activeUploadMetaRef = useRef<{ uploadId: string; chunkIndex: number; totalChunks: number } | null>(null);
   const isPreviewHost = isPreviewEnvironmentHost();
 
   // Prevent browser from navigating away if video dropped outside dropzone
@@ -69,12 +92,29 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
     };
   }, [localPreviewUrl]);
 
-  const performUpload = async (file: File) => {
+  const performUpload = async (
+    file: File,
+    resume?: { uploadId: string; startChunkIndex: number; totalChunks: number; isFinalChunk?: boolean } | null
+  ) => {
     setIsUploading(true);
     setUploadStage('uploading');
-    setUploadProgress(0);
+    if (!resume) {
+      setUploadProgress(0);
+      setChunkProgress(null);
+      activeUploadMetaRef.current = null;
+    }
     setErrorMessage(null);
     setSuccessInfo(null);
+
+    onPipelineEvent?.({
+      stage: 'chunk_uploading',
+      progress: resume ? uploadProgress : 5,
+      detail: resume
+        ? resume.isFinalChunk
+          ? `Retrying finalization & verification on Hostinger Production (chunk ${resume.startChunkIndex + 1})...`
+          : `Resuming chunk upload to Hostinger Production from chunk ${resume.startChunkIndex + 1}...`
+        : `Uploading ${file.name} (${formatFileSize(file.size)}) in 2 MiB chunks to Hostinger Production...`
+    });
 
     try {
       // 1. Generate thumbnail snapshot in browser if possible
@@ -85,13 +125,33 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
         // Thumbnail generation is optional
       }
 
-      // 2. Upload via authenticated Admin API + verify uploaded file is publicly playable (HEAD 200/206 + video/*)
+      // 2. Upload via authenticated Hostinger Production Gateway + verify live HTTP 200/206 playback
       const uploadResult = await uploadJewelleryVideo(file, {
+        resumeUploadId: resume?.uploadId,
+        startChunkIndex: resume?.startChunkIndex,
         onProgress: (percent) => {
           setUploadProgress(percent);
+          onPipelineEvent?.({
+            stage: 'chunk_uploading',
+            progress: percent,
+            detail: activeUploadMetaRef.current
+              ? `Chunk ${activeUploadMetaRef.current.chunkIndex + 1} / ${activeUploadMetaRef.current.totalChunks} (${percent}%)`
+              : `Uploading to Hostinger Production (${percent}%)`
+          });
+        },
+        onChunkProgress: (chunkIndex, totalChunks, uploadId) => {
+          activeUploadMetaRef.current = { uploadId, chunkIndex, totalChunks };
+          setChunkProgress({ current: chunkIndex + 1, total: totalChunks, uploadId });
         },
         onStatusChange: (stage) => {
           setUploadStage(stage);
+          if (stage === 'verifying') {
+            onPipelineEvent?.({
+              stage: 'verifying',
+              progress: 92,
+              detail: 'Finalizing chunks on Hostinger Production & verifying live HTTP 200/206 playback...'
+            });
+          }
         }
       });
 
@@ -100,16 +160,24 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
       }
 
       registerAvailableVideoUrl(uploadResult.url);
+      setResumableState(null);
+      setChunkProgress(null);
+      activeUploadMetaRef.current = null;
 
-      const storageLabel =
-        uploadResult.storageType === 'firebase'
-          ? 'Firebase Cloud Storage'
-          : isPreviewHost
-            ? 'Local Preview Storage (Preview only — NOT live Hostinger production)'
-            : 'Vidhyaa Production Server (/videos/uploads/)';
-
-      setSuccessInfo(`Uploaded and verified playable on ${storageLabel}! Click Save Product to attach permanently.`);
+      const storageLabel = uploadResult.storageTarget || 'Hostinger Production';
+      setSuccessInfo(
+        `Uploaded and verified live on ${storageLabel} (${uploadResult.url}). Click Save Product to publish.`
+      );
       setUploadProgress(100);
+
+      onPipelineEvent?.({
+        stage: 'file_verified',
+        progress: 100,
+        url: uploadResult.url,
+        detail: uploadResult.rangeSupported
+          ? `Verified live on Hostinger Production (HTTP 206 Range ready): ${uploadResult.url}`
+          : `Verified live on Hostinger Production: ${uploadResult.url}`
+      });
 
       // Clean up temporary local blob preview
       if (localPreviewUrl) {
@@ -119,26 +187,90 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
       setSelectedFile(null);
       setShowReplaceUrlBox(false);
 
-      // Notify parent with persistent URL and metadata
+      // Notify parent with persistent canonical Hostinger URL and metadata
       onVideoUploaded(uploadResult);
     } catch (err: any) {
       console.error('Video upload failed:', err);
-      setErrorMessage(
-        err.message || 'Video upload failed. Please verify your connection and Admin sign-in.'
-      );
-      setUploadProgress(0);
+      const msg =
+        err?.message ||
+        'Hostinger Production video upload failed. No Preview fallback was used. Check gateway configuration and retry.';
+      setErrorMessage(msg);
+
+      const errCode = typeof err?.code === 'string' ? err.code : '';
+      const errorStage: VideoPipelineEvent['errorStage'] =
+        errCode === 'GATEWAY_NOT_CONFIGURED' || errCode === 'HOSTINGER_AUTH_REJECTED'
+          ? 'gateway_ready'
+          : errCode === 'LIVE_VERIFICATION_FAILED' || errCode === 'HOSTINGER_MISSING_VIDEO_URL'
+            ? 'file_verified'
+            : 'chunk_upload';
+
+      const isConfigFailure =
+        errCode === 'GATEWAY_NOT_CONFIGURED' || errCode === 'HOSTINGER_AUTH_REJECTED';
+
+      // Preserve uploadId + chunk index so user can retry cleanly from failed chunk or finalization
+      // (skip chunk-resume state for server config errors where retrying chunk 1 cannot succeed until secret is set)
+      if (isConfigFailure) {
+        setResumableState(null);
+      } else if (err?.uploadId && typeof err?.failedChunkIndex === 'number') {
+        const total = Number(err.totalChunks || activeUploadMetaRef.current?.totalChunks || 0);
+        const failedIdx = Number(err.failedChunkIndex);
+        setResumableState({
+          uploadId: String(err.uploadId),
+          startChunkIndex: failedIdx,
+          totalChunks: total,
+          isFinalChunk: Boolean(err.isFinalChunk || (total > 0 && failedIdx === total - 1))
+        });
+      } else if (activeUploadMetaRef.current) {
+        setResumableState({
+          uploadId: activeUploadMetaRef.current.uploadId,
+          startChunkIndex: activeUploadMetaRef.current.chunkIndex,
+          totalChunks: activeUploadMetaRef.current.totalChunks,
+          isFinalChunk:
+            activeUploadMetaRef.current.totalChunks > 0 &&
+            activeUploadMetaRef.current.chunkIndex === activeUploadMetaRef.current.totalChunks - 1
+        });
+      }
+
+      onPipelineEvent?.({
+        stage: 'error',
+        errorStage,
+        detail: msg
+      });
     } finally {
       setIsUploading(false);
     }
   };
 
-  const handleFileSelection = (file: File) => {
+  const handleFileSelection = async (file: File) => {
     setErrorMessage(null);
     setSuccessInfo(null);
+    setResumableState(null);
+    setChunkProgress(null);
+
+    onPipelineEvent?.({
+      stage: 'validating',
+      detail: `Validating ${file.name} (${formatFileSize(file.size)}) format & magic bytes...`
+    });
 
     const validation = validateVideoFile(file);
     if (!validation.valid) {
       setErrorMessage(validation.error || 'Invalid video file format.');
+      onPipelineEvent?.({
+        stage: 'error',
+        errorStage: 'video_validation',
+        detail: validation.error || 'Invalid video file format.'
+      });
+      return;
+    }
+
+    const sigCheck = await validateVideoFileSignature(file);
+    if (!sigCheck.valid) {
+      setErrorMessage(sigCheck.error || 'Invalid video file binary signature.');
+      onPipelineEvent?.({
+        stage: 'error',
+        errorStage: 'video_validation',
+        detail: sigCheck.error || 'Invalid video file binary signature.'
+      });
       return;
     }
 
@@ -151,8 +283,13 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
     setLocalPreviewUrl(objectUrl);
     setUploadProgress(0);
 
-    // Automatically begin upload + post-upload verification
-    performUpload(file);
+    onPipelineEvent?.({
+      stage: 'validated',
+      detail: `Validated ${file.name} (${formatFileSize(file.size)}, ${file.type || 'video'})`
+    });
+
+    // Automatically begin upload + post-upload verification to Hostinger Production
+    void performUpload(file, null);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -281,13 +418,40 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
         disabled={disabled || isUploading}
       />
 
-      {/* Preview-host honesty notice */}
-      {isPreviewHost && (
-        <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-xl px-3 py-2 flex items-start gap-2 text-[11px]">
-          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-          <span>
-            <strong>Preview Environment:</strong> Files uploaded here are stored in Preview storage for testing only and are not uploaded to live Hostinger production (<code>vidhyaajewellerystudio.com</code>).
-          </span>
+      {/* Explicit Hostinger Production Storage Target & Readiness Banner */}
+      {isPreviewHost && gatewayConfigured === false ? (
+        <div className="bg-amber-50 border border-amber-300 text-amber-950 rounded-xl px-3 py-2.5 flex items-start gap-2 text-[11px]">
+          <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <p className="font-bold">
+              Direct File Upload from Preview Needs Gateway Secret Setup
+            </p>
+            <p>
+              Set <code>VIDHYAA_PROD_UPLOAD_SECRET</code> in Google AI Studio Secrets and Hostinger private config (outside <code>public_html</code>), and deploy the gateway PHP files to Hostinger. Or use <strong>Option B: Paste Video URL</strong> for a video already hosted at <code>https://vidhyaajewellerystudio.com/videos/uploads/</code>.
+            </p>
+          </div>
+        </div>
+      ) : isPreviewHost && hostingerGatewayDeployed === false ? (
+        <div className="bg-amber-50 border border-amber-300 text-amber-950 rounded-xl px-3 py-2.5 flex items-start gap-2 text-[11px]">
+          <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <p className="font-bold">Hostinger Gateway PHP Endpoints Not Deployed Yet</p>
+            <p>
+              Deploy <code>api/admin/_gateway_auth.php</code> and updated <code>api/videos/upload.php</code> to Hostinger Production to enable direct file uploads from Preview.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-emerald-50/90 border border-emerald-200 text-emerald-950 rounded-xl px-3 py-2 flex items-start justify-between gap-2 text-[11px]">
+          <div className="flex items-start gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+            <span>
+              <strong>Storage Target: Hostinger Production</strong> (<code>https://vidhyaajewellerystudio.com/videos/uploads/</code>).
+              {isPreviewHost
+                ? ' Videos uploaded here are transmitted directly to Hostinger Production via the signed upload gateway and verified for live HTTP 206 streaming (never saved to Preview storage).'
+                : ' Videos are stored directly on Hostinger Production and verified for live playback.'}
+            </span>
+          </div>
         </div>
       )}
 
@@ -407,9 +571,15 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
             )}
           </div>
 
-          <div className="flex items-center justify-between text-[11px] text-gray-500 px-1 font-mono gap-2">
-            <span className="truncate max-w-xs">{currentVideoName || currentVideoUrl}</span>
-            <span className="text-emerald-700 font-sans font-semibold shrink-0">Continuous Loop Active</span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between text-[11px] text-gray-600 px-1 gap-1.5">
+            <span className="font-mono truncate max-w-md" title={currentVideoUrl}>
+              {currentVideoUrl}
+            </span>
+            <span className="text-emerald-700 font-sans font-semibold shrink-0">
+              {/^https:\/\/(?:www\.)?vidhyaajewellerystudio\.com\/videos\/uploads\//i.test(currentVideoUrl)
+                ? 'Hostinger Production URL Verified'
+                : 'Continuous Loop Active'}
+            </span>
           </div>
         </div>
       )}
@@ -477,14 +647,30 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
 
             {/* Manual Retry/Upload Button if upload didn't start or errored */}
             {!isUploading && (
-              <button
-                type="button"
-                onClick={() => performUpload(selectedFile)}
-                className="px-5 py-2.5 bg-[#802336] hover:bg-[#631B2A] text-white font-bold text-xs uppercase tracking-wider rounded-xl flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer whitespace-nowrap active:scale-98"
-              >
-                <Upload className="w-4 h-4 text-[#DFB982]" />
-                <span>Upload Video</span>
-              </button>
+              <div className="flex items-center gap-2">
+                {resumableState && (
+                  <button
+                    type="button"
+                    onClick={() => performUpload(selectedFile, resumableState)}
+                    className="px-4 py-2.5 bg-[#0F5B46] hover:bg-[#0B4636] text-white font-bold text-xs uppercase tracking-wider rounded-xl flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>
+                      {resumableState.isFinalChunk
+                        ? `Retry Finalization (Chunk ${resumableState.startChunkIndex + 1})`
+                        : `Retry Chunk ${resumableState.startChunkIndex + 1}`}
+                    </span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => performUpload(selectedFile, null)}
+                  className="px-4 py-2.5 bg-[#802336] hover:bg-[#631B2A] text-white font-bold text-xs uppercase tracking-wider rounded-xl flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer whitespace-nowrap"
+                >
+                  <Upload className="w-4 h-4 text-[#DFB982]" />
+                  <span>{resumableState ? 'Restart Full Upload' : 'Upload to Hostinger'}</span>
+                </button>
+              </div>
             )}
           </div>
 
@@ -494,8 +680,10 @@ export const VideoDropzoneUploader: React.FC<VideoDropzoneUploaderProps> = ({
               <div className="flex items-center justify-between text-xs">
                 <span className="font-semibold text-gray-700">
                   {uploadStage === 'verifying'
-                    ? 'Confirming uploaded video streams cleanly (HTTP 200/206)...'
-                    : 'Uploading video to persistent storage...'}
+                    ? 'Verifying live Hostinger video playback (HTTP 200/206)...'
+                    : chunkProgress
+                      ? `Uploading chunk ${chunkProgress.current} of ${chunkProgress.total} to Hostinger Production...`
+                      : 'Uploading video to Hostinger Production...'}
                 </span>
                 <span className="font-bold text-[#802336]">{uploadProgress}%</span>
               </div>

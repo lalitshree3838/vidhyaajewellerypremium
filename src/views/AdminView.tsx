@@ -47,7 +47,7 @@ import {
 } from 'lucide-react';
 import { Product, ProductVariation, Order, OrderStatus, Category, StoreSettings, Review } from '../types';
 import { CategoryCMSPanel } from '../components/admin/CategoryCMSPanel';
-import { VideoDropzoneUploader } from '../components/admin/VideoDropzoneUploader';
+import { VideoDropzoneUploader, VideoPipelineEvent } from '../components/admin/VideoDropzoneUploader';
 import { AdminLoginView } from '../components/admin/AdminLoginView';
 import { AdminSecurityDashboard } from '../components/admin/AdminSecurityDashboard';
 import { AdminManagementPanel } from '../components/admin/AdminManagementPanel';
@@ -85,6 +85,18 @@ import {
   useAvailableMediaInventory
 } from '../lib/storageService';
 import { validateDirectPlayableVideoUrl } from '../lib/videoFallback';
+import {
+  createInitialPipelineStages,
+  fetchProductionGatewayStatus,
+  isCanonicalProductionMediaUrl,
+  isPreviewGatewayMode,
+  readBackProductionProduct,
+  verifyProductionMediaLive,
+  PipelineStageItem,
+  PipelineStageKey,
+  PipelineStageStatus,
+  ProductionGatewayStatus
+} from '../lib/productionMediaClient';
 
 interface AdminViewProps {
   products: Product[];
@@ -317,8 +329,122 @@ export const AdminView: React.FC<AdminViewProps> = ({
     }>
   >([]);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [imageUploadProgress, setImageUploadProgress] = useState(0);
   const [uploadingVariationIdx, setUploadingVariationIdx] = useState<number | null>(null);
   const [imageUploadStatus, setImageUploadStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Hostinger Production Upload Gateway & 7-Stage Pipeline State
+  const isPreviewGateway = isPreviewGatewayMode();
+  const [gatewayStatus, setGatewayStatus] = useState<ProductionGatewayStatus | null>(null);
+  const [checkingGatewayStatus, setCheckingGatewayStatus] = useState(false);
+  const [pipelineStages, setPipelineStages] = useState<PipelineStageItem[]>(() => createInitialPipelineStages());
+  const [verifiedProductionUrls, setVerifiedProductionUrls] = useState<string[]>([]);
+  const [lastSavedForVerification, setLastSavedForVerification] = useState<Product | null>(null);
+  const [retryingVerification, setRetryingVerification] = useState(false);
+
+  const applyGatewayStatusToPipeline = (status: ProductionGatewayStatus | null) => {
+    if (!isPreviewGateway) {
+      updatePipelineStage(
+        'gateway_ready',
+        'done',
+        'Running directly on Hostinger Production (https://vidhyaajewellerystudio.com).'
+      );
+      return;
+    }
+    if (!status) {
+      updatePipelineStage('gateway_ready', 'active', 'Checking Hostinger Production Upload Gateway...');
+      return;
+    }
+    if (status.configured && status.hostingerGatewayDeployed) {
+      updatePipelineStage(
+        'gateway_ready',
+        'done',
+        `Ready (Key ${status.keyId} • Live Catalog: ${status.liveCatalogCount ?? 'reachable'})`
+      );
+    } else if (!status.configured) {
+      updatePipelineStage(
+        'gateway_ready',
+        'error',
+        'Set VIDHYAA_PROD_UPLOAD_SECRET in AI Studio Secrets & Hostinger private config.'
+      );
+    } else {
+      updatePipelineStage(
+        'gateway_ready',
+        'error',
+        'AI Studio secret set, but Hostinger gateway PHP endpoints are not deployed yet.'
+      );
+    }
+  };
+
+  const resetPipelineState = () => {
+    const initial = createInitialPipelineStages();
+    setPipelineStages(
+      initial.map((item) => {
+        if (item.key !== 'gateway_ready') return item;
+        if (!isPreviewGateway) {
+          return {
+            ...item,
+            status: 'done',
+            detail: 'Running directly on Hostinger Production.'
+          };
+        }
+        if (gatewayStatus?.configured && gatewayStatus?.hostingerGatewayDeployed) {
+          return {
+            ...item,
+            status: 'done',
+            detail: `Ready (Key ${gatewayStatus.keyId} • Live Catalog: ${gatewayStatus.liveCatalogCount ?? 'reachable'})`
+          };
+        }
+        if (gatewayStatus && !gatewayStatus.configured) {
+          return {
+            ...item,
+            status: 'error',
+            detail: 'Set VIDHYAA_PROD_UPLOAD_SECRET in AI Studio Secrets & Hostinger private config.'
+          };
+        }
+        return item;
+      })
+    );
+    setImageUploadProgress(0);
+    setVerifiedProductionUrls([]);
+    setLastSavedForVerification(null);
+  };
+
+  const updatePipelineStage = (
+    key: PipelineStageKey,
+    status: PipelineStageStatus,
+    detail?: string
+  ) => {
+    setPipelineStages((prev) =>
+      prev.map((item) => (item.key === key ? { ...item, status, detail } : item))
+    );
+  };
+
+  const refreshProductionGatewayStatus = async () => {
+    if (!isPreviewGateway) {
+      applyGatewayStatusToPipeline(null);
+      return;
+    }
+    setCheckingGatewayStatus(true);
+    updatePipelineStage('gateway_ready', 'active', 'Checking Hostinger Production Upload Gateway...');
+    try {
+      const status = await fetchProductionGatewayStatus(true);
+      setGatewayStatus(status);
+      applyGatewayStatusToPipeline(status);
+    } finally {
+      setCheckingGatewayStatus(false);
+    }
+  };
+
+  useEffect(() => {
+    if (editingProduct) {
+      if (isPreviewGateway) {
+        refreshProductionGatewayStatus().catch(() => {});
+      } else {
+        applyGatewayStatusToPipeline(null);
+      }
+    }
+  }, [Boolean(editingProduct), isPreviewGateway]);
 
   // Category Modal State
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
@@ -472,6 +598,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
     setSaveProductError(null);
     setSaveProductSuccess(null);
     setImageUrlInput('');
+    resetPipelineState();
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -487,6 +614,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
     setSaveProductError(null);
     setSaveProductSuccess(null);
     setImageUrlInput('');
+    resetPipelineState();
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -551,15 +679,34 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
       // 5. Automatically upload all queued selected files if user picked photos
       if (selectedFilesForUpload.length > 0) {
+        updatePipelineStage('video_validation', 'done', `${selectedFilesForUpload.length} image(s) validated for Hostinger Production.`);
+        updatePipelineStage('chunk_upload', 'active', 'Uploading queued image(s) to Hostinger Production...');
+        setImageUploadProgress(5);
         setImageUploadStatus({
           type: 'success',
-          message: `Uploading ${selectedFilesForUpload.length} selected ${selectedFilesForUpload.length === 1 ? 'image' : 'images'} to server storage...`
+          message: `Uploading ${selectedFilesForUpload.length} selected ${selectedFilesForUpload.length === 1 ? 'image' : 'images'} to Hostinger Production...`
         });
 
         try {
           const uploadedUrls = await uploadMultipleProductImages(
             selectedFilesForUpload.map((item) => item.file),
-            editingProduct.name.trim()
+            editingProduct.name.trim(),
+            {
+              onFileProgress: (fileIdx, totalFiles, overallPct) => {
+                setImageUploadProgress(overallPct);
+                updatePipelineStage(
+                  'chunk_upload',
+                  'active',
+                  `Uploading image ${fileIdx + 1}/${totalFiles} to Hostinger Production (${overallPct}%)`
+                );
+              },
+              onStage: (stage) => {
+                if (stage === 'verifying') {
+                  updatePipelineStage('chunk_upload', 'done', 'Image transfer to Hostinger complete.');
+                  updatePipelineStage('file_verified', 'active', 'Verifying live public HTTPS image URL...');
+                }
+              }
+            }
           );
 
           uploadedUrls.forEach((uploadedUrl) => {
@@ -567,6 +714,9 @@ export const AdminView: React.FC<AdminViewProps> = ({
               productImages.push(uploadedUrl);
             }
           });
+          setVerifiedProductionUrls((prev) => Array.from(new Set([...prev, ...uploadedUrls])));
+          updatePipelineStage('chunk_upload', 'done', `${uploadedUrls.length} image(s) transferred.`);
+          updatePipelineStage('file_verified', 'done', `Verified live URL: ${uploadedUrls[uploadedUrls.length - 1]}`);
 
           selectedFilesForUpload.forEach((item) => {
             try { URL.revokeObjectURL(item.previewUrl); } catch {}
@@ -586,7 +736,9 @@ export const AdminView: React.FC<AdminViewProps> = ({
           );
         } catch (uploadErr: any) {
           console.warn('[AdminView] Image upload error during product save:', uploadErr);
-          setSaveProductError('Image upload failed: ' + (uploadErr?.message || String(uploadErr)));
+          const errMsg = uploadErr?.message || String(uploadErr);
+          updatePipelineStage('chunk_upload', 'error', errMsg);
+          setSaveProductError('Hostinger Production image upload failed: ' + errMsg);
           setSavingProduct(false);
           return;
         }
@@ -641,8 +793,15 @@ export const AdminView: React.FC<AdminViewProps> = ({
         updatedAt: new Date().toISOString()
       };
 
-      // Save authoritatively to backend server catalog & Firestore
+      // Stage 5: Product Save to Hostinger Production
+      updatePipelineStage('product_save', 'active', 'Saving product record to Hostinger Production...');
+      updatePipelineStage('product_readback', 'idle');
+      updatePipelineStage('homepage_verified', 'idle');
+
       const saved = await saveProduct(updated);
+      setLastSavedForVerification(saved);
+      setIsCreatingNewProduct(false);
+      setEditingProduct(JSON.parse(JSON.stringify(saved)));
 
       setLocalProducts((prev) => {
         const idx = prev.findIndex((p) => p.id === saved.id);
@@ -654,25 +813,166 @@ export const AdminView: React.FC<AdminViewProps> = ({
         return [saved, ...prev];
       });
 
-      setSaveProductSuccess(`✓ Product "${saved.name}" successfully saved and published!`);
-      setAdminNotice({ type: 'success', text: `Product "${saved.name}" saved to catalog.` });
+      updatePipelineStage(
+        'product_save',
+        'done',
+        `Saved product ID "${saved.id}" on Hostinger Production.`
+      );
+
+      // Stages 6 & 7: Product Read-back + Homepage Publish Verification
+      const verified = await runLiveStorefrontVerification(saved);
+      if (verified) {
+        setSaveProductSuccess(
+          saved.active !== false
+            ? `✓ Product "${saved.name}" saved, read back, and verified live on Hostinger Production!`
+            : `✓ Draft product "${saved.name}" saved and read-back verified on Hostinger Production.`
+        );
+        setAdminNotice({ type: 'success', text: `Product "${saved.name}" saved & verified on Hostinger Production.` });
+      }
 
       await onRefreshData().catch((refreshErr) => {
         console.warn('[AdminView] Post-save catalog refresh notice:', refreshErr);
       });
-
-      // Close modal cleanly while keeping the user inside Products management
-      setTimeout(() => {
-        setEditingProduct(null);
-        setIsCreatingNewProduct(false);
-        setSaveProductSuccess(null);
-        setImageUploadStatus(null);
-      }, 600);
     } catch (e: any) {
       console.error('Failed to save product in AdminView:', e);
-      setSaveProductError(e?.message || 'Failed to save product to database.');
+      const errMsg = e?.message || 'Failed to save product to Hostinger Production.';
+      updatePipelineStage('product_save', 'error', errMsg);
+      setSaveProductError(errMsg);
     } finally {
       setSavingProduct(false);
+    }
+  };
+
+  const runLiveStorefrontVerification = async (targetProduct: Product): Promise<boolean> => {
+    setRetryingVerification(true);
+    updatePipelineStage(
+      'product_readback',
+      'active',
+      'Reading back saved product record from Hostinger Production...'
+    );
+    updatePipelineStage('homepage_verified', 'idle');
+    try {
+      // Stage 6: Product Read-back
+      const readBack = await readBackProductionProduct(targetProduct.id);
+      if (!readBack.ok || !readBack.product) {
+        const errMsg =
+          readBack.error || 'Product read-back could not locate the saved record on Hostinger.';
+        updatePipelineStage('product_readback', 'error', errMsg);
+        setSaveProductError(`Product saved, but Hostinger read-back failed: ${errMsg}`);
+        return false;
+      }
+
+      const expectedVideoUrl = (targetProduct.videoUrl || '').trim();
+      const persistedVideoUrl = String(readBack.product.videoUrl || '').trim();
+      if (expectedVideoUrl && persistedVideoUrl !== expectedVideoUrl) {
+        const errMsg = `Persisted product videoUrl mismatch on Hostinger (expected "${expectedVideoUrl}", read back "${persistedVideoUrl || '(empty)'}").`;
+        updatePipelineStage('product_readback', 'error', errMsg);
+        setSaveProductError(errMsg);
+        return false;
+      }
+
+      updatePipelineStage(
+        'product_readback',
+        'done',
+        expectedVideoUrl
+          ? `Read back ID "${readBack.product.id}" with matching videoUrl.`
+          : `Read back ID "${readBack.product.id}" from Hostinger catalog.`
+      );
+
+      // Stage 7: Homepage Publish Verification
+      updatePipelineStage(
+        'homepage_verified',
+        'active',
+        'Verifying live Hostinger media URLs & Homepage Shopping Videos publish status...'
+      );
+
+      const canonicalImages = (readBack.product.images || []).filter((u: string) =>
+        isCanonicalProductionMediaUrl(u)
+      );
+      for (const imgUrl of canonicalImages.slice(0, 4)) {
+        const imgCheck = await verifyProductionMediaLive(imgUrl, 'image');
+        if (!imgCheck.ok) {
+          const errMsg = imgCheck.error || `Live image URL check failed for ${imgUrl}`;
+          updatePipelineStage('homepage_verified', 'error', errMsg);
+          setSaveProductError(`Live image verification failed: ${errMsg}`);
+          return false;
+        }
+      }
+
+      let videoRangeVerified = false;
+      if (persistedVideoUrl && isCanonicalProductionMediaUrl(persistedVideoUrl)) {
+        const vidCheck = await verifyProductionMediaLive(persistedVideoUrl, 'video');
+        if (!vidCheck.ok) {
+          const errMsg = vidCheck.error || `Live video stream check failed for ${persistedVideoUrl}`;
+          updatePipelineStage('homepage_verified', 'error', errMsg);
+          setSaveProductError(`Live video verification failed: ${errMsg}`);
+          return false;
+        }
+        videoRangeVerified = Boolean(vidCheck.rangeSupported);
+      }
+
+      const isPublished = readBack.product.active !== false;
+      const inShoppingVideos =
+        isPublished && Boolean(persistedVideoUrl) && readBack.product.showInShoppingVideos !== false;
+
+      if (!isPublished) {
+        updatePipelineStage(
+          'homepage_verified',
+          'done',
+          'Saved as Draft (hidden from public storefront & Homepage Shopping Videos).'
+        );
+      } else if (inShoppingVideos) {
+        updatePipelineStage(
+          'homepage_verified',
+          'done',
+          videoRangeVerified
+            ? 'Published to Homepage Shopping Videos (HTTP 206 Range verified on vidhyaajewellerystudio.com).'
+            : 'Published & verified for Homepage Shopping Videos on vidhyaajewellerystudio.com.'
+        );
+      } else {
+        updatePipelineStage(
+          'homepage_verified',
+          'done',
+          persistedVideoUrl
+            ? 'Published on live catalog (unchecked for Homepage Shopping Videos).'
+            : 'Published & verified live on https://vidhyaajewellerystudio.com.'
+        );
+      }
+
+      setSaveProductError(null);
+      return true;
+    } catch (err: any) {
+      const errMsg = err?.message || 'Live storefront verification error.';
+      updatePipelineStage('homepage_verified', 'error', errMsg);
+      setSaveProductError(`Live storefront verification error: ${errMsg}`);
+      return false;
+    } finally {
+      setRetryingVerification(false);
+    }
+  };
+
+  const handleVideoPipelineEvent = (ev: VideoPipelineEvent) => {
+    if (ev.stage === 'validating') {
+      updatePipelineStage('video_validation', 'active', ev.detail);
+      updatePipelineStage('chunk_upload', 'idle');
+      updatePipelineStage('file_verified', 'idle');
+    } else if (ev.stage === 'validated') {
+      updatePipelineStage('video_validation', 'done', ev.detail);
+    } else if (ev.stage === 'chunk_uploading') {
+      updatePipelineStage('video_validation', 'done');
+      updatePipelineStage('chunk_upload', 'active', ev.detail);
+    } else if (ev.stage === 'verifying') {
+      updatePipelineStage('chunk_upload', 'done', 'All video chunks uploaded to Hostinger Production.');
+      updatePipelineStage('file_verified', 'active', ev.detail || 'Verifying live HTTP 200/206 playback...');
+    } else if (ev.stage === 'file_verified') {
+      updatePipelineStage('video_validation', 'done');
+      updatePipelineStage('chunk_upload', 'done', 'All chunks assembled on Hostinger /videos/uploads/.');
+      updatePipelineStage('file_verified', 'done', ev.detail);
+      if (ev.url) {
+        setVerifiedProductionUrls((prev) => Array.from(new Set([...prev, ev.url!])));
+      }
+    } else if (ev.stage === 'error') {
+      updatePipelineStage(ev.errorStage || 'chunk_upload', 'error', ev.detail);
     }
   };
 
@@ -812,15 +1112,15 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
     setImageUploadStatus(null);
 
-    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
-    const validExts = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
+    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    const validExts = ['jpg', 'jpeg', 'png', 'webp'];
     const accepted: Array<{ file: File; previewUrl: string; name: string; size: number }> = [];
     const errors: string[] = [];
 
     for (const file of files) {
       const ext = file.name.split('.').pop()?.toLowerCase() || '';
       if (!validTypes.includes(file.type) && !validExts.includes(ext)) {
-        errors.push(`"${file.name}" has an unsupported format (use JPG, PNG, WebP, or GIF).`);
+        errors.push(`"${file.name}" has an unsupported format (only JPG, JPEG, PNG, or WebP are allowed).`);
         continue;
       }
       if (file.size > 10 * 1024 * 1024) {
@@ -838,20 +1138,26 @@ export const AdminView: React.FC<AdminViewProps> = ({
     if (fileInputRef.current) fileInputRef.current.value = '';
 
     if (accepted.length === 0) {
+      updatePipelineStage('video_validation', 'error', errors[0] || 'Invalid image format.');
       setImageUploadStatus({
         type: 'error',
-        message: errors[0] || 'Please select valid JPG, PNG, WebP, or GIF images (max 10 MB each).'
+        message: errors[0] || 'Please select valid JPG, JPEG, PNG, or WebP images (max 10 MB each).'
       });
       return;
     }
 
     setSelectedFilesForUpload((prev) => [...prev, ...accepted]);
+    updatePipelineStage(
+      'video_validation',
+      'done',
+      `${accepted.length} image(s) validated (${accepted.map((a) => a.name).join(', ')}).`
+    );
     setImageUploadStatus({
       type: errors.length > 0 ? 'error' : 'success',
       message:
         errors.length > 0
           ? `${accepted.length} image(s) queued; skipped invalid file: ${errors[0]}`
-          : `${accepted.length} ${accepted.length === 1 ? 'photo' : 'photos'} selected. Click "Add Image" below to upload & attach to this product gallery.`
+          : `${accepted.length} ${accepted.length === 1 ? 'photo' : 'photos'} selected. Click "Add Image" below to upload directly to Hostinger Production.`
     });
   };
 
@@ -888,12 +1194,32 @@ export const AdminView: React.FC<AdminViewProps> = ({
     }
 
     setUploadingImage(true);
+    setImageUploadProgress(5);
     setImageUploadStatus(null);
+    updatePipelineStage('video_validation', 'done', `${selectedFilesForUpload.length} image(s) validated.`);
+    updatePipelineStage('chunk_upload', 'active', 'Uploading to Hostinger Production...');
+    updatePipelineStage('file_verified', 'idle');
 
     try {
       const uploadedUrls = await uploadMultipleProductImages(
         selectedFilesForUpload.map((item) => item.file),
-        editingProduct.name
+        editingProduct.name,
+        {
+          onFileProgress: (fileIdx, totalFiles, overallPct) => {
+            setImageUploadProgress(overallPct);
+            updatePipelineStage(
+              'chunk_upload',
+              'active',
+              `Uploading image ${fileIdx + 1}/${totalFiles} to Hostinger Production (${overallPct}%)`
+            );
+          },
+          onStage: (stage) => {
+            if (stage === 'verifying') {
+              updatePipelineStage('chunk_upload', 'done', 'Upload transfer complete.');
+              updatePipelineStage('file_verified', 'active', 'Verifying live Hostinger HTTPS URL...');
+            }
+          }
+        }
       );
 
       const updatedImages = [...(editingProduct.images || [])];
@@ -930,6 +1256,11 @@ export const AdminView: React.FC<AdminViewProps> = ({
         ]
       });
 
+      setVerifiedProductionUrls((prev) => Array.from(new Set([...prev, ...uploadedUrls])));
+      updatePipelineStage('chunk_upload', 'done', `${uploadedUrls.length} image(s) transferred (100%).`);
+      updatePipelineStage('file_verified', 'done', `Verified live URL: ${uploadedUrls[uploadedUrls.length - 1]}`);
+      setImageUploadProgress(100);
+
       const uploadedCount = uploadedUrls.length;
       selectedFilesForUpload.forEach((item) => {
         try { URL.revokeObjectURL(item.previewUrl); } catch {}
@@ -939,13 +1270,15 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
       setImageUploadStatus({
         type: 'success',
-        message: `✓ ${uploadedCount} ${uploadedCount === 1 ? 'image' : 'images'} uploaded and attached to product gallery! Click "${isCreatingNewProduct ? 'Save New Product' : 'Save Changes'}" to save product.`
+        message: `✓ ${uploadedCount} ${uploadedCount === 1 ? 'image' : 'images'} uploaded and verified on Hostinger Production! Click "${isCreatingNewProduct ? 'Save New Product' : 'Save Changes'}" to save & verify live.`
       });
     } catch (err: any) {
       console.error('Image attachment failed:', err);
+      const errMsg = err?.message || 'Could not upload image(s) to Hostinger Production.';
+      updatePipelineStage('chunk_upload', 'error', errMsg);
       setImageUploadStatus({
         type: 'error',
-        message: `Upload Failed: ${err.message || 'Could not upload image(s). Please try again.'}`
+        message: `Hostinger Upload Failed: ${errMsg}`
       });
     } finally {
       setUploadingImage(false);
@@ -957,10 +1290,24 @@ export const AdminView: React.FC<AdminViewProps> = ({
     setUploadingVariationIdx(variationIndex);
     setSaveProductError(null);
     setImageUploadStatus(null);
+    updatePipelineStage('video_validation', 'done', `Variation image validated: ${file.name}`);
+    updatePipelineStage('chunk_upload', 'active', 'Uploading variation image to Hostinger Production...');
     try {
       const uploadedUrl = await uploadProductImageToStorage(
         file,
-        `${editingProduct.name} - ${editingProduct.variations[variationIndex]?.name || 'Variation'}`
+        `${editingProduct.name} - ${editingProduct.variations[variationIndex]?.name || 'Variation'}`,
+        {
+          onProgress: (pct) => {
+            setImageUploadProgress(pct);
+            updatePipelineStage('chunk_upload', 'active', `Uploading variation photo (${pct}%)`);
+          },
+          onStage: (stage) => {
+            if (stage === 'verifying') {
+              updatePipelineStage('chunk_upload', 'done', 'Variation photo transferred.');
+              updatePipelineStage('file_verified', 'active', 'Verifying live Hostinger URL...');
+            }
+          }
+        }
       );
       const nextImages = [...(editingProduct.images || [])];
       if (!nextImages.includes(uploadedUrl)) {
@@ -976,14 +1323,19 @@ export const AdminView: React.FC<AdminViewProps> = ({
         _imagesCleared: undefined,
         variations: nextVars
       });
+      setVerifiedProductionUrls((prev) => Array.from(new Set([...prev, uploadedUrl])));
+      updatePipelineStage('chunk_upload', 'done', 'Variation photo uploaded.');
+      updatePipelineStage('file_verified', 'done', `Verified live URL: ${uploadedUrl}`);
       setImageUploadStatus({
         type: 'success',
-        message: `✓ Uploaded variation photo for "${editingProduct.variations[variationIndex]?.name || `Finish #${variationIndex + 1}`}".`
+        message: `✓ Uploaded & verified variation photo on Hostinger Production (${uploadedUrl}).`
       });
     } catch (err: any) {
+      const errMsg = err?.message || 'Unable to upload variation image to Hostinger Production.';
+      updatePipelineStage('chunk_upload', 'error', errMsg);
       setImageUploadStatus({
         type: 'error',
-        message: `Variation image upload failed: ${err?.message || 'Unable to upload variation image.'}`
+        message: `Variation image upload failed: ${errMsg}`
       });
     } finally {
       setUploadingVariationIdx(null);
@@ -3042,10 +3394,21 @@ export const AdminView: React.FC<AdminViewProps> = ({
             className="bg-white w-full max-w-3xl rounded-2xl shadow-2xl border border-[#E8DCCF] max-h-[90vh] flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="p-5 border-b border-[#E8DCCF] flex items-center justify-between bg-[#FAF7F2]">
-              <h3 className="font-serif text-xl font-bold text-[#3B1E22]">
-                {isCreatingNewProduct ? 'Add New Jewellery Design' : `Edit: ${editingProduct.name}`}
-              </h3>
+            <div className="p-5 border-b border-[#E8DCCF] flex items-center justify-between gap-3 bg-[#FAF7F2]">
+              <div>
+                <h3 className="font-serif text-xl font-bold text-[#3B1E22]">
+                  {isCreatingNewProduct ? 'Add New Jewellery Design' : `Edit: ${editingProduct.name}`}
+                </h3>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md font-bold bg-[#0F5B46] text-white">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    Storage Target: Hostinger Production
+                  </span>
+                  <span className="text-gray-500 font-mono">
+                    https://vidhyaajewellerystudio.com
+                  </span>
+                </div>
+              </div>
               <button
                 onClick={() => setEditingProduct(null)}
                 className="p-1 rounded-full text-gray-500 hover:text-black cursor-pointer"
@@ -3055,11 +3418,186 @@ export const AdminView: React.FC<AdminViewProps> = ({
             </div>
 
             <form onSubmit={handleSaveProduct} className="p-6 overflow-y-auto space-y-6 text-xs flex-1">
+              {/* Hostinger Production Gateway Readiness Banner (Preview Mode) */}
+              {isPreviewGateway && (
+                <div
+                  className={`p-3 rounded-xl border text-[11px] flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+                    gatewayStatus?.configured && gatewayStatus?.hostingerGatewayDeployed !== false
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                      : 'bg-amber-50 border-amber-300 text-amber-950'
+                  }`}
+                >
+                  <div className="space-y-0.5">
+                    <div className="font-bold flex items-center gap-1.5">
+                      {gatewayStatus?.configured && gatewayStatus?.hostingerGatewayDeployed !== false ? (
+                        <CheckCircle className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                      ) : (
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                      )}
+                      <span>
+                        {checkingGatewayStatus
+                          ? 'Checking Hostinger Production Upload Gateway...'
+                          : gatewayStatus?.configured
+                            ? gatewayStatus.hostingerGatewayDeployed
+                              ? `Production Gateway Ready (Key ${gatewayStatus.keyId} • Live Catalog: ${gatewayStatus.liveCatalogCount ?? 'reachable'})`
+                              : 'AI Studio gateway secret is configured, but Hostinger gateway PHP endpoints are not yet deployed.'
+                            : 'Production Upload Gateway Not Configured Yet (Fail-Closed: no Preview or Base64 fallback will occur).'}
+                      </span>
+                    </div>
+                    {!checkingGatewayStatus && (!gatewayStatus?.configured || !gatewayStatus?.hostingerGatewayDeployed) && (
+                      <div className="text-[10px] opacity-90 space-y-0.5">
+                        {!gatewayStatus?.configured ? (
+                          <p>
+                            Action Required: Set <code>VIDHYAA_PRODUCTION_ORIGIN=https://vidhyaajewellerystudio.com</code>,{' '}
+                            <code>VIDHYAA_PROD_UPLOAD_KEY_ID=k1</code>, and a 64+ hex <code>VIDHYAA_PROD_UPLOAD_SECRET</code> in Google AI Studio Secrets AND in Hostinger&apos;s private config outside <code>public_html</code>.
+                          </p>
+                        ) : (
+                          <p>
+                            Action Required: Deploy the gateway PHP endpoints (<code>api/admin/_gateway_auth.php</code>,{' '}
+                            <code>api/videos/upload.php</code>, <code>api/media/upload.php</code>, <code>api/products.php</code>) and private secret file to Hostinger Production.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void refreshProductionGatewayStatus()}
+                    disabled={checkingGatewayStatus}
+                    className="px-2.5 py-1 bg-white border border-current/20 rounded-lg font-bold text-[10px] flex items-center gap-1 hover:bg-white/80 cursor-pointer shrink-0 self-start sm:self-center"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${checkingGatewayStatus ? 'animate-spin' : ''}`} />
+                    <span>Recheck</span>
+                  </button>
+                </div>
+              )}
+
+              {/* 7-Stage Upload, Save & Live Storefront Verification Tracker */}
+              <div className="bg-[#FAF7F2] border border-[#E8DCCF] rounded-xl p-3.5 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-[#3B1E22]">
+                    Production Upload &amp; Publish Verification Status
+                  </span>
+                  {uploadingImage && (
+                    <span className="text-[11px] font-bold text-[#0F5B46]">
+                      Uploading: {imageUploadProgress}%
+                    </span>
+                  )}
+                </div>
+
+                {uploadingImage && (
+                  <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-[#0F5B46] transition-all duration-200"
+                      style={{ width: `${Math.max(5, imageUploadProgress)}%` }}
+                    />
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                  {pipelineStages.map((stage) => (
+                    <div
+                      key={stage.key}
+                      className={`px-2.5 py-2 rounded-lg border text-[10px] flex items-start gap-2 ${
+                        stage.status === 'done'
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                          : stage.status === 'active'
+                            ? 'bg-amber-50 border-amber-300 text-amber-950'
+                            : stage.status === 'error'
+                              ? 'bg-red-50 border-red-300 text-red-950'
+                              : 'bg-white border-[#E8DCCF] text-gray-500'
+                      }`}
+                    >
+                      <span className="mt-0.5 shrink-0">
+                        {stage.status === 'done' ? (
+                          <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                        ) : stage.status === 'active' ? (
+                          <Loader2 className="w-3.5 h-3.5 text-amber-600 animate-spin" />
+                        ) : stage.status === 'error' ? (
+                          <AlertCircle className="w-3.5 h-3.5 text-red-600" />
+                        ) : (
+                          <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-gray-300 text-[9px] font-bold text-gray-400">
+                            {stage.stepNumber}
+                          </span>
+                        )}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-bold leading-tight">
+                          {stage.stepNumber}. {stage.label}
+                        </div>
+                        {stage.detail && (
+                          <div className="text-[9px] opacity-85 truncate mt-0.5" title={stage.detail}>
+                            {stage.detail}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Verified Canonical Hostinger Production URLs */}
+                {verifiedProductionUrls.length > 0 && (
+                  <div className="pt-1 border-t border-[#E8DCCF] space-y-1">
+                    <div className="text-[10px] font-bold text-emerald-800">
+                      Verified Hostinger Production Media URLs:
+                    </div>
+                    <div className="space-y-1 max-h-20 overflow-y-auto">
+                      {verifiedProductionUrls.map((url) => (
+                        <div
+                          key={url}
+                          className="text-[10px] font-mono text-gray-700 bg-white border border-emerald-200 rounded px-2 py-1 truncate"
+                          title={url}
+                        >
+                          {url}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Per-Stage Retry Controls (No Duplicate Products) */}
+                {(pipelineStages.some((s) => s.status === 'error')) && (
+                  <div className="pt-1 flex flex-wrap items-center gap-2">
+                    {selectedFilesForUpload.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => void handleAddImageToProduct()}
+                        disabled={uploadingImage}
+                        className="px-3 py-1 bg-[#0F5B46] text-white rounded-lg text-[10px] font-bold flex items-center gap-1 hover:bg-[#0B4636] cursor-pointer"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>Retry Image Upload</span>
+                      </button>
+                    )}
+                    {lastSavedForVerification && (
+                      <button
+                        type="button"
+                        onClick={() => void runLiveStorefrontVerification(lastSavedForVerification)}
+                        disabled={retryingVerification}
+                        className="px-3 py-1 bg-[#802336] text-white rounded-lg text-[10px] font-bold flex items-center gap-1 hover:bg-[#631B2A] cursor-pointer"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${retryingVerification ? 'animate-spin' : ''}`} />
+                        <span>Retry Live Storefront Verification</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Product Save Status Banners */}
               {saveProductSuccess && (
-                <div className="p-3.5 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl flex items-center gap-2.5 animate-fadeIn shadow-xs">
-                  <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span className="font-semibold flex-1">{saveProductSuccess}</span>
+                <div className="p-3.5 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl flex items-center justify-between gap-2.5 animate-fadeIn shadow-xs">
+                  <div className="flex items-center gap-2.5">
+                    <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span className="font-semibold">{saveProductSuccess}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEditingProduct(null)}
+                    className="px-3 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[11px] font-bold cursor-pointer shrink-0"
+                  >
+                    Done
+                  </button>
                 </div>
               )}
 
@@ -3377,7 +3915,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   multiple
                   ref={fileInputRef}
                   onChange={handleFileSelect}
-                  accept=".jpg,.jpeg,.png,.webp,.gif,image/jpeg,image/png,image/webp,image/gif"
+                  accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
                   className="hidden"
                 />
 
@@ -3619,21 +4157,34 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 </label>
                 <VideoDropzoneUploader
                   currentVideoUrl={editingProduct.videoUrl}
+                  onPipelineEvent={handleVideoPipelineEvent}
+                  gatewayConfigured={gatewayStatus ? gatewayStatus.configured : undefined}
+                  hostingerGatewayDeployed={
+                    gatewayStatus ? gatewayStatus.hostingerGatewayDeployed : undefined
+                  }
                   onVideoUploaded={(res) => {
-                    setEditingProduct({
-                      ...editingProduct,
-                      videoUrl: res.url,
-                      showInShoppingVideos: true,
-                      _videoCleared: undefined
-                    });
+                    setEditingProduct((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            videoUrl: res.url,
+                            showInShoppingVideos: true,
+                            _videoCleared: undefined
+                          }
+                        : prev
+                    );
                   }}
                   onClearVideo={() => {
-                    setEditingProduct({
-                      ...editingProduct,
-                      videoUrl: undefined,
-                      showInShoppingVideos: false,
-                      _videoCleared: true
-                    });
+                    setEditingProduct((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            videoUrl: undefined,
+                            showInShoppingVideos: false,
+                            _videoCleared: true
+                          }
+                        : prev
+                    );
                   }}
                 />
 
@@ -3793,7 +4344,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                           )}
                           <input
                             type="file"
-                            accept=".jpg,.jpeg,.png,.webp,.gif,image/jpeg,image/png,image/webp,image/gif"
+                            accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
                             className="hidden"
                             disabled={uploadingVariationIdx === idx}
                             onChange={(e) => {
