@@ -44,11 +44,21 @@ function writeProductsCatalog($products, $dataFile, $apiFile) {
     return $okData || $okApi;
 }
 
+function isPreviewOnlyVideoUrl($url) {
+    if (!is_string($url)) return false;
+    $trimmed = trim($url);
+    if (!preg_match('#^https?://#i', $trimmed)) return false;
+    $host = strtolower((string)parse_url($trimmed, PHP_URL_HOST));
+    if ($host === '') return false;
+    if (preg_match('/^(?:localhost|127\.0\.0\.1|0\.0\.0\.0)$/i', $host)) return true;
+    return (bool)preg_match('/(?:^|\.)(?:ais-dev-[a-z0-9-]+\.run\.app|ais-pre-[a-z0-9-]+\.run\.app|run\.app|webcontainer\.io|stackblitz\.io|csb\.app)$/i', $host);
+}
+
 function normalizeVideoUrl($url) {
     if (!is_string($url)) return null;
     $trimmed = trim($url);
     if ($trimmed === '') return null;
-    if (preg_match('#^https?://(?:localhost|127\.0\.0\.1)(?::\d+)?(/.*)$#i', $trimmed, $m)) {
+    if (preg_match('#^https?://(?:www\.)?vidhyaajewellerystudio\.com(/videos/uploads/[^\s?\#]+(?:\?[^\s\#]*)?)$#i', $trimmed, $m)) {
         $trimmed = $m[1];
     }
     if (preg_match('#^(videos/uploads/.*)$#i', $trimmed)) {
@@ -90,15 +100,27 @@ if ($method === 'POST' || $method === 'PUT') {
         vdhSendJson(400, ['success' => false, 'error' => 'Product payload requires an id.']);
     }
 
-    $vid = normalizeVideoUrl($incoming['videoUrl'] ?? ($incoming['video'] ?? ($incoming['videoURL'] ?? null)));
+    $rawVidInput = $incoming['videoUrl'] ?? ($incoming['video'] ?? ($incoming['videoURL'] ?? null));
+    if (is_string($rawVidInput) && trim($rawVidInput) !== '' && isPreviewOnlyVideoUrl($rawVidInput)) {
+        vdhSendJson(400, [
+            'success' => false,
+            'error' => 'Preview or localhost video URLs cannot be saved as production video URLs.'
+        ]);
+    }
+    $vid = normalizeVideoUrl($rawVidInput);
+    $videoCleared = !empty($incoming['_videoCleared']) && $vid === null;
     if ($vid !== null) {
         $incoming['videoUrl'] = $vid;
+        unset($incoming['_videoCleared']);
         if (!isset($incoming['showInShoppingVideos'])) {
             $incoming['showInShoppingVideos'] = true;
         }
+    } elseif ($videoCleared) {
+        unset($incoming['videoUrl'], $incoming['video'], $incoming['videoURL'], $incoming['_videoCleared']);
+        $incoming['showInShoppingVideos'] = false;
     }
 
-    $saved = vdhWithFileLock('products', function () use ($dataProductsFile, $apiProductsFile, $incoming, $vid) {
+    $saved = vdhWithFileLock('products', function () use ($dataProductsFile, $apiProductsFile, $incoming, $vid, $videoCleared) {
         $now = gmdate('Y-m-d\TH:i:s.000\Z');
         $products = readProductsCatalog($dataProductsFile, $apiProductsFile);
         $found = false;
@@ -106,7 +128,9 @@ if ($method === 'POST' || $method === 'PUT') {
             if (($existing['id'] ?? '') === $incoming['id']) {
                 $merged = array_merge($existing, $incoming);
                 $merged['updatedAt'] = $now;
-                if ($vid === null && !array_key_exists('videoUrl', $incoming) && !empty($existing['videoUrl'])) {
+                if ($videoCleared) {
+                    unset($merged['videoUrl'], $merged['video'], $merged['videoURL'], $merged['_videoCleared']);
+                } elseif ($vid === null && !array_key_exists('videoUrl', $incoming) && !empty($existing['videoUrl'])) {
                     $merged['videoUrl'] = $existing['videoUrl'];
                 }
                 $products[$idx] = $merged;

@@ -255,7 +255,15 @@ async function saveProductsToIdb(products: Product[]): Promise<void> {
 
 export function __normVidUrl(u?: string): string {
   if (!u || typeof u !== 'string') return '';
-  let s = u.trim().replace(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?(\/.*)$/i, '$1');
+  let s = u.trim();
+  if (!s) return '';
+  s = s.replace(
+    /^https?:\/\/(?:www\.)?vidhyaajewellerystudio\.com(\/videos\/uploads\/[^\s?#]+(?:\?[^\s#]*)?)$/i,
+    '$1'
+  );
+  if (/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\/videos\/uploads\//i.test(s)) {
+    s = s.replace(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?(\/.*)$/i, '$1');
+  }
   if (/^videos\/uploads\//i.test(s)) s = '/' + s;
   return s;
 }
@@ -325,9 +333,16 @@ export function __mergeProductMedia(incoming: Product, fallback?: Product | null
         })
       : fallback?.variations || [];
 
-  const rawVid = __normVidUrl(
-    incoming.videoUrl || incAny.video || incAny.videoURL || fbAny?.videoUrl || ''
+  const incRawVid = __normVidUrl(
+    incoming.videoUrl || incAny.video || incAny.videoURL || ''
   );
+  const incVideoCleared = incAny._videoCleared === true && !incRawVid;
+  const fbVideoCleared = Boolean(fbAny && fbAny._videoCleared === true);
+  const rawVid = incRawVid
+    ? incRawVid
+    : incVideoCleared || fbVideoCleared
+      ? ''
+      : __normVidUrl(fbAny?.videoUrl || '');
 
   const out: Product = {
     ...incoming,
@@ -339,6 +354,13 @@ export function __mergeProductMedia(incoming: Product, fallback?: Product | null
         ? incoming.showInShoppingVideos
         : fallback?.showInShoppingVideos
   };
+
+  if (rawVid) {
+    delete out._videoCleared;
+  } else if (incVideoCleared || fbVideoCleared) {
+    out._videoCleared = true;
+    delete out.videoUrl;
+  }
 
   if (mergedImgs.length > 0) {
     delete out._strippedImg;
@@ -624,6 +646,9 @@ export function sanitizeProductForFirestore(product: Product): Product {
   if (nv) {
     cleanProduct.videoUrl = nv;
     cleanProduct.showInShoppingVideos = product.showInShoppingVideos !== false;
+  } else if ((product as any)._videoCleared === true) {
+    cleanProduct._videoCleared = true;
+    cleanProduct.showInShoppingVideos = false;
   }
   if (typeof product.showInShoppingVideos === 'boolean') {
     cleanProduct.showInShoppingVideos = product.showInShoppingVideos;
@@ -797,6 +822,7 @@ export async function fetchProducts(): Promise<Product[]> {
 
   // 3. Fetch server store products from /api/products (persisted in data/products.json)
   let apiSucceeded = false;
+  const serverProductIds = new Set<string>();
   try {
     if (typeof fetch !== 'undefined') {
       const resp = await fetch('/api/products', { cache: 'no-store' }).catch(() => null);
@@ -806,7 +832,25 @@ export async function fetchProducts(): Promise<Product[]> {
           apiSucceeded = true;
           json.forEach((sp: Product) => {
             if (isGenuineProduct(sp) && !deletedIds.has(sp.id)) {
-              catalogMap.set(sp.id, __mergeProductMedia(sp, catalogMap.get(sp.id)));
+              serverProductIds.add(sp.id);
+              const existing = catalogMap.get(sp.id);
+              const serverHasVideo = Boolean(__normVidUrl(sp.videoUrl || (sp as any).video || (sp as any).videoURL || ''));
+              const serverTime = getEffectiveCatalogSortTimestamp(sp);
+              const existingTime = existing ? getEffectiveCatalogSortTimestamp(existing) : 0;
+              // When the persistent server catalog explicitly removed a video (showInShoppingVideos === false
+              // or server record is newer/equal without videoUrl), do NOT resurrect stale IndexedDB/seed videoUrl.
+              const serverClearedVideo =
+                !serverHasVideo &&
+                (sp.showInShoppingVideos === false || (existing && serverTime >= existingTime));
+              const safeFallback =
+                serverClearedVideo && existing
+                  ? { ...existing, videoUrl: undefined, _videoCleared: true }
+                  : existing;
+              const merged = __mergeProductMedia(
+                serverClearedVideo ? { ...sp, _videoCleared: true } : sp,
+                safeFallback
+              );
+              catalogMap.set(sp.id, merged);
             }
           });
         }
@@ -826,7 +870,8 @@ export async function fetchProducts(): Promise<Product[]> {
         } else if (!cp._strippedImg) {
           const timeExisting = getEffectiveCatalogSortTimestamp(existing);
           const timeCached = getEffectiveCatalogSortTimestamp(cp);
-          if (timeCached > timeExisting || !apiSucceeded) {
+          // Only let local cache override when strictly newer than server, or when server API was unreachable
+          if (timeCached > timeExisting || (!apiSucceeded && !serverProductIds.has(cp.id))) {
             catalogMap.set(cp.id, __mergeProductMedia(cp, existing));
           }
         }

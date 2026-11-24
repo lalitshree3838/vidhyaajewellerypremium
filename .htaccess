@@ -86,6 +86,8 @@
   RewriteRule ^api/auth/mobile-register/?$ /api/auth/mobile.php?action=register [QSA,L]
   RewriteRule ^api/auth/mobile-login/?$ /api/auth/mobile.php?action=login [QSA,L]
   RewriteRule ^api/videos/available/?$ /api/videos/available.php [QSA,L]
+  RewriteRule ^api/videos/verify-url/?$ /api/videos/verify-url.php [QSA,L]
+  RewriteRule ^api/videos/upload/?$ /api/videos/upload.php [QSA,L]
   RewriteRule ^api/media/available/?$ /api/media/available.php [QSA,L]
   RewriteRule ^api/media/upload/?$ /api/media/upload.php [QSA,L]
 
@@ -115,7 +117,6 @@
   RewriteRule ^api/admin/test-sms/?$ /api/admin/sms-config.php?action=test [QSA,L]
   RewriteRule ^api/admin/whatsapp-status/?$ /api/admin/whatsapp-status.php [QSA,L]
   RewriteRule ^api/admin/test-whatsapp/?$ /api/admin/whatsapp-status.php?action=test [QSA,L]
-  RewriteRule ^api/videos/upload/?$ /api/videos/upload.php [QSA,L]
 
   # Media and asset files must never fall back to index.html (return 404 instead of HTML)
   RewriteCond %{REQUEST_URI} \.(mp4|webm|ogv|mov|jpg|jpeg|png|gif|webp|svg|ico|css|js|json|woff|woff2|ttf|eot)$ [NC]

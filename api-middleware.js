@@ -1,6 +1,9 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import https from 'node:https';
+import dns from 'node:dns';
+import net from 'node:net';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
@@ -80,6 +83,9 @@ const DIST_PRODUCTS_UPLOAD_MEDIA_DIR = path.join(DIST_PRODUCTS_MEDIA_DIR, 'uploa
 const CATEGORIES_MEDIA_DIR = path.resolve(__dirname, 'categories');
 const DIST_CATEGORIES_MEDIA_DIR = path.resolve(__dirname, 'dist', 'categories');
 const MAX_VIDEO_UPLOAD_BYTES = 250 * 1024 * 1024; // 250 MB
+const MAX_VIDEO_CHUNK_BYTES = 8 * 1024 * 1024; // 8 MB max per chunk (client sends 2 MB chunks)
+const MAX_VIDEO_TOTAL_CHUNKS = 200;
+const VIDEO_CHUNKS_ROOT = path.resolve(os.tmpdir(), 'vdh-video-chunks');
 const MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
 const DEFAULT_JSON_BODY_LIMIT_BYTES = 2 * 1024 * 1024; // 2 MB
 const PRODUCT_JSON_BODY_LIMIT_BYTES = 8 * 1024 * 1024; // 8 MB (supports inline image uploads)
@@ -852,6 +858,9 @@ export function handleApiMiddleware(req, res, next) {
       res.end('Not Found');
       return;
     }
+    if (/\.(?:mp4|mov|webm|m4v)$/i.test(pathname)) {
+      res.setHeader('Accept-Ranges', 'bytes');
+    }
     return next();
   }
 
@@ -1426,16 +1435,39 @@ export function handleApiMiddleware(req, res, next) {
             : (typeof incoming.video === 'string'
               ? incoming.video
               : (typeof incoming.videoURL === 'string' ? incoming.videoURL : ''));
-          let normalizedVideo = rawVideo.trim()
-            .replace(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?(\/.*)$/i, '$1');
+          const trimmedRawVideo = rawVideo.trim();
+          if (
+            trimmedRawVideo &&
+            /^https?:\/\//i.test(trimmedRawVideo) &&
+            /^https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|(?:[^/]+\.)?(?:ais-dev-[a-z0-9-]+\.run\.app|ais-pre-[a-z0-9-]+\.run\.app|run\.app|webcontainer\.io|stackblitz\.io|csb\.app))(?::\d+)?(?:\/|$)/i.test(trimmedRawVideo)
+          ) {
+            return sendJson(res, 400, {
+              success: false,
+              error: 'Preview or localhost video URLs cannot be saved as production video URLs.'
+            });
+          }
+
+          let normalizedVideo = trimmedRawVideo.replace(
+            /^https?:\/\/(?:www\.)?vidhyaajewellerystudio\.com(\/videos\/uploads\/[^\s?#]+(?:\?[^\s#]*)?)$/i,
+            '$1'
+          );
           if (/^videos\/uploads\//i.test(normalizedVideo)) {
             normalizedVideo = `/${normalizedVideo}`;
           }
+
+          const videoCleared = incoming._videoCleared === true && !normalizedVideo;
           if (normalizedVideo) {
             incoming.videoUrl = normalizedVideo;
+            delete incoming._videoCleared;
             if (typeof incoming.showInShoppingVideos !== 'boolean') {
               incoming.showInShoppingVideos = true;
             }
+          } else if (videoCleared) {
+            delete incoming.videoUrl;
+            delete incoming.video;
+            delete incoming.videoURL;
+            delete incoming._videoCleared;
+            incoming.showInShoppingVideos = false;
           }
 
           return await withResourceLock('products', async () => {
@@ -1444,6 +1476,12 @@ export function handleApiMiddleware(req, res, next) {
             let savedProduct;
             if (existingIdx >= 0) {
               savedProduct = { ...products[existingIdx], ...incoming, updatedAt: new Date().toISOString() };
+              if (videoCleared) {
+                delete savedProduct.videoUrl;
+                delete savedProduct.video;
+                delete savedProduct.videoURL;
+                delete savedProduct._videoCleared;
+              }
               products[existingIdx] = savedProduct;
             } else {
               savedProduct = { ...incoming, createdAt: incoming.createdAt || new Date().toISOString() };
@@ -2935,13 +2973,13 @@ export function handleApiMiddleware(req, res, next) {
         });
       }
 
-      // 12. Product & Category Video Upload: POST /api/videos/upload or /api/videos/upload.php
-      if ((pathname === '/api/videos/upload' || pathname === '/api/videos/upload.php') && req.method === 'POST') {
+      // 11b. Server-Side Video URL Verification: POST /api/videos/verify-url or /api/videos/verify-url.php
+      if ((pathname === '/api/videos/verify-url' || pathname === '/api/videos/verify-url.php') && req.method === 'POST') {
         const admin = await authenticateAdminRequest(req);
         if (!admin) {
           return sendJson(res, 401, {
             success: false,
-            error: 'Unauthorized: Administrator session token required for video uploads.'
+            error: 'Unauthorized: Administrator session required to verify video URLs.'
           });
         }
         const csrfCheck = verifyCsrfOriginForCookieRequest(req);
@@ -2949,6 +2987,760 @@ export function handleApiMiddleware(req, res, next) {
           return sendJson(res, 403, { success: false, error: csrfCheck.error });
         }
 
+        let bodyObj = null;
+        try {
+          const rawBuf = await readRawBody(req, 16 * 1024);
+          bodyObj = JSON.parse(rawBuf.toString('utf8'));
+        } catch {
+          return sendJson(res, 400, { success: false, valid: false, error: 'Invalid JSON request body.' });
+        }
+
+        const rawUrl = typeof bodyObj?.url === 'string' ? bodyObj.url.trim() : '';
+        if (!rawUrl || /\s/.test(rawUrl)) {
+          return sendJson(res, 200, {
+            success: true,
+            valid: false,
+            error: 'Please enter a valid video URL without spaces.'
+          });
+        }
+
+        const previewHostRe =
+          /(?:^|\.)(?:ais-dev-[a-z0-9-]+\.run\.app|ais-pre-[a-z0-9-]+\.run\.app|run\.app|webcontainer\.io|stackblitz\.io|csb\.app|ngrok(?:-free)?\.app|trycloudflare\.com|loca\.lt)$/i;
+        const localHostRe = /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|::1)$/i;
+
+        const detectVideoSig = (buf) => {
+          if (!Buffer.isBuffer(buf) || buf.length < 12) return null;
+          if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) {
+            return { ext: '.webm', mime: 'video/webm' };
+          }
+          const box = buf.subarray(4, 8).toString('ascii');
+          if (['ftyp', 'moov', 'mdat', 'wide', 'free'].includes(box)) {
+            const brand = buf.subarray(8, 12).toString('ascii').toLowerCase();
+            if (box === 'ftyp' && brand.startsWith('qt')) {
+              return { ext: '.mov', mime: 'video/quicktime' };
+            }
+            return { ext: '.mp4', mime: 'video/mp4' };
+          }
+          return null;
+        };
+
+        const isPrivateOrBlockedIp = (ip) => {
+          if (!ip || typeof ip !== 'string') return true;
+          const cleanIp = ip.trim().toLowerCase();
+          if (cleanIp.startsWith('::ffff:')) {
+            return isPrivateOrBlockedIp(cleanIp.slice(7));
+          }
+          const family = net.isIP(cleanIp);
+          if (family === 4) {
+            const parts = cleanIp.split('.').map(Number);
+            if (parts.length !== 4 || parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return true;
+            const [a, b] = parts;
+            if (a === 0 || a === 10 || a === 127) return true;
+            if (a === 169 && b === 254) return true; // link-local / cloud metadata
+            if (a === 172 && b >= 16 && b <= 31) return true;
+            if (a === 192 && b === 168) return true;
+            if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+            if (a >= 224) return true; // multicast / reserved
+            return false;
+          }
+          if (family === 6) {
+            if (cleanIp === '::' || cleanIp === '::1') return true;
+            if (cleanIp.startsWith('fc') || cleanIp.startsWith('fd')) return true; // unique local
+            if (/^fe[89ab]/i.test(cleanIp)) return true; // link-local
+            if (cleanIp.startsWith('ff')) return true; // multicast
+            return false;
+          }
+          return true;
+        };
+
+        const assertPublicHttpsUrl = async (targetUrlStr) => {
+          let u;
+          try {
+            u = new URL(targetUrlStr);
+          } catch {
+            return { ok: false, error: 'Malformed external video URL.' };
+          }
+          if (u.protocol !== 'https:') {
+            return { ok: false, error: 'External video URLs must use HTTPS.' };
+          }
+          if (u.username || u.password) {
+            return { ok: false, error: 'Video URLs with embedded credentials are not allowed.' };
+          }
+          const h = u.hostname.toLowerCase();
+          if (localHostRe.test(h) || previewHostRe.test(h)) {
+            return {
+              ok: false,
+              error: 'Preview, private, or localhost URLs cannot be saved as production videos.'
+            };
+          }
+          if (net.isIP(h)) {
+            if (isPrivateOrBlockedIp(h)) {
+              return { ok: false, error: 'Private or internal IP addresses are not allowed.' };
+            }
+            return { ok: true, parsed: u };
+          }
+          try {
+            const addrs = await dns.promises.lookup(h, { all: true });
+            if (!Array.isArray(addrs) || addrs.length === 0) {
+              return { ok: false, error: 'Video host could not be resolved.' };
+            }
+            for (const entry of addrs) {
+              if (isPrivateOrBlockedIp(entry.address)) {
+                return { ok: false, error: 'Video host resolves to a restricted private network address.' };
+              }
+            }
+          } catch {
+            return { ok: false, error: 'Could not resolve the video URL hostname.' };
+          }
+          return { ok: true, parsed: u };
+        };
+
+        const probeExternalHttps = (urlStr, method = 'HEAD', rangeHeader = '', depth = 0) =>
+          new Promise(async (resolve) => {
+            if (depth > 3) {
+              return resolve({ ok: false, error: 'Too many redirects while verifying video URL.' });
+            }
+            const check = await assertPublicHttpsUrl(urlStr);
+            if (!check.ok) return resolve({ ok: false, error: check.error });
+
+            const headers = {
+              'User-Agent': 'VidhyaaJewelleryVideoVerifier/1.0',
+              Accept: 'video/*,application/octet-stream,*/*;q=0.5'
+            };
+            if (rangeHeader) headers.Range = rangeHeader;
+
+            const reqOut = https.request(
+              check.parsed,
+              { method, headers, timeout: 6000 },
+              (resp) => {
+                const status = resp.statusCode || 0;
+                const loc = resp.headers.location;
+                if ([301, 302, 303, 307, 308].includes(status) && loc) {
+                  resp.resume();
+                  let nextUrl = '';
+                  try {
+                    nextUrl = new URL(loc, check.parsed).toString();
+                  } catch {
+                    return resolve({ ok: false, error: 'Invalid redirect URL returned by video host.' });
+                  }
+                  probeExternalHttps(nextUrl, method, rangeHeader, depth + 1).then(resolve);
+                  return;
+                }
+
+                const chunks = [];
+                let total = 0;
+                resp.on('data', (chunk) => {
+                  if (method === 'GET' && total < 64) {
+                    const remaining = 64 - total;
+                    chunks.push(chunk.subarray(0, remaining));
+                    total += Math.min(chunk.length, remaining);
+                    if (total >= 32) {
+                      resp.destroy();
+                    }
+                  }
+                });
+                const finalize = () => {
+                  resolve({
+                    ok: true,
+                    status,
+                    contentType: String(resp.headers['content-type'] || '').toLowerCase(),
+                    contentLength: Number(resp.headers['content-length'] || 0),
+                    sample: Buffer.concat(chunks)
+                  });
+                };
+                resp.on('end', finalize);
+                resp.on('close', finalize);
+              }
+            );
+            reqOut.on('timeout', () => {
+              reqOut.destroy();
+              resolve({ ok: false, error: 'Timed out connecting to external video host.' });
+            });
+            reqOut.on('error', () => {
+              resolve({ ok: false, error: 'Could not reach external video host.' });
+            });
+            reqOut.end();
+          });
+
+        // 1. Check Preview-only absolute URL rejection before any normalization
+        if (/^https?:\/\//i.test(rawUrl)) {
+          try {
+            const p = new URL(rawUrl);
+            const h = p.hostname.toLowerCase();
+            if (previewHostRe.test(h) || localHostRe.test(h)) {
+              return sendJson(res, 200, {
+                success: true,
+                valid: false,
+                error:
+                  'Preview or localhost URLs cannot be saved as production videos. Upload on the live website or enter a production video URL.'
+              });
+            }
+          } catch {
+            return sendJson(res, 200, {
+              success: true,
+              valid: false,
+              error: 'Invalid URL format.'
+            });
+          }
+        }
+
+        // 2. Normalize same-domain production /videos/uploads/ or relative path
+        let normalizedLocal = rawUrl;
+        const prodMatch = normalizedLocal.match(
+          /^https?:\/\/(?:www\.)?vidhyaajewellerystudio\.com(\/videos\/uploads\/[^\s?#]+(?:\?[^\s#]*)?)$/i
+        );
+        if (prodMatch && prodMatch[1]) {
+          normalizedLocal = prodMatch[1];
+        } else if (/^videos\/uploads\//i.test(normalizedLocal)) {
+          normalizedLocal = '/' + normalizedLocal;
+        }
+
+        if (normalizedLocal.startsWith('/videos/uploads/')) {
+          const cleanPathOnly = normalizedLocal.split(/[?#]/)[0];
+          const relFile = cleanPathOnly.replace(/^\/videos\/uploads\//i, '');
+          if (!relFile || relFile.includes('/') || relFile.includes('\\') || relFile.includes('..')) {
+            return sendJson(res, 200, {
+              success: true,
+              valid: false,
+              error: 'Invalid local video filename.'
+            });
+          }
+          const resolvedPath = path.resolve(VIDEOS_UPLOAD_DIR, relFile);
+          if (!resolvedPath.startsWith(VIDEOS_UPLOAD_DIR + path.sep) || !fs.existsSync(resolvedPath)) {
+            return sendJson(res, 200, {
+              success: true,
+              valid: false,
+              error: `Video file "${relFile}" was not found in /videos/uploads/ on this server.`
+            });
+          }
+          try {
+            const stat = fs.statSync(resolvedPath);
+            if (!stat.isFile() || stat.size < 16) {
+              return sendJson(res, 200, {
+                success: true,
+                valid: false,
+                error: 'Local video file is empty or corrupted.'
+              });
+            }
+            const fd = fs.openSync(resolvedPath, 'r');
+            const headerBuf = Buffer.alloc(16);
+            fs.readSync(fd, headerBuf, 0, 16, 0);
+            fs.closeSync(fd);
+            const sig = detectVideoSig(headerBuf);
+            if (!sig) {
+              return sendJson(res, 200, {
+                success: true,
+                valid: false,
+                error: 'File exists on server but is not a valid MP4, MOV, or WebM video stream.'
+              });
+            }
+            return sendJson(res, 200, {
+              success: true,
+              valid: true,
+              kind: 'direct',
+              normalizedUrl: `/videos/uploads/${relFile}`,
+              mimeType: sig.mime,
+              sizeBytes: stat.size
+            });
+          } catch {
+            return sendJson(res, 200, {
+              success: true,
+              valid: false,
+              error: 'Unable to read local video file on server.'
+            });
+          }
+        }
+
+        if (!/^https:\/\//i.test(rawUrl)) {
+          return sendJson(res, 200, {
+            success: true,
+            valid: false,
+            error: 'Video URL must start with https:// or /videos/uploads/.'
+          });
+        }
+
+        // 3. Supported official YouTube / Vimeo embed verification via fixed oEmbed endpoints
+        let parsedExt;
+        try {
+          parsedExt = new URL(rawUrl);
+        } catch {
+          return sendJson(res, 200, { success: true, valid: false, error: 'Malformed URL.' });
+        }
+        const extHost = parsedExt.hostname.toLowerCase();
+        const extParts = parsedExt.pathname.split('/').filter(Boolean);
+
+        const fetchOembedJson = (oembedUrl) =>
+          new Promise((resolve) => {
+            const reqOut = https.get(
+              oembedUrl,
+              { headers: { 'User-Agent': 'VidhyaaJewelleryVideoVerifier/1.0' }, timeout: 5500 },
+              (resp) => {
+                let body = '';
+                resp.on('data', (chunk) => {
+                  if (body.length < 16384) body += chunk.toString('utf8');
+                });
+                resp.on('end', () => resolve({ status: resp.statusCode || 0, body }));
+              }
+            );
+            reqOut.on('timeout', () => {
+              reqOut.destroy();
+              resolve({ status: 0, body: '' });
+            });
+            reqOut.on('error', () => resolve({ status: 0, body: '' }));
+          });
+
+        if (
+          ['youtu.be', 'youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtube-nocookie.com', 'www.youtube-nocookie.com'].includes(extHost)
+        ) {
+          let ytId = '';
+          if (extHost === 'youtu.be' && extParts[0]) ytId = extParts[0];
+          else if (extParts[0] === 'watch') ytId = parsedExt.searchParams.get('v') || '';
+          else if (['shorts', 'embed', 'live'].includes(extParts[0]) && extParts[1]) ytId = extParts[1];
+          if (!/^[A-Za-z0-9_-]{11}$/.test(ytId)) {
+            return sendJson(res, 200, {
+              success: true,
+              valid: false,
+              error: 'Invalid YouTube video URL. Please paste a direct video link (e.g. https://youtu.be/VIDEO_ID).'
+            });
+          }
+          const canonicalYt = `https://www.youtube.com/watch?v=${ytId}`;
+          const oembed = await fetchOembedJson(
+            `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(canonicalYt)}`
+          );
+          if (oembed.status >= 400) {
+            return sendJson(res, 200, {
+              success: true,
+              valid: false,
+              error: `YouTube video is unavailable, private, or embedding is disabled (HTTP ${oembed.status}).`
+            });
+          }
+          return sendJson(res, 200, {
+            success: true,
+            valid: true,
+            kind: 'embed',
+            provider: 'youtube',
+            normalizedUrl: canonicalYt
+          });
+        }
+
+        if (['vimeo.com', 'www.vimeo.com', 'player.vimeo.com'].includes(extHost)) {
+          let vimeoId = '';
+          if (extHost === 'player.vimeo.com' && extParts[0] === 'video' && extParts[1]) vimeoId = extParts[1];
+          else if (extParts.length >= 1) {
+            const last = extParts[extParts.length - 1];
+            if (/^\d{4,15}$/.test(last)) vimeoId = last;
+            else if (extParts[0] === 'video' && extParts[1] && /^\d{4,15}$/.test(extParts[1])) vimeoId = extParts[1];
+          }
+          if (!/^\d{4,15}$/.test(vimeoId)) {
+            return sendJson(res, 200, {
+              success: true,
+              valid: false,
+              error: 'Invalid Vimeo video URL. Please paste a direct Vimeo video link (e.g. https://vimeo.com/123456789).'
+            });
+          }
+          const canonicalVimeo = `https://vimeo.com/${vimeoId}`;
+          const oembed = await fetchOembedJson(
+            `https://vimeo.com/api/oembed.json?url=${encodeURIComponent(canonicalVimeo)}`
+          );
+          if (oembed.status >= 400) {
+            return sendJson(res, 200, {
+              success: true,
+              valid: false,
+              error: `Vimeo video is unavailable, private, or embedding is disabled (HTTP ${oembed.status}).`
+            });
+          }
+          return sendJson(res, 200, {
+            success: true,
+            valid: true,
+            kind: 'embed',
+            provider: 'vimeo',
+            normalizedUrl: canonicalVimeo
+          });
+        }
+
+        // 4. External direct HTTPS video stream probe (HEAD + fallback partial Range GET)
+        const headProbe = await probeExternalHttps(rawUrl, 'HEAD');
+        if (!headProbe.ok) {
+          return sendJson(res, 200, { success: true, valid: false, error: headProbe.error });
+        }
+
+        let probe = headProbe;
+        const needsPartialGet =
+          probe.status === 405 ||
+          probe.status === 403 ||
+          !probe.contentType ||
+          probe.contentType.includes('application/octet-stream') ||
+          probe.contentType.includes('binary/octet-stream');
+
+        if (needsPartialGet) {
+          const getProbe = await probeExternalHttps(rawUrl, 'GET', 'bytes=0-31');
+          if (getProbe.ok) {
+            probe = getProbe;
+          }
+        }
+
+        if (probe.status !== 200 && probe.status !== 206) {
+          return sendJson(res, 200, {
+            success: true,
+            valid: false,
+            error: `Video URL returned HTTP ${probe.status}. Ensure the link is publicly accessible.`
+          });
+        }
+
+        const ct = probe.contentType || '';
+        if (
+          ct.includes('text/html') ||
+          ct.includes('application/xhtml') ||
+          ct.includes('application/json') ||
+          ct.includes('text/plain') ||
+          ct.startsWith('image/')
+        ) {
+          return sendJson(res, 200, {
+            success: true,
+            valid: false,
+            error: `URL returned "${ct.split(';')[0]}" instead of a video stream. Paste a direct .mp4/.webm/.mov link or upload the video directly.`
+          });
+        }
+
+        const isVideoMime = ct.startsWith('video/');
+        const sigFromSample = probe.sample && probe.sample.length >= 12 ? detectVideoSig(probe.sample) : null;
+
+        if (!isVideoMime && !sigFromSample) {
+          return sendJson(res, 200, {
+            success: true,
+            valid: false,
+            error: `URL did not return a playable video Content-Type (received "${ct ? ct.split(';')[0] : 'unknown'}").`
+          });
+        }
+
+        return sendJson(res, 200, {
+          success: true,
+          valid: true,
+          kind: 'direct',
+          normalizedUrl: rawUrl,
+          mimeType: isVideoMime ? ct.split(';')[0] : sigFromSample?.mime || 'video/mp4'
+        });
+      }
+
+      // 12. Product & Category Video Upload: POST /api/videos/upload or /api/videos/upload.php
+      // Supports both single-shot uploads and chunked uploads (?chunked=1&uploadId=...&chunkIndex=...&totalChunks=...)
+      if ((pathname === '/api/videos/upload' || pathname === '/api/videos/upload.php') && req.method === 'POST') {
+        const drainAndSendJson = async (statusCode, payload) => {
+          // Safely drain small unread request bodies before responding so HTTP/1.1 proxies
+          // (such as Cloud Run) do not emit TCP RST -> browser "Network error" instead of the JSON error.
+          try {
+            if (!req.readableEnded && !req.destroyed) {
+              await new Promise((resolve) => {
+                let drained = 0;
+                const maxDrain = 2 * 1024 * 1024;
+                const finish = () => {
+                  clearTimeout(timer);
+                  req.removeListener('data', onData);
+                  req.removeListener('end', finish);
+                  req.removeListener('error', finish);
+                  req.removeListener('close', finish);
+                  resolve();
+                };
+                const onData = (chunk) => {
+                  drained += chunk.length;
+                  if (drained >= maxDrain) {
+                    req.pause();
+                    finish();
+                  }
+                };
+                const timer = setTimeout(finish, 1200);
+                req.on('data', onData);
+                req.on('end', finish);
+                req.on('error', finish);
+                req.on('close', finish);
+                req.resume();
+              });
+            }
+          } catch {
+            // ignore drain errors
+          }
+          const extraHeaders = !req.readableEnded ? { Connection: 'close' } : {};
+          return sendJson(res, statusCode, payload, req, extraHeaders);
+        };
+
+        const admin = await authenticateAdminRequest(req);
+        if (!admin) {
+          return await drainAndSendJson(401, {
+            success: false,
+            error: 'Unauthorized: Administrator session token required for video uploads.'
+          });
+        }
+        const csrfCheck = verifyCsrfOriginForCookieRequest(req);
+        if (!csrfCheck.ok) {
+          return await drainAndSendJson(403, { success: false, error: csrfCheck.error });
+        }
+
+        const detectVideoMagic = (buf) => {
+          if (!Buffer.isBuffer(buf) || buf.length < 12) return null;
+          if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) {
+            return { ext: '.webm', mime: 'video/webm' };
+          }
+          const box = buf.subarray(4, 8).toString('ascii');
+          if (['ftyp', 'moov', 'mdat', 'wide', 'free'].includes(box)) {
+            const brand = buf.subarray(8, 12).toString('ascii').toLowerCase();
+            if (box === 'ftyp' && brand.startsWith('qt')) {
+              return { ext: '.mov', mime: 'video/quicktime' };
+            }
+            return { ext: '.mp4', mime: 'video/mp4' };
+          }
+          return null;
+        };
+
+        const buildFinalFileName = (rawName, videoMagic) => {
+          const allowedExts = ['.mp4', '.mov', '.webm'];
+          const extMatch = /\.([a-z0-9]+)$/i.exec(rawName || '');
+          let ext = extMatch ? `.${extMatch[1].toLowerCase()}` : '';
+          if (!allowedExts.includes(ext)) {
+            ext = videoMagic.ext;
+          } else if (videoMagic.ext === '.webm') {
+            ext = '.webm';
+          } else if (ext === '.webm' && videoMagic.ext !== '.webm') {
+            ext = videoMagic.ext;
+          }
+          const baseName = path.basename(rawName || '', path.extname(rawName || ''))
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '_')
+            .replace(/^_+|_+$/g, '')
+            .slice(0, 60) || 'vidhyaa_jewellery_video';
+          const uniqueSuffix = `${Date.now()}_${crypto.randomBytes(2).toString('hex')}`;
+          return `${baseName}_${uniqueSuffix}${ext}`;
+        };
+
+        const mirrorVideoToDist = (srcPath, finalFileName) => {
+          if (fs.existsSync(path.resolve(__dirname, 'dist'))) {
+            try {
+              fs.mkdirSync(DIST_VIDEOS_UPLOAD_DIR, { recursive: true });
+              fs.copyFileSync(srcPath, path.join(DIST_VIDEOS_UPLOAD_DIR, finalFileName));
+            } catch (mirrorErr) {
+              console.warn('[Video Upload] Notice mirroring to dist:', mirrorErr.message);
+            }
+          }
+        };
+
+        const cleanupStaleChunkDirs = () => {
+          try {
+            if (!fs.existsSync(VIDEO_CHUNKS_ROOT)) return;
+            const cutoff = Date.now() - 30 * 60 * 1000;
+            for (const entry of fs.readdirSync(VIDEO_CHUNKS_ROOT, { withFileTypes: true })) {
+              if (!entry.isDirectory()) continue;
+              const full = path.resolve(VIDEO_CHUNKS_ROOT, entry.name);
+              if (!full.startsWith(VIDEO_CHUNKS_ROOT + path.sep)) continue;
+              try {
+                const st = fs.statSync(full);
+                if (st.mtimeMs < cutoff) {
+                  fs.rmSync(full, { recursive: true, force: true });
+                }
+              } catch {
+                // ignore individual cleanup errors
+              }
+            }
+          } catch {
+            // ignore cleanup errors
+          }
+        };
+
+        const isChunked = parsedUrl.searchParams.get('chunked') === '1';
+
+        if (isChunked) {
+          const uploadId = String(parsedUrl.searchParams.get('uploadId') || '').trim();
+          const chunkIndex = Number(parsedUrl.searchParams.get('chunkIndex'));
+          const totalChunks = Number(parsedUrl.searchParams.get('totalChunks'));
+          const queryFileName = String(parsedUrl.searchParams.get('fileName') || '').trim();
+
+          if (!/^[a-zA-Z0-9_-]{8,64}$/.test(uploadId)) {
+            return await drainAndSendJson(400, {
+              success: false,
+              error: 'Invalid chunk upload identifier.'
+            });
+          }
+          if (
+            !Number.isInteger(totalChunks) ||
+            totalChunks < 1 ||
+            totalChunks > MAX_VIDEO_TOTAL_CHUNKS ||
+            !Number.isInteger(chunkIndex) ||
+            chunkIndex < 0 ||
+            chunkIndex >= totalChunks
+          ) {
+            return await drainAndSendJson(400, {
+              success: false,
+              error: 'Invalid chunk index or chunk count.'
+            });
+          }
+
+          let rawChunkBuffer;
+          try {
+            rawChunkBuffer = await readRawBody(req, MAX_VIDEO_CHUNK_BYTES);
+          } catch (err) {
+            return sendJson(res, err?.statusCode || 400, {
+              success: false,
+              error: err?.message || 'Failed to read uploaded video chunk.'
+            });
+          }
+
+          if (!rawChunkBuffer || rawChunkBuffer.length === 0) {
+            return sendJson(res, 400, {
+              success: false,
+              error: 'Empty video chunk received.'
+            });
+          }
+
+          const contentType = String(req.headers['content-type'] || '').toLowerCase();
+          let chunkData = rawChunkBuffer;
+          let originalName = queryFileName;
+
+          if (contentType.includes('multipart/form-data')) {
+            const parsed = parseMultipartVideo(rawChunkBuffer, String(req.headers['content-type'] || ''));
+            if (!parsed || !parsed.data || parsed.data.length === 0) {
+              return sendJson(res, 400, {
+                success: false,
+                error: 'No video chunk field found in multipart/form-data upload.'
+              });
+            }
+            chunkData = parsed.data;
+            if (!originalName) originalName = parsed.fileName;
+          }
+
+          if (!originalName) {
+            const headerName = req.headers['x-file-name'] ? decodeURIComponent(String(req.headers['x-file-name'])) : '';
+            originalName = headerName || `vidhyaa_video_${Date.now()}.mp4`;
+          }
+
+          fs.mkdirSync(VIDEO_CHUNKS_ROOT, { recursive: true });
+          if (chunkIndex === 0) {
+            cleanupStaleChunkDirs();
+          }
+
+          const chunkDir = path.resolve(VIDEO_CHUNKS_ROOT, uploadId);
+          if (!chunkDir.startsWith(VIDEO_CHUNKS_ROOT + path.sep)) {
+            return sendJson(res, 400, {
+              success: false,
+              error: 'Invalid chunk storage path.'
+            });
+          }
+
+          // Validate binary video magic bytes immediately on chunk 0
+          if (chunkIndex === 0) {
+            const headMagic = detectVideoMagic(chunkData);
+            if (!headMagic) {
+              try { fs.rmSync(chunkDir, { recursive: true, force: true }); } catch {}
+              return sendJson(res, 400, {
+                success: false,
+                error: 'Unsupported or invalid video file. Only genuine MP4, MOV, and WebM videos are allowed.'
+              });
+            }
+          }
+
+          fs.mkdirSync(chunkDir, { recursive: true });
+          const chunkFilePath = path.resolve(chunkDir, `chunk_${String(chunkIndex).padStart(5, '0')}.part`);
+          if (!chunkFilePath.startsWith(chunkDir + path.sep)) {
+            return sendJson(res, 400, {
+              success: false,
+              error: 'Invalid chunk file path.'
+            });
+          }
+          fs.writeFileSync(chunkFilePath, chunkData);
+
+          if (chunkIndex < totalChunks - 1) {
+            return sendJson(res, 200, {
+              success: true,
+              chunked: true,
+              uploadId,
+              receivedChunk: chunkIndex,
+              totalChunks
+            });
+          }
+
+          // Final chunk received: verify all chunks exist, enforce total size cap, and assemble
+          let assembledBytes = 0;
+          const orderedChunkPaths = [];
+          for (let i = 0; i < totalChunks; i++) {
+            const p = path.resolve(chunkDir, `chunk_${String(i).padStart(5, '0')}.part`);
+            if (!p.startsWith(chunkDir + path.sep) || !fs.existsSync(p)) {
+              try { fs.rmSync(chunkDir, { recursive: true, force: true }); } catch {}
+              return sendJson(res, 400, {
+                success: false,
+                error: `Missing video upload chunk ${i + 1} of ${totalChunks}. Please retry upload.`
+              });
+            }
+            const st = fs.statSync(p);
+            assembledBytes += st.size;
+            if (assembledBytes > MAX_VIDEO_UPLOAD_BYTES) {
+              try { fs.rmSync(chunkDir, { recursive: true, force: true }); } catch {}
+              return sendJson(res, 413, {
+                success: false,
+                error: 'File size exceeds maximum allowed limit of 250 MB.'
+              });
+            }
+            orderedChunkPaths.push(p);
+          }
+
+          // Re-verify magic bytes from chunk 0 before writing to persistent videos/uploads
+          const firstChunkFd = fs.openSync(orderedChunkPaths[0], 'r');
+          const headSample = Buffer.alloc(32);
+          let headRead = 0;
+          try {
+            headRead = fs.readSync(firstChunkFd, headSample, 0, 32, 0);
+          } finally {
+            fs.closeSync(firstChunkFd);
+          }
+          const finalMagic = detectVideoMagic(headSample.subarray(0, headRead));
+          if (!finalMagic) {
+            try { fs.rmSync(chunkDir, { recursive: true, force: true }); } catch {}
+            return sendJson(res, 400, {
+              success: false,
+              error: 'Unsupported or invalid video file. Only genuine MP4, MOV, and WebM videos are allowed.'
+            });
+          }
+
+          const finalFileName = buildFinalFileName(originalName, finalMagic);
+          fs.mkdirSync(VIDEOS_UPLOAD_DIR, { recursive: true });
+          const destPath = path.resolve(VIDEOS_UPLOAD_DIR, finalFileName);
+          if (!destPath.startsWith(VIDEOS_UPLOAD_DIR + path.sep)) {
+            try { fs.rmSync(chunkDir, { recursive: true, force: true }); } catch {}
+            return sendJson(res, 400, { success: false, error: 'Invalid target filename.' });
+          }
+
+          const outFd = fs.openSync(destPath, 'w');
+          try {
+            for (const partPath of orderedChunkPaths) {
+              const partBuf = fs.readFileSync(partPath);
+              fs.writeSync(outFd, partBuf);
+            }
+          } catch (writeErr) {
+            try { fs.closeSync(outFd); } catch {}
+            try { fs.unlinkSync(destPath); } catch {}
+            try { fs.rmSync(chunkDir, { recursive: true, force: true }); } catch {}
+            return sendJson(res, 500, {
+              success: false,
+              error: `Failed to assemble uploaded video: ${writeErr?.message || 'disk write error'}`
+            });
+          }
+          fs.closeSync(outFd);
+
+          try { fs.rmSync(chunkDir, { recursive: true, force: true }); } catch {}
+          mirrorVideoToDist(destPath, finalFileName);
+
+          const publicUrl = `/videos/uploads/${finalFileName}`;
+          console.log(`[Video Upload] Assembled ${finalFileName} (${assembledBytes} bytes across ${totalChunks} chunks) -> ${publicUrl}`);
+
+          return sendJson(res, 200, {
+            success: true,
+            url: publicUrl,
+            videoUrl: publicUrl,
+            fileName: finalFileName,
+            originalName,
+            sizeBytes: assembledBytes,
+            mimeType: finalMagic.mime,
+            storageType: 'server'
+          });
+        }
+
+        // Single-shot upload mode (files <= 2 MB or direct API uploaders)
         let rawBuffer;
         try {
           rawBuffer = await readRawBody(req, MAX_VIDEO_UPLOAD_BYTES);
@@ -2989,22 +3781,6 @@ export function handleApiMiddleware(req, res, next) {
           fileData = rawBuffer;
         }
 
-        const detectVideoMagic = (buf) => {
-          if (!Buffer.isBuffer(buf) || buf.length < 12) return null;
-          if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) {
-            return { ext: '.webm', mime: 'video/webm' };
-          }
-          const box = buf.subarray(4, 8).toString('ascii');
-          if (['ftyp', 'moov', 'mdat', 'wide', 'free'].includes(box)) {
-            const brand = buf.subarray(8, 12).toString('ascii').toLowerCase();
-            if (box === 'ftyp' && brand.startsWith('qt')) {
-              return { ext: '.mov', mime: 'video/quicktime' };
-            }
-            return { ext: '.mp4', mime: 'video/mp4' };
-          }
-          return null;
-        };
-
         const videoMagic = detectVideoMagic(fileData);
         if (!videoMagic) {
           return sendJson(res, 400, {
@@ -3013,39 +3789,16 @@ export function handleApiMiddleware(req, res, next) {
           });
         }
 
-        const allowedExts = ['.mp4', '.mov', '.webm'];
-        const extMatch = /\.([a-z0-9]+)$/i.exec(originalName);
-        let ext = extMatch ? `.${extMatch[1].toLowerCase()}` : '';
-        if (!allowedExts.includes(ext)) {
-          ext = videoMagic.ext;
-        } else if (videoMagic.ext === '.webm') {
-          ext = '.webm';
-        } else if (ext === '.webm' && videoMagic.ext !== '.webm') {
-          ext = videoMagic.ext;
-        }
         mimeType = videoMagic.mime;
-
-        const baseName = path.basename(originalName, path.extname(originalName))
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '_')
-          .replace(/^_+|_+$/g, '')
-          .slice(0, 60) || 'vidhyaa_jewellery_video';
-
-        const uniqueSuffix = `${Date.now()}_${crypto.randomBytes(2).toString('hex')}`;
-        const finalFileName = `${baseName}_${uniqueSuffix}${ext}`;
+        const finalFileName = buildFinalFileName(originalName, videoMagic);
 
         fs.mkdirSync(VIDEOS_UPLOAD_DIR, { recursive: true });
-        const destPath = path.join(VIDEOS_UPLOAD_DIR, finalFileName);
-        fs.writeFileSync(destPath, fileData);
-
-        if (fs.existsSync(path.resolve(__dirname, 'dist'))) {
-          try {
-            fs.mkdirSync(DIST_VIDEOS_UPLOAD_DIR, { recursive: true });
-            fs.writeFileSync(path.join(DIST_VIDEOS_UPLOAD_DIR, finalFileName), fileData);
-          } catch (mirrorErr) {
-            console.warn('[Video Upload] Notice mirroring to dist:', mirrorErr.message);
-          }
+        const destPath = path.resolve(VIDEOS_UPLOAD_DIR, finalFileName);
+        if (!destPath.startsWith(VIDEOS_UPLOAD_DIR + path.sep)) {
+          return sendJson(res, 400, { success: false, error: 'Invalid target filename.' });
         }
+        fs.writeFileSync(destPath, fileData);
+        mirrorVideoToDist(destPath, finalFileName);
 
         const publicUrl = `/videos/uploads/${finalFileName}`;
         console.log(`[Video Upload] Saved ${finalFileName} (${fileData.length} bytes) -> ${publicUrl}`);

@@ -10,7 +10,7 @@ import React, {
   useCallback
 } from 'react';
 import { Play } from 'lucide-react';
-import { normalizeVideoUrl } from '../lib/videoFallback';
+import { getOfficialVideoEmbedUrl, normalizeVideoUrl } from '../lib/videoFallback';
 
 export interface SeamlessLoopVideoHandle {
   play: () => Promise<void>;
@@ -491,6 +491,35 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
       }
     };
 
+    const officialEmbedUrl = useMemo(
+      () =>
+        getOfficialVideoEmbedUrl(activeSrc, {
+          muted: isMuted,
+          controls,
+          autoplay: autoPlay && isVisibleInViewport
+        }),
+      [activeSrc, isMuted, controls, autoPlay, isVisibleInViewport]
+    );
+
+    if (officialEmbedUrl) {
+      return (
+        <div
+          ref={containerRef}
+          className="relative w-full h-full flex items-center justify-center overflow-hidden bg-black"
+          style={style}
+        >
+          <iframe
+            src={officialEmbedUrl}
+            title={title || 'Product jewellery showcase'}
+            className={`${className} w-full h-full border-0`}
+            style={{ width: '100%', height: '100%', border: 0, ...style }}
+            allow="autoplay; fullscreen; picture-in-picture"
+            allowFullScreen
+          />
+        </div>
+      );
+    }
+
     return (
       <div
         ref={containerRef}
@@ -508,7 +537,7 @@ export const SeamlessLoopVideo = forwardRef<SeamlessLoopVideoHandle, SeamlessLoo
           loop
           playsInline
           webkit-playsinline="true"
-          preload="metadata"
+          preload={isVisibleInViewport ? 'auto' : 'metadata'}
           onEnded={handleEnded}
           onError={handleVideoError}
           onLoadedMetadata={(ev) => {

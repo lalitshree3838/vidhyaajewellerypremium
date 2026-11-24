@@ -84,6 +84,7 @@ import {
   uploadMultipleProductImages,
   useAvailableMediaInventory
 } from '../lib/storageService';
+import { validateDirectPlayableVideoUrl } from '../lib/videoFallback';
 
 interface AdminViewProps {
   products: Product[];
@@ -529,6 +530,20 @@ export const AdminView: React.FC<AdminViewProps> = ({
       return;
     }
 
+    // 4b. Validate Product Video URL (if present)
+    let normalizedVideoUrl: string | undefined = undefined;
+    if (editingProduct.videoUrl && editingProduct.videoUrl.trim()) {
+      const videoCheck = validateDirectPlayableVideoUrl(editingProduct.videoUrl);
+      if (!videoCheck.valid) {
+        setSaveProductError(
+          videoCheck.error ||
+            'Invalid product video URL. Only direct playable MP4, WebM, or MOV video URLs are allowed.'
+        );
+        return;
+      }
+      normalizedVideoUrl = videoCheck.normalizedUrl;
+    }
+
     setSavingProduct(true);
     try {
       let productImages = [...(editingProduct.images || [])];
@@ -596,10 +611,16 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
       const hadRemovedAllImages =
         productImages.length === 0 && Boolean((editingProduct as any)._imagesCleared);
+      const hadRemovedVideo =
+        !normalizedVideoUrl && Boolean((editingProduct as any)._videoCleared);
 
       const updated: Product = {
         ...editingProduct,
         images: productImages,
+        videoUrl: normalizedVideoUrl,
+        showInShoppingVideos: hadRemovedVideo
+          ? false
+          : editingProduct.showInShoppingVideos,
         name: editingProduct.name.trim(),
         slug: (editingProduct.slug || editingProduct.name)
           .toLowerCase()
@@ -616,6 +637,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
         published: isItemActive,
         _strippedImg: undefined,
         _imagesCleared: hadRemovedAllImages ? true : undefined,
+        _videoCleared: hadRemovedVideo ? true : undefined,
         updatedAt: new Date().toISOString()
       };
 
@@ -3598,10 +3620,20 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 <VideoDropzoneUploader
                   currentVideoUrl={editingProduct.videoUrl}
                   onVideoUploaded={(res) => {
-                    setEditingProduct({ ...editingProduct, videoUrl: res.url, showInShoppingVideos: true });
+                    setEditingProduct({
+                      ...editingProduct,
+                      videoUrl: res.url,
+                      showInShoppingVideos: true,
+                      _videoCleared: undefined
+                    });
                   }}
                   onClearVideo={() => {
-                    setEditingProduct({ ...editingProduct, videoUrl: undefined });
+                    setEditingProduct({
+                      ...editingProduct,
+                      videoUrl: undefined,
+                      showInShoppingVideos: false,
+                      _videoCleared: true
+                    });
                   }}
                 />
 

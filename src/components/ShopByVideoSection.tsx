@@ -11,7 +11,8 @@ import {
   Sparkles,
   ArrowRight,
   Check,
-  Star
+  Star,
+  RotateCcw
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Product, ProductVariation } from '../types';
@@ -24,6 +25,7 @@ import {
 import { calculateDiscountPercent, formatPrice } from '../lib/priceUtils';
 import {
   normalizeVideoUrl,
+  getOfficialVideoEmbedUrl,
   getProductVideoCandidates,
   fetchAvailableVideoInventory,
   resolveCandidatesWithInventory,
@@ -73,6 +75,7 @@ interface ReelCardVideoProps {
   isMuted?: boolean;
   carouselRootRef?: React.RefObject<HTMLDivElement | null>;
   onDurationReady?: (formatted: string) => void;
+  onRequestInventoryRefresh?: () => void;
 }
 
 const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
@@ -82,7 +85,8 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
   title,
   isMuted = true,
   carouselRootRef,
-  onDurationReady
+  onDurationReady,
+  onRequestInventoryRefresh
 }) => {
   const sourceCandidates = useMemo(() => {
     const list: string[] = [];
@@ -99,6 +103,7 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
 
   const candidatesKey = sourceCandidates.join('|');
   const [sourceIdx, setSourceIdx] = useState<number>(0);
+  const [retryNonce, setRetryNonce] = useState<number>(0);
   const cleanSrc = sourceCandidates[sourceIdx] || '';
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -107,22 +112,57 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
   const hasErrRef = useRef<boolean>(false);
   const userPausedRef = useRef<boolean>(false);
   const playInFlightRef = useRef<boolean>(false);
+  const retryQueuedRef = useRef<boolean>(false);
+  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const networkRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const networkRetryCountRef = useRef<number>(0);
+  const isMutedRef = useRef<boolean>(isMuted);
+  const inViewRef = useRef<boolean>(true);
   const viewportVisibleRef = useRef<boolean>(true);
   const carouselVisibleRef = useRef<boolean>(true);
 
   const [hasErr, setHasErr] = useState(false);
+  const [errorKind, setErrorKind] = useState<'network' | 'unavailable'>('unavailable');
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [userPaused, setUserPaused] = useState(false);
   const [playing, setPlaying] = useState(false);
+  const [hasRenderedFrame, setHasRenderedFrame] = useState(false);
   const [inView, setInView] = useState(true);
 
-  const validFallback =
+  isMutedRef.current = isMuted;
+
+  const clearRecoveryTimers = useCallback(() => {
+    if (stallTimerRef.current) {
+      clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
+    }
+    if (networkRetryTimerRef.current) {
+      clearTimeout(networkRetryTimerRef.current);
+      networkRetryTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearRecoveryTimers, [clearRecoveryTimers]);
+
+  const officialEmbedUrl = useMemo(
+    () =>
+      getOfficialVideoEmbedUrl(cleanSrc, {
+        muted: isMuted,
+        controls: false,
+        autoplay: inView
+      }),
+    [cleanSrc, isMuted, inView]
+  );
+
+  const validRasterPoster =
     fallbackImage &&
     typeof fallbackImage === 'string' &&
     fallbackImage.trim() &&
     !fallbackImage.startsWith('data:image/svg+xml')
       ? fallbackImage
       : '';
+  // Always provide a branded jewellery poster fallback instead of a black screen
+  const displayPoster = validRasterPoster || JEWELLERY_PLACEHOLDER_IMAGE;
 
   const syncMuteAttrs = useCallback((el: HTMLVideoElement, mutedState: boolean) => {
     el.muted = mutedState;
@@ -138,14 +178,35 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
     el.setAttribute('webkit-playsinline', 'true');
   }, []);
 
+  // Synchronous callback ref ensures muted/defaultMuted/playsInline exist before browser autoplay evaluation
+  const setVideoElRef = useCallback(
+    (el: HTMLVideoElement | null) => {
+      videoRef.current = el;
+      if (el) {
+        syncMuteAttrs(el, isMutedRef.current);
+      }
+    },
+    [syncMuteAttrs]
+  );
+
   const tryPlay = useCallback(async () => {
     const el = videoRef.current;
     if (!el || !cleanSrc || hasErrRef.current || userPausedRef.current || el.error) return;
-    if (!el.paused || playInFlightRef.current) return;
+    if (!el.paused) {
+      setPlaying(true);
+      setHasErr(false);
+      setAutoplayBlocked(false);
+      return;
+    }
+    if (playInFlightRef.current) {
+      retryQueuedRef.current = true;
+      return;
+    }
 
     playInFlightRef.current = true;
+    retryQueuedRef.current = false;
     try {
-      syncMuteAttrs(el, isMuted);
+      syncMuteAttrs(el, isMutedRef.current);
       const p = el.play();
       if (p !== undefined) {
         await p;
@@ -173,7 +234,10 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
         }
         setPlaying(false);
         setAutoplayBlocked(true);
-      } else if (err?.name !== 'AbortError') {
+      } else if (err?.name === 'AbortError') {
+        // Queue a clean retry once media settles instead of dropping silently
+        retryQueuedRef.current = true;
+      } else {
         console.warn('[ShopByVideoSection] Video autoplay attempt rejected:', {
           title,
           videoUrl: cleanSrc,
@@ -183,8 +247,26 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
       }
     } finally {
       playInFlightRef.current = false;
+      if (
+        retryQueuedRef.current &&
+        inViewRef.current &&
+        !userPausedRef.current &&
+        !hasErrRef.current &&
+        videoRef.current &&
+        videoRef.current.paused &&
+        !videoRef.current.error &&
+        videoRef.current.readyState >= 2
+      ) {
+        retryQueuedRef.current = false;
+        setTimeout(() => {
+          const cur = videoRef.current;
+          if (cur && cur.paused && inViewRef.current && !userPausedRef.current && !hasErrRef.current) {
+            tryPlay();
+          }
+        }, 60);
+      }
     }
-  }, [isMuted, cleanSrc, title, syncMuteAttrs]);
+  }, [cleanSrc, title, syncMuteAttrs]);
 
   const handleTogglePlayPause = useCallback(
     async (ev: React.MouseEvent) => {
@@ -213,7 +295,7 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
         } catch {}
       }
 
-      syncMuteAttrs(el, isMuted);
+      syncMuteAttrs(el, isMutedRef.current);
       try {
         const playPromise = el.play();
         if (playPromise !== undefined) {
@@ -245,7 +327,71 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
         }
       }
     },
-    [cleanSrc, isMuted, syncMuteAttrs]
+    [cleanSrc, syncMuteAttrs]
+  );
+
+  // Explicit user-gesture Tap to Retry control when a stream previously failed
+  const handleRetryPlayback = useCallback(
+    async (ev: React.MouseEvent) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+
+      if (onRequestInventoryRefresh) {
+        onRequestInventoryRefresh();
+      }
+
+      clearRecoveryTimers();
+      hasErrRef.current = false;
+      userPausedRef.current = false;
+      playInFlightRef.current = false;
+      retryQueuedRef.current = false;
+      networkRetryCountRef.current = 0;
+      setHasErr(false);
+      setErrorKind('unavailable');
+      setUserPaused(false);
+      setAutoplayBlocked(false);
+      setPlaying(false);
+      setHasRenderedFrame(false);
+      setSourceIdx(0);
+      setRetryNonce((n) => n + 1);
+
+      const el = videoRef.current;
+      const firstSrc = sourceCandidates[0] || cleanSrc;
+      if (!el || !firstSrc) return;
+
+      try {
+        syncMuteAttrs(el, isMutedRef.current);
+        el.src = firstSrc;
+        el.load();
+        const p = el.play();
+        if (p !== undefined) {
+          await p;
+        }
+        if (!el.paused) {
+          setPlaying(true);
+          setHasRenderedFrame(true);
+          setHasErr(false);
+          setAutoplayBlocked(false);
+        }
+      } catch (err: any) {
+        if (err?.name === 'NotAllowedError') {
+          try {
+            syncMuteAttrs(el, true);
+            await el.play();
+            if (!el.paused) {
+              setPlaying(true);
+              setHasRenderedFrame(true);
+              setHasErr(false);
+              setAutoplayBlocked(false);
+              return;
+            }
+          } catch {
+            setAutoplayBlocked(true);
+          }
+        }
+      }
+    },
+    [cleanSrc, sourceCandidates, syncMuteAttrs, onRequestInventoryRefresh, clearRecoveryTimers]
   );
 
   // Sync mute state cleanly without resetting or reloading playing media
@@ -253,53 +399,64 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
     const el = videoRef.current;
     if (!el) return;
     syncMuteAttrs(el, isMuted);
-    if (inView && el.paused && !userPausedRef.current && !hasErrRef.current) {
+    if (inView && el.paused && !userPausedRef.current && !hasErrRef.current && el.readyState >= 2) {
       tryPlay();
     }
   }, [isMuted, inView, syncMuteAttrs, tryPlay]);
 
   // Reset candidate index if product source list changes
   useEffect(() => {
+    clearRecoveryTimers();
     setSourceIdx(0);
     userPausedRef.current = false;
     setUserPaused(false);
     hasErrRef.current = false;
+    networkRetryCountRef.current = 0;
     setHasErr(false);
+    setErrorKind('unavailable');
     setAutoplayBlocked(false);
     setPlaying(false);
-  }, [candidatesKey]);
+    setHasRenderedFrame(false);
+  }, [candidatesKey, clearRecoveryTimers]);
 
   // Load new active source only when source URL genuinely changes
   useEffect(() => {
+    clearRecoveryTimers();
     hasErrRef.current = false;
+    networkRetryCountRef.current = 0;
     setHasErr(false);
+    setErrorKind('unavailable');
     setAutoplayBlocked(false);
-    setPlaying(false);
     const el = videoRef.current;
-    if (el && cleanSrc) {
+    if (el && cleanSrc && !officialEmbedUrl) {
       if (prevSrcRef.current !== cleanSrc) {
         prevSrcRef.current = cleanSrc;
+        setPlaying(false);
+        setHasRenderedFrame(false);
+        syncMuteAttrs(el, isMutedRef.current);
         try {
           el.load();
         } catch {}
       }
-      if (inView && !userPausedRef.current) {
+      if (inViewRef.current && !userPausedRef.current && el.readyState >= 2) {
         tryPlay();
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cleanSrc]);
+  }, [cleanSrc, retryNonce, officialEmbedUrl]);
 
   // Observe visibility in BOTH browser viewport AND horizontal carousel track
   useEffect(() => {
     const box = boxRef.current;
     if (!box || typeof IntersectionObserver === 'undefined') {
+      inViewRef.current = true;
       setInView(true);
       return;
     }
 
     const updateVisibility = () => {
       const visible = viewportVisibleRef.current && carouselVisibleRef.current;
+      inViewRef.current = visible;
       setInView(visible);
       const el = videoRef.current;
       if (!el) return;
@@ -383,50 +540,132 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
     };
   }, [inView, autoplayBlocked, tryPlay]);
 
+  const scheduleStallRecovery = useCallback(() => {
+    if (!inViewRef.current || userPausedRef.current || hasErrRef.current) return;
+    if (stallTimerRef.current) return;
+    stallTimerRef.current = setTimeout(() => {
+      stallTimerRef.current = null;
+      const el = videoRef.current;
+      if (!el || !inViewRef.current || userPausedRef.current || hasErrRef.current || el.error) return;
+      if (el.paused || el.readyState < 3) {
+        tryPlay();
+      }
+    }, 3500);
+  }, [tryPlay]);
+
+  // Official YouTube / Vimeo looping embed player for supported embed links
+  if (officialEmbedUrl) {
+    return (
+      <div
+        ref={boxRef}
+        className="absolute inset-0 w-full h-full overflow-hidden bg-[#1A1311] select-none"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          overflow: 'hidden',
+          backgroundColor: '#1A1311'
+        }}
+      >
+        {displayPoster && (
+          <img
+            src={displayPoster}
+            alt={title || 'VIDHYAA Jewellery'}
+            className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+            style={{ zIndex: 1, pointerEvents: 'none' }}
+            loading="eager"
+            referrerPolicy="no-referrer"
+            onError={(e) => {
+              const img = e.currentTarget;
+              if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) return;
+              img.dataset.fallbackApplied = '1';
+              img.src = JEWELLERY_PLACEHOLDER_IMAGE;
+            }}
+          />
+        )}
+        <iframe
+          src={officialEmbedUrl}
+          title={title || 'VIDHYAA Jewellery Video'}
+          className="absolute inset-0 w-full h-full border-0 pointer-events-none"
+          style={{ position: 'relative', zIndex: 2, width: '100%', height: '100%', border: 0 }}
+          allow="autoplay; fullscreen; picture-in-picture"
+          loading="lazy"
+          tabIndex={-1}
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       ref={boxRef}
-      className="absolute inset-0 w-full h-full overflow-hidden bg-black select-none"
+      className="absolute inset-0 w-full h-full overflow-hidden bg-[#1A1311] select-none"
       style={{
         position: 'absolute',
         inset: 0,
         width: '100%',
         height: '100%',
         overflow: 'hidden',
-        backgroundColor: '#000'
+        backgroundColor: '#1A1311'
       }}
     >
       <video
-        ref={videoRef}
+        ref={setVideoElRef}
         src={cleanSrc || undefined}
-        poster={validFallback || undefined}
+        poster={validRasterPoster || undefined}
         autoPlay
         muted={isMuted}
         loop
         playsInline
         webkit-playsinline="true"
-        preload="metadata"
+        preload={inView ? 'auto' : 'metadata'}
         title={title}
         onLoadedMetadata={(ev) => {
           const el = ev.currentTarget;
+          syncMuteAttrs(el, isMutedRef.current);
           if (el.duration && onDurationReady) {
             onDurationReady(formatDurationLabel(el.duration));
           }
-          if (inView && !userPausedRef.current) tryPlay();
+          if (inViewRef.current && !userPausedRef.current && !hasErrRef.current) {
+            tryPlay();
+          }
+        }}
+        onLoadedData={() => {
+          setHasRenderedFrame(true);
+          if (inViewRef.current && !userPausedRef.current && !hasErrRef.current) {
+            tryPlay();
+          }
         }}
         onCanPlay={() => {
           hasErrRef.current = false;
           setHasErr(false);
-          if (inView && !userPausedRef.current) tryPlay();
+          if (inViewRef.current && !userPausedRef.current) {
+            tryPlay();
+          }
         }}
         onPlaying={() => {
+          clearRecoveryTimers();
+          networkRetryCountRef.current = 0;
           const el = videoRef.current;
           if (!el || !el.paused) {
             setPlaying(true);
+            setHasRenderedFrame(true);
             setHasErr(false);
             setAutoplayBlocked(false);
           }
         }}
+        onTimeUpdate={(ev) => {
+          if (ev.currentTarget.currentTime > 0 && !hasRenderedFrame) {
+            setHasRenderedFrame(true);
+          }
+          if (stallTimerRef.current) {
+            clearTimeout(stallTimerRef.current);
+            stallTimerRef.current = null;
+          }
+        }}
+        onWaiting={scheduleStallRecovery}
+        onStalled={scheduleStallRecovery}
         onEnded={() => {
           const el = videoRef.current;
           if (!el || userPausedRef.current || hasErrRef.current) return;
@@ -438,7 +677,7 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
         onPause={() => {
           setPlaying(false);
           const el = videoRef.current;
-          if (el && el.ended && !userPausedRef.current && inView && !hasErrRef.current) {
+          if (el && el.ended && !userPausedRef.current && inViewRef.current && !hasErrRef.current) {
             try {
               el.currentTime = 0;
               el.play().catch(() => {});
@@ -446,21 +685,47 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
           }
         }}
         onError={() => {
+          const el = videoRef.current;
+          const errCode = el?.error?.code;
+          const isNetworkInterruption =
+            errCode === 2 || (typeof navigator !== 'undefined' && navigator.onLine === false);
+
+          // Automatic single recovery attempt for transient network interruptions (MEDIA_ERR_NETWORK)
+          if (isNetworkInterruption && networkRetryCountRef.current < 1 && el && cleanSrc) {
+            networkRetryCountRef.current += 1;
+            clearRecoveryTimers();
+            networkRetryTimerRef.current = setTimeout(() => {
+              networkRetryTimerRef.current = null;
+              const cur = videoRef.current;
+              if (!cur || !inViewRef.current || userPausedRef.current) return;
+              try {
+                syncMuteAttrs(cur, isMutedRef.current);
+                cur.load();
+                tryPlay();
+              } catch {}
+            }, 1200);
+            return;
+          }
+
           if (sourceIdx + 1 < sourceCandidates.length) {
+            networkRetryCountRef.current = 0;
             setSourceIdx((prev) => prev + 1);
             return;
           }
-          const el = videoRef.current;
+
           console.warn('[ReelCardVideo] Video failed to load across candidates:', {
             title,
             videoUrl: cleanSrc,
-            errorCode: el?.error?.code,
+            errorCode: errCode,
             errorMessage: el?.error?.message
           });
           if (!el || el.readyState === 0 || el.error) {
+            clearRecoveryTimers();
             hasErrRef.current = true;
+            setErrorKind(isNetworkInterruption ? 'network' : 'unavailable');
             setHasErr(true);
             setPlaying(false);
+            setHasRenderedFrame(false);
           }
         }}
         className="w-full h-full object-cover select-none block"
@@ -471,23 +736,30 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
           display: 'block',
           position: 'relative',
           zIndex: 2,
-          opacity: hasErr && !playing ? 0 : 1
+          // Retain full opacity once first frame renders so native looping never flashes black
+          opacity: hasErr || !hasRenderedFrame ? 0 : 1,
+          transition: 'opacity 220ms ease'
         }}
         aria-hidden="true"
         tabIndex={-1}
       />
 
-      {/* Poster shown ONLY while video is loading before first frame OR on genuine error */}
-      {validFallback && (!playing || hasErr) && (
+      {/* Jewellery poster shown smoothly before first frame plays AND as a proper fallback on error (never a black screen) */}
+      {displayPoster && (!hasRenderedFrame || hasErr) && (
         <img
-          src={validFallback}
+          src={displayPoster}
           alt={title || 'VIDHYAA Jewellery'}
           className="absolute inset-0 w-full h-full object-cover pointer-events-none transition-opacity duration-300"
           style={{ zIndex: 1, pointerEvents: 'none' }}
           loading="eager"
           referrerPolicy="no-referrer"
           onError={(e) => {
-            e.currentTarget.style.display = 'none';
+            const img = e.currentTarget;
+            if (img.dataset.fallbackApplied === '1' || img.src.startsWith('data:image/svg+xml')) {
+              return;
+            }
+            img.dataset.fallbackApplied = '1';
+            img.src = JEWELLERY_PLACEHOLDER_IMAGE;
           }}
         />
       )}
@@ -519,19 +791,34 @@ const ReelCardVideo: React.FC<ReelCardVideoProps> = ({
         </button>
       )}
 
-      {/* Honest fallback badge if video genuinely fails to load */}
+      {/* Honest fallback badge + working Tap to Retry control distinguishing network interruption vs unavailable URL */}
       {hasErr && (
         <div
-          className="px-3 py-1 rounded-full bg-black/75 text-[#DFB982] text-[10px] font-bold uppercase tracking-wider border border-white/20 pointer-events-none"
+          className="flex flex-col items-center gap-2"
           style={{
             position: 'absolute',
             left: '50%',
             top: '46%',
             transform: 'translate(-50%, -50%)',
-            zIndex: 24
+            zIndex: 30,
+            pointerEvents: 'auto'
           }}
+          onClick={(ev) => ev.stopPropagation()}
         >
-          Video Unavailable
+          <div className="px-3 py-1 rounded-full bg-black/75 text-[#DFB982] text-[10px] font-bold uppercase tracking-wider border border-white/20 whitespace-nowrap">
+            {errorKind === 'network' ? 'Connection Interrupted' : 'Video Unavailable'}
+          </div>
+          <button
+            type="button"
+            onClick={handleRetryPlayback}
+            className="px-3.5 py-1.5 rounded-full bg-[#DFB982] hover:bg-[#EBD0A4] text-[#241C1A] text-[10px] font-bold uppercase tracking-wider shadow-lg flex items-center gap-1.5 transition-transform active:scale-95 cursor-pointer whitespace-nowrap"
+            style={{ pointerEvents: 'auto', cursor: 'pointer' }}
+            title="Retry loading video"
+            aria-label="Tap to retry video playback"
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Tap to Retry</span>
+          </button>
         </div>
       )}
 
@@ -577,13 +864,29 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
   });
   const [durationByReelId, setDurationByReelId] = useState<Record<string, string>>({});
 
+  const refreshVideoInventory = useCallback((force = false) => {
+    fetchAvailableVideoInventory(force).then((inv) => {
+      setInventory(inv);
+    });
+  }, []);
+
   useEffect(() => {
     let mounted = true;
+    // Never hide valid Shopping Videos due to temporary inventory API delay
+    const releaseTimer = setTimeout(() => {
+      if (mounted) {
+        setInventory((prev) => (prev.checked ? prev : { ...prev, checked: true }));
+      }
+    }, 1500);
     fetchAvailableVideoInventory().then((inv) => {
-      if (mounted) setInventory(inv);
+      if (mounted) {
+        clearTimeout(releaseTimer);
+        setInventory(inv);
+      }
     });
     return () => {
       mounted = false;
+      clearTimeout(releaseTimer);
     };
   }, []);
 
@@ -884,6 +1187,11 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
                   title={reel.title}
                   isMuted={!isSoundOn}
                   carouselRootRef={trackRef}
+                  onRequestInventoryRefresh={() => {
+                    if (!inventory.supported) {
+                      refreshVideoInventory(true);
+                    }
+                  }}
                   onDurationReady={(dur) => {
                     setDurationByReelId((prev) =>
                       prev[reel.id] === dur ? prev : { ...prev, [reel.id]: dur }
@@ -1050,97 +1358,123 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
               className="relative md:w-3/5 bg-black flex items-center justify-center overflow-hidden select-none"
               style={{ minHeight: '360px' }}
             >
-              <div
-                className="relative w-full h-full max-h-[550px] md:max-h-[640px] flex items-center justify-center cursor-pointer"
-                style={{ minHeight: '360px' }}
-                onClick={() => {
-                  const handle = modalVideoRef.current;
-                  const vEl = handle?.videoElement;
-                  if (!handle) return;
-                  if (vEl && !vEl.paused) {
-                    handle.pause();
-                    setModalPlaying(false);
-                  } else {
-                    const pr = handle.play();
-                    if (pr && typeof pr.then === 'function') {
-                      pr.then(() => setModalPlaying(true)).catch(() => setModalPlaying(false));
-                    }
-                  }
-                }}
-              >
-                <SeamlessLoopVideo
-                  ref={modalVideoRef}
-                  key={activeModalReel.id}
-                  src={activeModalReel.videoUrl}
-                  fallbackUrls={activeModalReel.fallbackUrls}
-                  fallbackImage={activeModalReel.posterImage}
-                  title={activeModalReel.title}
-                  autoPlay={true}
-                  isMuted={modalMuted}
-                  enableObserver={false}
-                  showPlayButtonFallback={false}
-                  onPlayStateChange={(isP) => setModalPlaying(Boolean(isP))}
-                  className="w-full h-full max-h-[550px] md:max-h-[640px] object-contain select-none"
-                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                />
-
-                {!modalPlaying && (
-                  <button
-                    type="button"
-                    onClick={(evt) => {
-                      evt.preventDefault();
-                      evt.stopPropagation();
+              {(() => {
+                const modalEmbedUrl = getOfficialVideoEmbedUrl(activeModalReel.videoUrl, {
+                  muted: modalMuted,
+                  controls: true,
+                  autoplay: true
+                });
+                if (modalEmbedUrl) {
+                  return (
+                    <div
+                      className="relative w-full h-full max-h-[550px] md:max-h-[640px] flex items-center justify-center"
+                      style={{ minHeight: '360px' }}
+                    >
+                      <iframe
+                        key={activeModalReel.id}
+                        src={modalEmbedUrl}
+                        title={activeModalReel.title}
+                        className="w-full h-full min-h-[360px] md:min-h-[520px] border-0"
+                        allow="autoplay; fullscreen; picture-in-picture"
+                        allowFullScreen
+                      />
+                    </div>
+                  );
+                }
+                return (
+                  <div
+                    className="relative w-full h-full max-h-[550px] md:max-h-[640px] flex items-center justify-center cursor-pointer"
+                    style={{ minHeight: '360px' }}
+                    onClick={() => {
                       const handle = modalVideoRef.current;
                       const vEl = handle?.videoElement;
                       if (!handle) return;
-                      const pr = handle.play();
-                      if (pr && typeof pr.then === 'function') {
-                        pr.then(() => {
-                          if (!vEl || !vEl.paused) setModalPlaying(true);
-                        }).catch(() => setModalPlaying(false));
+                      if (vEl && !vEl.paused) {
+                        handle.pause();
+                        setModalPlaying(false);
+                      } else {
+                        const pr = handle.play();
+                        if (pr && typeof pr.then === 'function') {
+                          pr.then(() => setModalPlaying(true)).catch(() => setModalPlaying(false));
+                        }
                       }
                     }}
-                    className="w-16 h-16 rounded-full bg-black/70 backdrop-blur-md flex items-center justify-center border border-white/30 text-[#DFB982] shadow-2xl transition-transform hover:scale-105 active:scale-95 cursor-pointer"
-                    style={{
-                      position: 'absolute',
-                      left: '50%',
-                      top: '50%',
-                      transform: 'translate(-50%, -50%)',
-                      zIndex: 30,
-                      pointerEvents: 'auto',
-                      cursor: 'pointer',
-                      backgroundColor: 'rgba(0,0,0,0.75)'
-                    }}
-                    title="Play video"
-                    aria-label="Play video"
                   >
-                    <Play className="w-8 h-8 fill-[#DFB982] ml-1" />
-                  </button>
-                )}
+                    <SeamlessLoopVideo
+                      ref={modalVideoRef}
+                      key={activeModalReel.id}
+                      src={activeModalReel.videoUrl}
+                      fallbackUrls={activeModalReel.fallbackUrls}
+                      fallbackImage={activeModalReel.posterImage}
+                      title={activeModalReel.title}
+                      autoPlay={true}
+                      isMuted={modalMuted}
+                      enableObserver={false}
+                      showPlayButtonFallback={false}
+                      onPlayStateChange={(isP) => setModalPlaying(Boolean(isP))}
+                      className="w-full h-full max-h-[550px] md:max-h-[640px] object-contain select-none"
+                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                    />
 
-                <button
-                  type="button"
-                  onClick={(evt) => {
-                    evt.stopPropagation();
-                    if (modalVideoRef.current) {
-                      const isM = modalVideoRef.current.toggleMute();
-                      setModalMuted(isM);
-                    } else {
-                      setModalMuted(!modalMuted);
-                    }
-                  }}
-                  className="absolute top-4 left-4 z-20 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 backdrop-blur-md text-white flex items-center justify-center transition-colors cursor-pointer border border-white/20"
-                  style={{ zIndex: 30, pointerEvents: 'auto' }}
-                  title={modalMuted ? 'Click to Unmute' : 'Click to Mute'}
-                  aria-label={modalMuted ? 'Unmute video audio' : 'Mute video audio'}
-                >
-                  {modalMuted ? (
-                    <VolumeX className="w-4 h-4 text-red-300" />
-                  ) : (
-                    <Volume2 className="w-4 h-4 text-emerald-400" />
-                  )}
-                </button>
-              </div>
+                    {!modalPlaying && (
+                      <button
+                        type="button"
+                        onClick={(evt) => {
+                          evt.preventDefault();
+                          evt.stopPropagation();
+                          const handle = modalVideoRef.current;
+                          const vEl = handle?.videoElement;
+                          if (!handle) return;
+                          const pr = handle.play();
+                          if (pr && typeof pr.then === 'function') {
+                            pr.then(() => {
+                              if (!vEl || !vEl.paused) setModalPlaying(true);
+                            }).catch(() => setModalPlaying(false));
+                          }
+                        }}
+                        className="w-16 h-16 rounded-full bg-black/70 backdrop-blur-md flex items-center justify-center border border-white/30 text-[#DFB982] shadow-2xl transition-transform hover:scale-105 active:scale-95 cursor-pointer"
+                        style={{
+                          position: 'absolute',
+                          left: '50%',
+                          top: '50%',
+                          transform: 'translate(-50%, -50%)',
+                          zIndex: 30,
+                          pointerEvents: 'auto',
+                          cursor: 'pointer',
+                          backgroundColor: 'rgba(0,0,0,0.75)'
+                        }}
+                        title="Play video"
+                        aria-label="Play video"
+                      >
+                        <Play className="w-8 h-8 fill-[#DFB982] ml-1" />
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={(evt) => {
+                        evt.stopPropagation();
+                        if (modalVideoRef.current) {
+                          const isM = modalVideoRef.current.toggleMute();
+                          setModalMuted(isM);
+                        } else {
+                          setModalMuted(!modalMuted);
+                        }
+                      }}
+                      className="absolute top-4 left-4 z-20 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 backdrop-blur-md text-white flex items-center justify-center transition-colors cursor-pointer border border-white/20"
+                      style={{ zIndex: 30, pointerEvents: 'auto' }}
+                      title={modalMuted ? 'Click to Unmute' : 'Click to Mute'}
+                      aria-label={modalMuted ? 'Unmute video audio' : 'Mute video audio'}
+                    >
+                      {modalMuted ? (
+                        <VolumeX className="w-4 h-4 text-red-300" />
+                      ) : (
+                        <Volume2 className="w-4 h-4 text-emerald-400" />
+                      )}
+                    </button>
+                  </div>
+                );
+              })()}
 
               <div className="absolute bottom-4 left-4 z-20 pointer-events-none">
                 <div className="bg-black/60 backdrop-blur-md px-3 py-1 rounded-full text-xs font-mono border border-white/20 text-[#DFB982]">

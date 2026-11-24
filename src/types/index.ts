@@ -43,6 +43,7 @@ export interface Product {
   showInShoppingVideos?: boolean;
   _strippedImg?: boolean;
   _imagesCleared?: boolean;
+  _videoCleared?: boolean;
   createdAt: string;
   updatedAt: string;
 }
