@@ -1,4 +1,4 @@
-import { getAdminAuthHeaders } from './adminSessionMemory';
+import { clearAdminMemoryToken, resolveAdminAuthHeaders } from './adminSessionMemory';
 import { isPreviewEnvironmentHost } from './videoFallback';
 
 export const PRODUCTION_ORIGIN = 'https://vidhyaajewellerystudio.com';
@@ -104,21 +104,69 @@ function parseSafeGatewayJson(
   }
 }
 
+function isPreviewMiddlewareAdminUnauthorized(
+  res: Response,
+  isHtml: boolean,
+  data: any
+): boolean {
+  return (
+    isPreviewGatewayMode() &&
+    !isHtml &&
+    res.status === 401 &&
+    res.headers.get('x-vidhyaa-gateway-status') === '401' &&
+    data?.code === 'ADMIN_UNAUTHORIZED' &&
+    data?.upstreamStatus === undefined
+  );
+}
+
 export async function fetchProductionGatewayStatus(
   checkLive: boolean = true
 ): Promise<ProductionGatewayStatus> {
+  const url = `/api/production/gateway-status?checkLive=${checkLive ? '1' : '0'}`;
   try {
-    const res = await fetch(
-      `/api/production/gateway-status?checkLive=${checkLive ? '1' : '0'}`,
-      {
+    const runAttempt = async (forceRefresh: boolean) => {
+      const resolvedAuth = await resolveAdminAuthHeaders(
+        { Accept: 'application/json' },
+        { forceRefresh }
+      );
+      if (forceRefresh && !resolvedAuth.authenticated) {
+        return { abortedAuth: true as const };
+      }
+      const res = await fetch(url, {
         method: 'GET',
         credentials: 'include',
         cache: 'no-store',
-        headers: getAdminAuthHeaders({ Accept: 'application/json' })
+        headers: resolvedAuth.headers
+      });
+      const rawText = await res.text();
+      const { isHtml, data } = parseSafeGatewayJson(rawText, res.headers.get('content-type'));
+      return { abortedAuth: false as const, res, isHtml, data };
+    };
+
+    let attempt = await runAttempt(false);
+    if (!attempt.abortedAuth && isPreviewMiddlewareAdminUnauthorized(attempt.res, attempt.isHtml, attempt.data)) {
+      clearAdminMemoryToken();
+      const retryAttempt = await runAttempt(true);
+      if (!retryAttempt.abortedAuth) {
+        attempt = retryAttempt;
       }
-    );
-    const rawText = await res.text();
-    const { isHtml, data } = parseSafeGatewayJson(rawText, res.headers.get('content-type'));
+    }
+
+    if (attempt.abortedAuth) {
+      return {
+        configured: false,
+        keyIdConfigured: false,
+        keyId: 'k1',
+        targetOrigin: PRODUCTION_ORIGIN,
+        storageTarget: 'Hostinger Production',
+        secretSource: 'none',
+        liveHostReachable: false,
+        liveCatalogCount: null,
+        error: 'Administrator session expired or not signed in. Please sign in to the Admin Panel again.'
+      };
+    }
+
+    const { res, isHtml, data } = attempt;
     if (isHtml || !res.ok || !data) {
       return {
         configured: false,
@@ -168,18 +216,48 @@ export async function verifyProductionMediaLive(
 ): Promise<LiveMediaVerificationResult> {
   const endpoint = isPreviewGatewayMode() ? '/api/production/verify-media' : '';
   if (endpoint) {
+    const serializedBody = JSON.stringify({ url, kind, expectedSizeBytes });
     try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        credentials: 'include',
-        headers: getAdminAuthHeaders({
-          'Content-Type': 'application/json',
-          Accept: 'application/json'
-        }),
-        body: JSON.stringify({ url, kind, expectedSizeBytes })
-      });
-      const rawText = await res.text();
-      const { isHtml, data } = parseSafeGatewayJson(rawText, res.headers.get('content-type'));
+      const runAttempt = async (forceRefresh: boolean) => {
+        const resolvedAuth = await resolveAdminAuthHeaders(
+          {
+            'Content-Type': 'application/json',
+            Accept: 'application/json'
+          },
+          { forceRefresh }
+        );
+        if (forceRefresh && !resolvedAuth.authenticated) {
+          return { abortedAuth: true as const };
+        }
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          credentials: 'include',
+          headers: resolvedAuth.headers,
+          body: serializedBody
+        });
+        const rawText = await res.text();
+        const { isHtml, data } = parseSafeGatewayJson(rawText, res.headers.get('content-type'));
+        return { abortedAuth: false as const, res, isHtml, data };
+      };
+
+      let attempt = await runAttempt(false);
+      if (!attempt.abortedAuth && isPreviewMiddlewareAdminUnauthorized(attempt.res, attempt.isHtml, attempt.data)) {
+        clearAdminMemoryToken();
+        const retryAttempt = await runAttempt(true);
+        if (!retryAttempt.abortedAuth) {
+          attempt = retryAttempt;
+        }
+      }
+
+      if (attempt.abortedAuth) {
+        return {
+          ok: false,
+          status: 401,
+          error: 'Administrator session expired or not signed in. Please sign in to the Admin Panel again.'
+        };
+      }
+
+      const { res, isHtml, data } = attempt;
       if (isHtml) {
         return {
           ok: false,
@@ -244,17 +322,47 @@ export async function readBackProductionProduct(
   productId: string
 ): Promise<{ ok: boolean; product?: any; error?: string }> {
   try {
-    const url = isPreviewGatewayMode()
+    const isPreview = isPreviewGatewayMode();
+    const url = isPreview
       ? `/api/production/products/${encodeURIComponent(productId)}`
-      : `/api/products.php?id=${encodeURIComponent(productId)}`;
-    const res = await fetch(url, {
-      method: 'GET',
-      credentials: 'include',
-      cache: 'no-store',
-      headers: getAdminAuthHeaders({ Accept: 'application/json' })
-    });
-    const rawText = await res.text();
-    const { isHtml, data } = parseSafeGatewayJson(rawText, res.headers.get('content-type'));
+      : `/api/products.php?id=${encodeURIComponent(productId)}&_t=${Date.now()}`;
+
+    const runAttempt = async (forceRefresh: boolean) => {
+      const resolvedAuth = await resolveAdminAuthHeaders(
+        { Accept: 'application/json' },
+        { forceRefresh }
+      );
+      if (forceRefresh && !resolvedAuth.authenticated) {
+        return { abortedAuth: true as const };
+      }
+      const res = await fetch(url, {
+        method: 'GET',
+        credentials: 'include',
+        cache: 'no-store',
+        headers: resolvedAuth.headers
+      });
+      const rawText = await res.text();
+      const { isHtml, data } = parseSafeGatewayJson(rawText, res.headers.get('content-type'));
+      return { abortedAuth: false as const, res, isHtml, data };
+    };
+
+    let attempt = await runAttempt(false);
+    if (!attempt.abortedAuth && isPreviewMiddlewareAdminUnauthorized(attempt.res, attempt.isHtml, attempt.data)) {
+      clearAdminMemoryToken();
+      const retryAttempt = await runAttempt(true);
+      if (!retryAttempt.abortedAuth) {
+        attempt = retryAttempt;
+      }
+    }
+
+    if (attempt.abortedAuth) {
+      return {
+        ok: false,
+        error: 'Administrator session expired or not signed in. Please sign in to the Admin Panel again.'
+      };
+    }
+
+    const { res, isHtml, data } = attempt;
     if (isHtml) {
       return {
         ok: false,

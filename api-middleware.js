@@ -53,11 +53,14 @@ import {
   verifyCsrfOriginForCookieRequest
 } from './src/server/sessionAuth.js';
 import {
+  getProductionGatewayConfig,
   getProductionGatewayStatus,
   forwardImageUploadToProduction,
   forwardVideoChunkToProduction,
   forwardProductSaveToProduction,
   fetchProductionProductById,
+  fetchProductionCatalogReadOnly,
+  fetchProductionVideoInventoryReadOnly,
   verifyLiveProductionMediaUrl
 } from './src/server/productionGateway.js';
 
@@ -1152,7 +1155,9 @@ export function handleApiMiddleware(req, res, next) {
 
         const gwResult = await forwardProductSaveToProduction({
           product: productPayload,
-          actor: admin.email
+          actor: admin.email,
+          operationIntent: typeof body?.operationIntent === 'string' ? body.operationIntent : undefined,
+          confirmFirstProductionCreate: body?.confirmFirstProductionCreate === true
         });
         return sendProductionGatewayJson(gwResult.status, gwResult.body);
       }
@@ -1672,6 +1677,19 @@ export function handleApiMiddleware(req, res, next) {
       // 8. Products API: GET, POST, DELETE
       if (pathname === '/api/products' || pathname.startsWith('/api/products/')) {
         if (req.method === 'GET') {
+          if (getProductionGatewayConfig().configured) {
+            const liveRes = await fetchProductionCatalogReadOnly();
+            if (liveRes.ok && Array.isArray(liveRes.products)) {
+              return sendJson(res, 200, liveRes.products, req, { 'Cache-Control': 'no-store' });
+            }
+            return sendProductionGatewayJson(liveRes.status || 502, {
+              success: false,
+              code: 'PRODUCTION_CATALOG_UNAVAILABLE',
+              error:
+                liveRes.error ||
+                'Production Catalog Unavailable: Could not reach Hostinger Production catalog.'
+            });
+          }
           const products = readJsonFile(PRODUCTS_FILE, []);
           return sendJson(res, 200, products);
         }
@@ -3067,6 +3085,28 @@ export function handleApiMiddleware(req, res, next) {
 
       // 11b. Read-only list of existing video files in /videos/uploads/
       if (pathname === '/api/videos/available' && req.method === 'GET') {
+        if (getProductionGatewayConfig().configured) {
+          const liveRes = await fetchProductionVideoInventoryReadOnly();
+          if (liveRes.ok && Array.isArray(liveRes.urls)) {
+            return sendJson(
+              res,
+              200,
+              {
+                success: true,
+                urls: liveRes.urls
+              },
+              req,
+              { 'Cache-Control': 'no-store' }
+            );
+          }
+          return sendProductionGatewayJson(liveRes.status || 502, {
+            success: false,
+            code: 'PRODUCTION_VIDEO_INVENTORY_UNAVAILABLE',
+            error:
+              liveRes.error ||
+              'Production Video Inventory Unavailable: Could not reach Hostinger Production video inventory.'
+          });
+        }
         const urls = new Set();
         for (const dir of [VIDEOS_UPLOAD_DIR, DIST_VIDEOS_UPLOAD_DIR]) {
           if (fs.existsSync(dir)) {

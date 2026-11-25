@@ -102,6 +102,7 @@ interface AdminViewProps {
   products: Product[];
   categories: Category[];
   storeSettings: StoreSettings;
+  catalogError?: string | null;
   onRefreshData: () => Promise<void>;
   onExitAdmin: () => void;
   onNavigateGoLive?: () => void;
@@ -112,6 +113,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
   products,
   categories,
   storeSettings,
+  catalogError,
   onRefreshData,
   onExitAdmin,
   onNavigateGoLive,
@@ -313,10 +315,18 @@ export const AdminView: React.FC<AdminViewProps> = ({
   const [productStockFilter, setProductStockFilter] = useState<'all' | 'in_stock' | 'low_stock' | 'out_of_stock'>('all');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isCreatingNewProduct, setIsCreatingNewProduct] = useState(false);
+  const [confirmFirstProductionCreate, setConfirmFirstProductionCreate] = useState(false);
   const [savingProduct, setSavingProduct] = useState(false);
   const [saveProductError, setSaveProductError] = useState<string | null>(null);
   const [saveProductSuccess, setSaveProductSuccess] = useState<string | null>(null);
   const [imageUrlInput, setImageUrlInput] = useState('');
+  const productFormRef = React.useRef<HTMLFormElement>(null);
+
+  const reportSaveError = (msg: string) => {
+    setSaveProductError(msg);
+    setSaveProductSuccess(null);
+    productFormRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  };
   
   // Dedicated Image Upload State (Supports multi-image selection & per-variation upload)
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -593,6 +603,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
     });
     setEditingProduct(newProd);
     setIsCreatingNewProduct(true);
+    setConfirmFirstProductionCreate(false);
     setSelectedFilesForUpload([]);
     setImageUploadStatus(null);
     setSaveProductError(null);
@@ -609,6 +620,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
     });
     setEditingProduct(JSON.parse(JSON.stringify(prod)));
     setIsCreatingNewProduct(false);
+    setConfirmFirstProductionCreate(false);
     setSelectedFilesForUpload([]);
     setImageUploadStatus(null);
     setSaveProductError(null);
@@ -628,13 +640,13 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
     // 1. Validate Product Name / Title
     if (!editingProduct.name || !editingProduct.name.trim()) {
-      setSaveProductError('Design Title is required.');
+      reportSaveError('Design Title is required.');
       return;
     }
 
     // 2. Validate Category
     if (!editingProduct.categoryId || !editingProduct.categoryId.trim()) {
-      setSaveProductError('Jewellery Category must be selected.');
+      reportSaveError('Jewellery Category must be selected.');
       return;
     }
 
@@ -642,19 +654,38 @@ export const AdminView: React.FC<AdminViewProps> = ({
     const sellingPrice = Number(editingProduct.price);
     const originalMrp = Number(editingProduct.mrp) || sellingPrice;
     if (isNaN(sellingPrice) || sellingPrice <= 0) {
-      setSaveProductError('Selling price must be greater than ₹0.');
+      reportSaveError('Selling price must be greater than ₹0.');
       return;
     }
     const priceCheck = validatePrices(originalMrp, sellingPrice);
     if (!priceCheck.valid) {
-      setSaveProductError(priceCheck.error || 'Selling price cannot exceed Original MRP.');
+      reportSaveError(priceCheck.error || 'Selling price cannot exceed Original MRP.');
       return;
     }
 
-    // 4. Validate Stock
+    // 4. Validate Stock, Material & Description (explicit validation because form uses noValidate)
     const stockQty = Number(editingProduct.stock);
     if (isNaN(stockQty) || stockQty < 0) {
-      setSaveProductError('Stock Quantity must be a valid non-negative number (0 or greater).');
+      reportSaveError('Stock Quantity must be a valid non-negative number (0 or greater).');
+      return;
+    }
+
+    if (!editingProduct.material || !editingProduct.material.trim()) {
+      reportSaveError('Material Composition is required before saving to Hostinger Production.');
+      return;
+    }
+
+    if (!editingProduct.description || !editingProduct.description.trim()) {
+      reportSaveError('Product Description is required before saving to Hostinger Production.');
+      return;
+    }
+
+    // 4a. Require explicit confirmation before creating a new Production product from Preview
+    const operationIntent: 'create' | 'update' = isCreatingNewProduct ? 'create' : 'update';
+    if (isPreviewGateway && operationIntent === 'create' && !confirmFirstProductionCreate) {
+      reportSaveError(
+        `Please check the confirmation box above "Save New Product" to confirm creating product ID "${editingProduct.id}" on Hostinger Production.`
+      );
       return;
     }
 
@@ -663,7 +694,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
     if (editingProduct.videoUrl && editingProduct.videoUrl.trim()) {
       const videoCheck = validateDirectPlayableVideoUrl(editingProduct.videoUrl);
       if (!videoCheck.valid) {
-        setSaveProductError(
+        reportSaveError(
           videoCheck.error ||
             'Invalid product video URL. Only direct playable MP4, WebM, or MOV video URLs are allowed.'
         );
@@ -671,6 +702,10 @@ export const AdminView: React.FC<AdminViewProps> = ({
       }
       normalizedVideoUrl = videoCheck.normalizedUrl;
     }
+
+    const existingCatalogRecord = localProducts.find((p) => p.id === editingProduct.id);
+    const existingCatalogVideoUrl =
+      typeof existingCatalogRecord?.videoUrl === 'string' ? existingCatalogRecord.videoUrl.trim() : '';
 
     setSavingProduct(true);
     try {
@@ -738,7 +773,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
           console.warn('[AdminView] Image upload error during product save:', uploadErr);
           const errMsg = uploadErr?.message || String(uploadErr);
           updatePipelineStage('chunk_upload', 'error', errMsg);
-          setSaveProductError('Hostinger Production image upload failed: ' + errMsg);
+          reportSaveError('Hostinger Production image upload failed: ' + errMsg);
           setSavingProduct(false);
           return;
         }
@@ -798,9 +833,13 @@ export const AdminView: React.FC<AdminViewProps> = ({
       updatePipelineStage('product_readback', 'idle');
       updatePipelineStage('homepage_verified', 'idle');
 
-      const saved = await saveProduct(updated);
+      const saved = await saveProduct(updated, {
+        operationIntent,
+        confirmFirstProductionCreate: operationIntent === 'create' ? confirmFirstProductionCreate : false
+      });
       setLastSavedForVerification(saved);
       setIsCreatingNewProduct(false);
+      setConfirmFirstProductionCreate(false);
       setEditingProduct(JSON.parse(JSON.stringify(saved)));
 
       setLocalProducts((prev) => {
@@ -820,12 +859,16 @@ export const AdminView: React.FC<AdminViewProps> = ({
       );
 
       // Stages 6 & 7: Product Read-back + Homepage Publish Verification
-      const verified = await runLiveStorefrontVerification(saved);
+      const expectedVideoUrlForVerify =
+        (normalizedVideoUrl || '').trim() ||
+        (operationIntent === 'update' ? existingCatalogVideoUrl : '') ||
+        (saved.videoUrl || '').trim();
+      const verified = await runLiveStorefrontVerification(saved, expectedVideoUrlForVerify);
       if (verified) {
         setSaveProductSuccess(
           saved.active !== false
-            ? `✓ Product "${saved.name}" saved, read back, and verified live on Hostinger Production!`
-            : `✓ Draft product "${saved.name}" saved and read-back verified on Hostinger Production.`
+            ? `✓ Product "${saved.name}" (ID: ${saved.id}) saved, read back, and verified live on Hostinger Production!`
+            : `✓ Draft product "${saved.name}" (ID: ${saved.id}) saved and read-back verified on Hostinger Production.`
         );
         setAdminNotice({ type: 'success', text: `Product "${saved.name}" saved & verified on Hostinger Production.` });
       }
@@ -837,13 +880,16 @@ export const AdminView: React.FC<AdminViewProps> = ({
       console.error('Failed to save product in AdminView:', e);
       const errMsg = e?.message || 'Failed to save product to Hostinger Production.';
       updatePipelineStage('product_save', 'error', errMsg);
-      setSaveProductError(errMsg);
+      reportSaveError(errMsg);
     } finally {
       setSavingProduct(false);
     }
   };
 
-  const runLiveStorefrontVerification = async (targetProduct: Product): Promise<boolean> => {
+  const runLiveStorefrontVerification = async (
+    targetProduct: Product,
+    expectedVideoUrlOverride?: string
+  ): Promise<boolean> => {
     setRetryingVerification(true);
     updatePipelineStage(
       'product_readback',
@@ -858,16 +904,25 @@ export const AdminView: React.FC<AdminViewProps> = ({
         const errMsg =
           readBack.error || 'Product read-back could not locate the saved record on Hostinger.';
         updatePipelineStage('product_readback', 'error', errMsg);
-        setSaveProductError(`Product saved, but Hostinger read-back failed: ${errMsg}`);
+        reportSaveError(`Product saved, but Hostinger read-back failed: ${errMsg}`);
         return false;
       }
 
-      const expectedVideoUrl = (targetProduct.videoUrl || '').trim();
+      if (readBack.product.id !== targetProduct.id) {
+        const errMsg = `Persisted product ID mismatch on Hostinger (expected "${targetProduct.id}", read back "${readBack.product.id}").`;
+        updatePipelineStage('product_readback', 'error', errMsg);
+        reportSaveError(errMsg);
+        return false;
+      }
+
+      const expectedVideoUrl = String(
+        expectedVideoUrlOverride !== undefined ? expectedVideoUrlOverride : (targetProduct.videoUrl || '')
+      ).trim();
       const persistedVideoUrl = String(readBack.product.videoUrl || '').trim();
       if (expectedVideoUrl && persistedVideoUrl !== expectedVideoUrl) {
         const errMsg = `Persisted product videoUrl mismatch on Hostinger (expected "${expectedVideoUrl}", read back "${persistedVideoUrl || '(empty)'}").`;
         updatePipelineStage('product_readback', 'error', errMsg);
-        setSaveProductError(errMsg);
+        reportSaveError(errMsg);
         return false;
       }
 
@@ -986,7 +1041,10 @@ export const AdminView: React.FC<AdminViewProps> = ({
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
-      await saveProduct(copy);
+      await saveProduct(copy, {
+        operationIntent: 'create',
+        confirmFirstProductionCreate: true
+      });
       await onRefreshData();
       setAdminNotice({ type: 'success', text: `Duplicated "${prod.name}" into catalog.` });
     } catch (err: any) {
@@ -1042,7 +1100,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
         inStock: newStock > 0,
         updatedAt: new Date().toISOString()
       };
-      await saveProduct(updated);
+      await saveProduct(updated, { operationIntent: 'update' });
       await onRefreshData();
     } catch (err: any) {
       console.error('Failed to adjust stock:', err);
@@ -1057,7 +1115,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
         active: !prod.active,
         updatedAt: new Date().toISOString()
       };
-      await saveProduct(updated);
+      await saveProduct(updated, { operationIntent: 'update' });
       await onRefreshData();
       setAdminNotice({
         type: 'success',
@@ -1834,6 +1892,24 @@ export const AdminView: React.FC<AdminViewProps> = ({
               aria-label="Dismiss notice"
             >
               <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {catalogError && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-300 rounded-xl text-red-900 text-xs font-semibold flex flex-wrap items-center justify-between gap-3 animate-fadeIn">
+            <span className="flex items-center gap-2 min-w-0">
+              <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+              <span className="break-words">{catalogError}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => void handleManualRefreshCatalog()}
+              disabled={isRefreshingCatalog}
+              className="px-3 py-1.5 bg-red-700 hover:bg-red-800 disabled:bg-red-400 text-white rounded-lg text-[11px] font-bold flex items-center gap-1.5 cursor-pointer shrink-0"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingCatalog ? 'animate-spin' : ''}`} />
+              <span>Retry Production Sync</span>
             </button>
           </div>
         )}
@@ -3417,7 +3493,12 @@ export const AdminView: React.FC<AdminViewProps> = ({
               </button>
             </div>
 
-            <form onSubmit={handleSaveProduct} className="p-6 overflow-y-auto space-y-6 text-xs flex-1">
+            <form
+              ref={productFormRef}
+              onSubmit={handleSaveProduct}
+              noValidate
+              className="p-6 overflow-y-auto space-y-6 text-xs flex-1"
+            >
               {/* Hostinger Production Gateway Readiness Banner (Preview Mode) */}
               {isPreviewGateway && (
                 <div
@@ -4360,28 +4441,87 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-gray-100 flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => setEditingProduct(null)}
-                  className="px-5 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-semibold cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={savingProduct}
-                  className="bg-[#3B1E22] hover:bg-[#802336] disabled:bg-gray-400 text-[#FAF7F2] px-6 py-2.5 rounded-xl font-bold uppercase tracking-wider cursor-pointer shadow-md transition-colors flex items-center gap-2"
-                >
-                  {savingProduct && <Loader2 className="w-4 h-4 animate-spin text-white" />}
-                  <span>
-                    {savingProduct
-                      ? 'Saving to Database...'
-                      : isCreatingNewProduct
-                      ? 'Save New Product'
-                      : 'Save Changes'}
-                  </span>
-                </button>
+              <div className="pt-4 border-t border-gray-100 space-y-3">
+                {isPreviewGateway && isCreatingNewProduct && (
+                  <label className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={confirmFirstProductionCreate}
+                      onChange={(e) => setConfirmFirstProductionCreate(e.target.checked)}
+                      className="mt-0.5 rounded border-amber-400 text-[#802336] focus:ring-[#802336]"
+                    />
+                    <span className="text-[11px] leading-snug">
+                      <strong className="font-bold">Confirm First Production Create:</strong> I confirm this is an intentional first Hostinger Production save for product ID{' '}
+                      <code className="font-mono bg-white/80 px-1 py-0.5 rounded border border-amber-200">
+                        {editingProduct.id}
+                      </code>
+                      .
+                    </span>
+                  </label>
+                )}
+
+                {saveProductError && (
+                  <div className="p-3 bg-red-50 border border-red-300 text-red-900 rounded-xl flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <div className="flex items-start gap-2 min-w-0 flex-1">
+                      <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                      <span className="font-semibold break-words">{saveProductError}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => productFormRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+                      className="px-2.5 py-1 bg-white border border-red-300 text-red-800 hover:bg-red-100 rounded-lg text-[10px] font-bold cursor-pointer shrink-0"
+                    >
+                      View Pipeline Status
+                    </button>
+                  </div>
+                )}
+
+                {(savingProduct || retryingVerification) && (
+                  <div className="p-2.5 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl flex items-center gap-2 text-[11px] font-semibold">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-700 shrink-0" />
+                    <span>
+                      {savingProduct
+                        ? 'Saving product to Hostinger Production and running read-back verification...'
+                        : 'Verifying live product read-back & media URLs on Hostinger Production...'}
+                    </span>
+                  </div>
+                )}
+
+                {saveProductSuccess && !saveProductError && (
+                  <div className="p-3 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl flex items-center gap-2 text-[11px] font-semibold">
+                    <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>{saveProductSuccess}</span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirmFirstProductionCreate(false);
+                      setEditingProduct(null);
+                    }}
+                    className="px-5 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-semibold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingProduct || retryingVerification}
+                    className="bg-[#3B1E22] hover:bg-[#802336] disabled:bg-gray-400 text-[#FAF7F2] px-6 py-2.5 rounded-xl font-bold uppercase tracking-wider cursor-pointer shadow-md transition-colors flex items-center gap-2"
+                  >
+                    {(savingProduct || retryingVerification) && <Loader2 className="w-4 h-4 animate-spin text-white" />}
+                    <span>
+                      {savingProduct
+                        ? 'Saving to Hostinger...'
+                        : retryingVerification
+                          ? 'Verifying Read-Back...'
+                          : isCreatingNewProduct
+                            ? 'Save New Product'
+                            : 'Save Changes'}
+                    </span>
+                  </button>
+                </div>
               </div>
             </form>
           </div>

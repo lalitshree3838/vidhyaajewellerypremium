@@ -25,7 +25,7 @@ import {
   resolveCategoryCoverImage
 } from './sampleData';
 import { invalidateMediaInventoryCache, normalizeImageUrl } from './storageService';
-import { getAdminAuthHeaders } from './adminSessionMemory';
+import { clearAdminMemoryToken, getAdminAuthHeaders, resolveAdminAuthHeaders } from './adminSessionMemory';
 
 const PRODUCTS_COL = 'products';
 const CATEGORIES_COL = 'categories';
@@ -797,11 +797,84 @@ export async function forceReseedCatalog(throwOnError: boolean = true): Promise<
   }
 }
 
-// Products - Load latest saved products directly from persistent Firestore collection
+function isPreviewHostRuntime(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    (/^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/i.test(window.location.hostname || '') ||
+      /(?:^|\.)(?:ais-dev-[a-z0-9-]+\.run\.app|ais-pre-[a-z0-9-]+\.run\.app|run\.app|webcontainer\.io|stackblitz\.io|csb\.app)$/i.test(
+        window.location.hostname || ''
+      ))
+  );
+}
+
+// Products - Load latest saved products directly from persistent store / Hostinger Production
 export async function fetchProducts(): Promise<Product[]> {
+  const isPreviewHost = isPreviewHostRuntime();
+
+  // In Preview mode, Hostinger Production catalog via /api/products MUST fail closed:
+  // never silently present stale Preview data/products.json, seed products, localStorage, or IndexedDB as Production data,
+  // and never hide authoritative live Hostinger products via stale browser-local vidhyaa_deleted_products entries.
+  if (isPreviewHost) {
+    if (typeof fetch === 'undefined') {
+      throw new Error('Production Catalog Unavailable: Fetch API unavailable in Preview runtime.');
+    }
+    let resp: Response;
+    try {
+      resp = await fetch('/api/products', {
+        cache: 'no-store',
+        headers: { Accept: 'application/json' }
+      });
+    } catch (netErr: any) {
+      throw new Error(
+        `Production Catalog Unavailable: ${netErr?.message || 'Unable to reach Preview Production catalog proxy.'}`
+      );
+    }
+
+    const rawText = (await resp.text()).trim();
+    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+    const isHtml =
+      contentType.includes('text/html') ||
+      rawText.startsWith('<!') ||
+      rawText.startsWith('<html') ||
+      rawText.startsWith('<HTML') ||
+      rawText.startsWith('<');
+    let parsed: any = null;
+    if (!isHtml && rawText) {
+      try {
+        parsed = JSON.parse(rawText);
+      } catch {
+        parsed = null;
+      }
+    }
+
+    if (isHtml || !resp.ok || !Array.isArray(parsed)) {
+      const effectiveStatus =
+        typeof parsed?.httpStatus === 'number' && parsed.httpStatus >= 100
+          ? parsed.httpStatus
+          : resp.status;
+      const errMsg =
+        parsed?.error ||
+        (isHtml
+          ? `Production Catalog Unavailable: Catalog proxy returned HTML instead of JSON (HTTP ${resp.status}).`
+          : `Production Catalog Unavailable: Live Hostinger catalog returned HTTP ${effectiveStatus} or invalid JSON.`);
+      throw new Error(errMsg);
+    }
+
+    const previewCatalogMap = new Map<string, Product>();
+    parsed.forEach((sp: Product) => {
+      if (isGenuineProduct(sp) && !PERMANENTLY_DELETED_PRODUCT_IDS.has(sp.id)) {
+        previewCatalogMap.set(sp.id, __mergeProductMedia(sp, null));
+      }
+    });
+    const sortedLive = sortCatalogProducts(Array.from(previewCatalogMap.values()));
+    __vidhyaaMemProducts = sortedLive;
+    return sortedLive;
+  }
+
+  const deletedIds = getDeletedProductIds();
+
   const [idbCached] = await Promise.all([loadProductsFromIdb()]);
   const cached = getCachedProducts();
-  const deletedIds = getDeletedProductIds();
 
   // Unified catalog map ensuring zero products are ever dropped
   const catalogMap = new Map<string, Product>();
@@ -1214,7 +1287,12 @@ export function getOrderReceiptToken(orderKey: string): string {
   }
 }
 
-export async function saveProduct(product: Product): Promise<Product> {
+export interface SaveProductOptions {
+  operationIntent?: 'update' | 'create';
+  confirmFirstProductionCreate?: boolean;
+}
+
+export async function saveProduct(product: Product, options?: SaveProductOptions): Promise<Product> {
   // Hydrate full unstripped catalog first (even on cold memory cache) so existing media is never lost
   const existingCatalog = await getCachedProductsAsync().catch(() => getCachedProducts());
   const existingMatch =
@@ -1232,80 +1310,170 @@ export async function saveProduct(product: Product): Promise<Product> {
 
   // 1. Persist authoritatively to Hostinger Production
   //    - On Google AI Studio Preview: strictly via /api/production/products (HMAC gateway + Hostinger read-back)
-  //    - On Live Hostinger domain: directly via /api/products
+  //    - On Live Hostinger domain: directly via /api/products (verbatim { product } contract)
   //    Never silently fall back to local Preview products.json if Hostinger save fails.
-  const isPreviewHost =
-    typeof window !== 'undefined' &&
-    (/^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/i.test(window.location.hostname || '') ||
-      /(?:^|\.)(?:ais-dev-[a-z0-9-]+\.run\.app|ais-pre-[a-z0-9-]+\.run\.app|run\.app|webcontainer\.io|stackblitz\.io|csb\.app)$/i.test(
-        window.location.hostname || ''
-      ));
+  const isPreviewHost = isPreviewHostRuntime();
   const productSaveEndpoint = isPreviewHost ? '/api/production/products' : '/api/products';
+
+  // Preview-side explicit create-vs-update control metadata (never forwarded to Hostinger PHP)
+  const resolvedIntent: 'update' | 'create' | null =
+    options?.operationIntent === 'update' || options?.operationIntent === 'create'
+      ? options.operationIntent
+      : existingMatch
+        ? 'update'
+        : null;
+  const confirmFirstProductionCreate = Boolean(options?.confirmFirstProductionCreate);
+
+  if (isPreviewHost) {
+    if (!resolvedIntent) {
+      throw new Error(
+        'Cannot save product: explicit create or update operation intent could not be established.'
+      );
+    }
+    if (resolvedIntent === 'create' && !confirmFirstProductionCreate) {
+      throw new Error(
+        'First Production product creation requires explicit confirmation before saving.'
+      );
+    }
+  }
+
+  // Pre-serialize once so a proven Preview ADMIN_UNAUTHORIZED single retry sends the byte-for-byte identical payload.
+  const serializedPayload = JSON.stringify(
+    isPreviewHost
+      ? {
+          product: sanitized,
+          operationIntent: resolvedIntent,
+          confirmFirstProductionCreate
+        }
+      : { product: sanitized }
+  );
 
   let serverSuccess = false;
   let serverAuthError: string | null = null;
   let serverError: string | null = null;
   let finalSavedProduct: Product = sanitized;
 
+  const parseSaveResponse = async (resp: Response) => {
+    const rawText = (await resp.text()).trim();
+    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+    const isHtml =
+      contentType.includes('text/html') ||
+      rawText.startsWith('<!') ||
+      rawText.startsWith('<html') ||
+      rawText.startsWith('<HTML') ||
+      rawText.startsWith('<');
+    let data: any = null;
+    if (!isHtml && rawText) {
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        data = null;
+      }
+    }
+    const effectiveStatus =
+      typeof data?.httpStatus === 'number' && data.httpStatus >= 100
+        ? data.httpStatus
+        : resp.status;
+    return { resp, rawText, isHtml, data, effectiveStatus };
+  };
+
   try {
     if (typeof fetch !== 'undefined') {
-      const resp = await fetch(productSaveEndpoint, {
+      const initialAuth = await resolveAdminAuthHeaders(
+        { 'Content-Type': 'application/json', Accept: 'application/json' },
+        { forceRefresh: false }
+      );
+      const firstResp = await fetch(productSaveEndpoint, {
         method: 'POST',
         credentials: 'include',
-        headers: getAdminAuthHeaders({
-          'Content-Type': 'application/json'
-        }),
-        body: JSON.stringify({ product: sanitized })
+        headers: initialAuth.headers,
+        body: serializedPayload
       });
+      let parsedAttempt = await parseSaveResponse(firstResp);
 
-      const rawText = (await resp.text()).trim();
-      const isHtml =
-        rawText.startsWith('<!') ||
-        rawText.startsWith('<html') ||
-        rawText.startsWith('<HTML') ||
-        rawText.startsWith('<');
-      let data: any = null;
-      if (!isHtml) {
-        try {
-          data = rawText ? JSON.parse(rawText) : null;
-        } catch {
-          data = null;
+      // Strict single retry ONLY when response explicitly proves Preview middleware rejected
+      // auth with ADMIN_UNAUTHORIZED BEFORE forwarding to Hostinger Production.
+      const isPreviewMiddlewareAuthReject =
+        isPreviewHost &&
+        !parsedAttempt.isHtml &&
+        parsedAttempt.resp.status === 401 &&
+        parsedAttempt.resp.headers.get('x-vidhyaa-gateway-status') === '401' &&
+        parsedAttempt.data?.code === 'ADMIN_UNAUTHORIZED' &&
+        parsedAttempt.data?.upstreamStatus === undefined;
+
+      if (isPreviewMiddlewareAuthReject) {
+        clearAdminMemoryToken();
+        const refreshedAuth = await resolveAdminAuthHeaders(
+          { 'Content-Type': 'application/json', Accept: 'application/json' },
+          { forceRefresh: true }
+        );
+        if (!refreshedAuth.authenticated) {
+          serverAuthError =
+            'Administrator session expired or not signed in. Please sign in to the Admin Panel again before saving.';
+        } else {
+          const retryResp = await fetch(productSaveEndpoint, {
+            method: 'POST',
+            credentials: 'include',
+            headers: refreshedAuth.headers,
+            body: serializedPayload
+          });
+          parsedAttempt = await parseSaveResponse(retryResp);
         }
       }
 
-      const effectiveStatus =
-        typeof data?.httpStatus === 'number' && data.httpStatus >= 100
-          ? data.httpStatus
-          : resp.status;
+      if (!serverAuthError) {
+        const { resp, isHtml, data, effectiveStatus } = parsedAttempt;
+        if (isHtml) {
+          serverError = `Production Product Gateway returned HTML instead of JSON (HTTP ${resp.status}). Ensure the Preview dev server is running and VIDHYAA_PROD_UPLOAD_SECRET is configured.`;
+        } else if (effectiveStatus === 401 || effectiveStatus === 403) {
+          serverAuthError = data?.error || 'Administrator session expired or unauthorized. Please sign in again.';
+        } else if (effectiveStatus === 503 || data?.code === 'GATEWAY_NOT_CONFIGURED') {
+          serverError =
+            data?.error ||
+            'Hostinger Production Gateway is not configured on this Preview server. Set VIDHYAA_PROD_UPLOAD_SECRET in AI Studio Secrets and Hostinger outside public_html.';
+        } else if (resp.status === 200 && data?.success === true) {
+          if (isPreviewHost) {
+            const rbProd = data?.product && typeof data.product === 'object' ? data.product : null;
+            const submittedVideoUrl = typeof sanitized.videoUrl === 'string' ? sanitized.videoUrl.trim() : '';
+            const expectedVideoUrl =
+              submittedVideoUrl ||
+              (typeof data?.expectedVideoUrl === 'string' ? data.expectedVideoUrl.trim() : '');
+            const readBackVideoUrl = typeof rbProd?.videoUrl === 'string' ? rbProd.videoUrl.trim() : '';
 
-      if (isHtml) {
-        serverError = `Production Product Gateway returned HTML instead of JSON (HTTP ${resp.status}). Ensure the Preview dev server is running and VIDHYAA_PROD_UPLOAD_SECRET is configured.`;
-      } else if (effectiveStatus === 401 || effectiveStatus === 403) {
-        serverAuthError = data?.error || 'Administrator session expired or unauthorized. Please sign in again.';
-      } else if (effectiveStatus === 503 || data?.code === 'GATEWAY_NOT_CONFIGURED') {
-        serverError =
-          data?.error ||
-          'Hostinger Production Gateway is not configured on this Preview server. Set VIDHYAA_PROD_UPLOAD_SECRET in AI Studio Secrets and Hostinger outside public_html.';
-      } else if (resp.ok && data?.success) {
-        if (isPreviewHost && !data?.verifiedReadBack) {
-          serverError = 'Hostinger Production save did not return read-back verification.';
-        } else {
-          serverSuccess = true;
-          if (data?.product && typeof data.product === 'object') {
-            finalSavedProduct = sanitizeProductForFirestore(__mergeProductMedia(data.product as Product, sanitized));
+            if (data?.verifiedReadBack !== true) {
+              serverError = 'Hostinger Production save did not return read-back verification.';
+            } else if (!rbProd || rbProd.id !== sanitized.id) {
+              serverError = `Hostinger Production read-back returned mismatched Product ID (expected "${sanitized.id}", received "${rbProd?.id || '(missing)'}").`;
+            } else if (data?.videoUrlVerified === false || (expectedVideoUrl && readBackVideoUrl !== expectedVideoUrl)) {
+              serverError = `Hostinger Production read-back videoUrl mismatch (expected "${expectedVideoUrl}", received "${readBackVideoUrl || '(empty)'}").`;
+            } else {
+              serverSuccess = true;
+              finalSavedProduct = sanitizeProductForFirestore(__mergeProductMedia(rbProd as Product, sanitized));
+              // Preserve exact canonical videoUrl returned by Hostinger read-back verbatim
+              if (readBackVideoUrl) {
+                finalSavedProduct.videoUrl = readBackVideoUrl;
+              }
+              console.log(`[Hostinger Production] Product "${finalSavedProduct.name}" (${finalSavedProduct.id}) saved and read-back verified.`);
+            }
+          } else {
+            serverSuccess = true;
+            if (data?.product && typeof data.product === 'object') {
+              finalSavedProduct = sanitizeProductForFirestore(__mergeProductMedia(data.product as Product, sanitized));
+            }
+            console.log(`[Hostinger Production] Product "${finalSavedProduct.name}" (${finalSavedProduct.id}) saved.`);
           }
-          console.log(`[Hostinger Production] Product "${finalSavedProduct.name}" (${finalSavedProduct.id}) saved and read-back verified.`);
+        } else {
+          serverError = data?.error || `Hostinger Production rejected product save (HTTP ${effectiveStatus}).`;
         }
-      } else {
-        serverError = data?.error || `Hostinger Production rejected product save (HTTP ${effectiveStatus}).`;
       }
     }
   } catch (serverErr: any) {
+    // Never retry after network errors, timeouts, or connection loss.
     serverError = serverErr?.message || 'Unable to reach Hostinger Production product catalog API.';
     console.warn('[Server] Notice saving product to server endpoint:', serverErr);
   }
 
-  // Never allow a rejected server write (401/403/503/4xx/5xx) to be masked as success
+  // Never allow a rejected server write (401/403/409/502/503/4xx/5xx/network/read-back failure) to be masked as success
   if (serverAuthError) {
     throw new Error(serverAuthError);
   }

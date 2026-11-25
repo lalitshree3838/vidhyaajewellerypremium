@@ -37,6 +37,7 @@ import {
   getProductPrimaryImage,
   useAvailableMediaInventory
 } from '../lib/storageService';
+import { isPreviewGatewayMode } from '../lib/productionMediaClient';
 
 interface VideoReelItem {
   id: string;
@@ -912,7 +913,9 @@ export const ShopByVideoSection: React.FC<ShopByVideoSectionProps> = ({
     };
 
     (Array.isArray(products) ? products : []).forEach(pushProduct);
-    INITIAL_PRODUCTS.forEach(pushProduct);
+    if (!isPreviewGatewayMode()) {
+      INITIAL_PRODUCTS.forEach(pushProduct);
+    }
 
     const reels: VideoReelItem[] = [];
     const seenCanonicalReels = new Set<string>();

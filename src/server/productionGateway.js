@@ -228,20 +228,24 @@ export async function verifyLiveProductionMediaUrl(rawUrl, kind = 'image', expec
           error: `Live Hostinger image URL returned unexpected MIME "${headCt || 'unknown'}".`
         };
       }
-      if (expectedSizeBytes > 0 && contentLength > 0 && contentLength !== expectedSizeBytes) {
+      if (headRes.headers.has('content-length') && contentLength <= 0) {
         return {
           ok: false,
           status: headRes.status,
           contentType: headCt,
           contentLength,
-          error: `Live file size mismatch (${contentLength} vs expected ${expectedSizeBytes} bytes).`
+          error: 'Live Hostinger image URL returned an empty (0-byte) file.'
         };
       }
+      // Note: api/media/upload.php already verifies exact byte-for-byte size on Hostinger disk.
+      // Hostinger hCDN may serve a smaller CDN-optimized / EXIF-stripped image (e.g., JPEG/WebP optimization),
+      // so accept any non-empty HTTP 200 image/* response instead of rejecting CDN-optimized wire byte lengths.
       return {
         ok: true,
         status: headRes.status,
         contentType: headCt,
-        contentLength
+        contentLength,
+        cdnOptimized: expectedSizeBytes > 0 && contentLength > 0 && contentLength !== expectedSizeBytes
       };
     }
 
@@ -454,7 +458,7 @@ export async function forwardImageUploadToProduction({ buffer, fileName, actor }
     ? String(data.url)
     : `${cfg.targetOrigin}/${String(data.url).replace(/^\/+/, '')}`;
 
-  // Mandatory Stage 4 verification: live HEAD check confirming HTTP 200 + image/* + exact size
+  // Mandatory Stage 4 verification: live HEAD check confirming HTTP 200 + image/* + non-empty delivery
   const liveVerify = await verifyLiveProductionMediaUrl(
     canonicalUrl,
     'image',
@@ -860,33 +864,224 @@ export async function fetchProductionProductById(productId) {
   const cfg = getProductionGatewayConfig();
   const cleanId = String(productId || '').trim();
   if (!cleanId) {
-    return { ok: false, status: 400, error: 'Product ID is required.' };
+    return { ok: false, status: 400, notFound: false, error: 'Product ID is required.' };
   }
   try {
     const res = await fetchWithTimeout(
-      `${cfg.targetOrigin}/api/products.php?id=${encodeURIComponent(cleanId)}`,
+      `${cfg.targetOrigin}/api/products.php?id=${encodeURIComponent(cleanId)}&_t=${Date.now()}`,
       { method: 'GET', cache: 'no-store', headers: { Accept: 'application/json' } },
       15000
     );
-    const data = await res.json().catch(() => null);
+    const rawText = await res.text();
+    const trimmed = rawText.trim();
+    if (!trimmed || /^<!doctype html|^<html/i.test(trimmed)) {
+      return {
+        ok: false,
+        status: 502,
+        notFound: false,
+        error: `Hostinger Production returned non-JSON/HTML while reading product "${cleanId}" (HTTP ${res.status}).`
+      };
+    }
+    let data = null;
+    try {
+      data = JSON.parse(trimmed);
+    } catch {
+      return {
+        ok: false,
+        status: 502,
+        notFound: false,
+        error: `Hostinger Production returned invalid JSON while reading product "${cleanId}" (HTTP ${res.status}).`
+      };
+    }
+
+    if (res.status === 404 && data && typeof data === 'object' && !data.id) {
+      return {
+        ok: false,
+        status: 404,
+        notFound: true,
+        error: data?.error || `Product "${cleanId}" not found on Hostinger Production.`
+      };
+    }
+
     if (!res.ok || !data || typeof data !== 'object' || !data.id) {
       return {
         ok: false,
-        status: res.status,
+        status: res.status || 502,
+        notFound: false,
         error: data?.error || `Production product read-back failed (HTTP ${res.status}).`
       };
     }
-    return { ok: true, status: 200, product: data };
+    return { ok: true, status: 200, notFound: false, product: data };
   } catch (err) {
+    const isTimeout = err?.name === 'AbortError';
     return {
       ok: false,
-      status: 502,
-      error: `Unable to read back product from Hostinger Production: ${err?.message || 'network error'}`
+      status: isTimeout ? 504 : 502,
+      notFound: false,
+      error: `Unable to read back product from Hostinger Production: ${isTimeout ? 'request timed out' : err?.message || 'network error'}`
     };
   }
 }
 
-export async function forwardProductSaveToProduction({ product, actor }) {
+export async function fetchProductionCatalogReadOnly() {
+  const cfg = getProductionGatewayConfig();
+  try {
+    const res = await fetchWithTimeout(
+      `${cfg.targetOrigin}/api/products.php?_t=${Date.now()}`,
+      { method: 'GET', cache: 'no-store', headers: { Accept: 'application/json' } },
+      15000
+    );
+    const rawText = await res.text();
+    const trimmed = rawText.trim();
+    if (!trimmed || /^<!doctype html|^<html/i.test(trimmed)) {
+      return {
+        ok: false,
+        status: 502,
+        error: `Production Catalog Unavailable: Hostinger returned HTML/empty response (HTTP ${res.status}).`
+      };
+    }
+    let data = null;
+    try {
+      data = JSON.parse(trimmed);
+    } catch {
+      return {
+        ok: false,
+        status: 502,
+        error: `Production Catalog Unavailable: Hostinger returned invalid JSON (HTTP ${res.status}).`
+      };
+    }
+    if (!res.ok || !Array.isArray(data)) {
+      return {
+        ok: false,
+        status: res.status === 401 || res.status === 403 ? res.status : 502,
+        error:
+          (data && typeof data === 'object' && data.error) ||
+          `Production Catalog Unavailable: Hostinger returned HTTP ${res.status}.`
+      };
+    }
+    return { ok: true, status: 200, products: data };
+  } catch (err) {
+    const isTimeout = err?.name === 'AbortError';
+    return {
+      ok: false,
+      status: isTimeout ? 504 : 502,
+      error: `Production Catalog Unavailable: ${isTimeout ? 'Hostinger request timed out' : err?.message || 'network error'}`
+    };
+  }
+}
+
+export async function fetchProductionVideoInventoryReadOnly() {
+  const cfg = getProductionGatewayConfig();
+  try {
+    const res = await fetchWithTimeout(
+      `${cfg.targetOrigin}/api/videos/available?_t=${Date.now()}`,
+      { method: 'GET', cache: 'no-store', headers: { Accept: 'application/json' } },
+      10000
+    );
+    const rawText = await res.text();
+    const trimmed = rawText.trim();
+    if (!trimmed || /^<!doctype html|^<html/i.test(trimmed)) {
+      return {
+        ok: false,
+        status: 502,
+        error: `Production Video Inventory Unavailable: Hostinger returned HTML/empty response (HTTP ${res.status}).`
+      };
+    }
+    let data = null;
+    try {
+      data = JSON.parse(trimmed);
+    } catch {
+      return {
+        ok: false,
+        status: 502,
+        error: `Production Video Inventory Unavailable: Hostinger returned invalid JSON (HTTP ${res.status}).`
+      };
+    }
+    if (!res.ok || !data || data.success !== true || !Array.isArray(data.urls)) {
+      return {
+        ok: false,
+        status: res.status === 401 || res.status === 403 ? res.status : 502,
+        error:
+          (data && typeof data === 'object' && data.error) ||
+          `Production Video Inventory Unavailable: Hostinger returned HTTP ${res.status}.`
+      };
+    }
+    return { ok: true, status: 200, urls: data.urls };
+  } catch (err) {
+    const isTimeout = err?.name === 'AbortError';
+    return {
+      ok: false,
+      status: isTimeout ? 504 : 502,
+      error: `Production Video Inventory Unavailable: ${isTimeout ? 'Hostinger request timed out' : err?.message || 'network error'}`
+    };
+  }
+}
+
+function mergeExistingProductionProduct(existingProd, incomingProd) {
+  const merged = { ...existingProd };
+  const existingVideoUrl = typeof existingProd.videoUrl === 'string' ? existingProd.videoUrl.trim() : '';
+  const incomingVideoUrl = typeof incomingProd.videoUrl === 'string' ? incomingProd.videoUrl.trim() : '';
+
+  for (const key of Object.keys(incomingProd)) {
+    if (key === 'operationIntent' || key === 'confirmFirstProductionCreate') continue;
+    const val = incomingProd[key];
+    if (val === undefined) continue;
+
+    if (key === 'id') {
+      merged.id = existingProd.id;
+      continue;
+    }
+
+    if (key === 'createdAt') {
+      merged.createdAt = val || existingProd.createdAt;
+      continue;
+    }
+
+    if (key === 'videoUrl' || key === 'video' || key === 'videoURL' || key === '_videoCleared') {
+      continue;
+    }
+
+    if (key === 'images') {
+      if (Array.isArray(val)) {
+        if (val.length > 0 || incomingProd._imagesCleared === true || !Array.isArray(existingProd.images) || existingProd.images.length === 0) {
+          merged.images = val;
+        }
+      }
+      continue;
+    }
+
+    if (key === 'variations') {
+      if (Array.isArray(val)) {
+        merged.variations = val;
+      }
+      continue;
+    }
+
+    merged[key] = val;
+  }
+
+  // Special videoUrl protection: an omitted, null, or empty videoUrl must never clear an existing Production videoUrl.
+  if (incomingVideoUrl) {
+    merged.videoUrl = incomingVideoUrl;
+    delete merged._videoCleared;
+  } else if (existingVideoUrl) {
+    merged.videoUrl = existingVideoUrl;
+    delete merged._videoCleared;
+  }
+
+  merged.id = existingProd.id;
+  return {
+    merged,
+    expectedVideoUrl: incomingVideoUrl || existingVideoUrl || ''
+  };
+}
+
+export async function forwardProductSaveToProduction({
+  product,
+  actor,
+  operationIntent,
+  confirmFirstProductionCreate = false
+}) {
   const cfg = getProductionGatewayConfig();
   if (!cfg.configured) {
     return {
@@ -899,12 +1094,99 @@ export async function forwardProductSaveToProduction({ product, actor }) {
     };
   }
 
-  if (!product || typeof product !== 'object' || !product.id) {
-    return { status: 400, body: { success: false, error: 'Valid product object with id is required.' } };
+  const cleanId = String(product?.id || '').trim();
+  if (!product || typeof product !== 'object' || !cleanId) {
+    return { status: 400, body: { success: false, code: 'INVALID_PRODUCT_PAYLOAD', error: 'Valid product object with id is required.' } };
   }
 
+  if (operationIntent !== 'update' && operationIntent !== 'create') {
+    return {
+      status: 400,
+      body: {
+        success: false,
+        code: 'MISSING_OPERATION_INTENT',
+        error: 'Explicit operationIntent ("update" or "create") is required before saving to Hostinger Production.'
+      }
+    };
+  }
+
+  if (operationIntent === 'create' && confirmFirstProductionCreate !== true) {
+    return {
+      status: 400,
+      body: {
+        success: false,
+        code: 'CREATE_CONFIRMATION_REQUIRED',
+        error:
+          'Explicit confirmation is required before creating a new product record on Hostinger Production. A missing Production record (HTTP 404) never independently authorizes creation.'
+      }
+    };
+  }
+
+  // Pre-save read-only lookup on Hostinger Production (never guesses or overwrites blind)
+  const preCheck = await fetchProductionProductById(cleanId);
+  let productToSend;
+  let expectedVideoUrl = '';
+
+  if (operationIntent === 'update') {
+    if (preCheck.ok && preCheck.product && preCheck.product.id === cleanId) {
+      const mergeResult = mergeExistingProductionProduct(preCheck.product, product);
+      productToSend = mergeResult.merged;
+      expectedVideoUrl = mergeResult.expectedVideoUrl;
+    } else if (preCheck.notFound === true) {
+      return {
+        status: 409,
+        body: {
+          success: false,
+          code: 'EXISTING_PRODUCT_NOT_FOUND',
+          error: `Existing Production product "${cleanId}" was not found on Hostinger (HTTP 404). Update aborted — a 404 never authorizes creating a new product automatically.`
+        }
+      };
+    } else {
+      return {
+        status: 502,
+        body: {
+          success: false,
+          code: 'EXISTING_PRODUCTION_STATE_UNVERIFIED',
+          error: `Could not safely establish existing Production state for product "${cleanId}" before update (${preCheck.error || 'upstream check failed'}). Save aborted to protect existing Production data.`
+        }
+      };
+    }
+  } else {
+    // Explicit verified create intent
+    if (preCheck.ok && preCheck.product) {
+      return {
+        status: 409,
+        body: {
+          success: false,
+          code: 'PRODUCT_ID_ALREADY_EXISTS',
+          error: `Product ID "${cleanId}" already exists on Hostinger Production. Create aborted to prevent overwriting an existing product.`
+        }
+      };
+    }
+    if (preCheck.notFound !== true) {
+      return {
+        status: 502,
+        body: {
+          success: false,
+          code: 'EXISTING_PRODUCTION_STATE_UNVERIFIED',
+          error: `Could not verify whether product ID "${cleanId}" already exists on Hostinger Production (${preCheck.error || 'upstream check failed'}). Create aborted.`
+        }
+      };
+    }
+    const cleanCreatePayload = { ...product, id: cleanId };
+    delete cleanCreatePayload.operationIntent;
+    delete cleanCreatePayload.confirmFirstProductionCreate;
+    const incomingVideoUrl = typeof cleanCreatePayload.videoUrl === 'string' ? cleanCreatePayload.videoUrl.trim() : '';
+    if (incomingVideoUrl) {
+      cleanCreatePayload.videoUrl = incomingVideoUrl;
+    }
+    productToSend = cleanCreatePayload;
+    expectedVideoUrl = incomingVideoUrl;
+  }
+
+  // Preserve the exact Hostinger PHP request contract: forward ONLY { product }
   const endpointPath = '/api/products.php';
-  const payloadStr = JSON.stringify({ product });
+  const payloadStr = JSON.stringify({ product: productToSend });
   const bodyBuffer = Buffer.from(payloadStr, 'utf8');
   const authHeader = createGatewayAuthHeader({
     scope: 'products:write',
@@ -965,7 +1247,7 @@ export async function forwardProductSaveToProduction({ product, actor }) {
   }
 
   // Mandatory Read-Back Verification from Hostinger Production
-  const readBack = await fetchProductionProductById(data.product.id);
+  const readBack = await fetchProductionProductById(productToSend.id);
   if (!readBack.ok || !readBack.product) {
     return {
       status: 502,
@@ -982,14 +1264,25 @@ export async function forwardProductSaveToProduction({ product, actor }) {
     };
   }
 
-  // Confirm saved videoUrl exactly matches the expected verified production video URL when present
-  const expectedVideoUrl = typeof product.videoUrl === 'string' ? product.videoUrl.trim() : '';
+  if (readBack.product.id !== productToSend.id) {
+    const idMismatchMsg = `Product read-back ID mismatch on Hostinger (expected "${productToSend.id}", got "${readBack.product.id}").`;
+    return {
+      status: 502,
+      body: {
+        success: false,
+        code: 'READBACK_ID_MISMATCH',
+        error: idMismatchMsg,
+        message: idMismatchMsg,
+        product: readBack.product
+      }
+    };
+  }
+
+  // Generic exact videoUrl verification for ALL products:
+  // - If target/existing expectedVideoUrl is non-empty, require exact verbatim equality.
+  // - Never fail merely because submitted videoUrl was omitted/empty when no expectedVideoUrl exists.
   const readBackVideoUrl = typeof readBack.product.videoUrl === 'string' ? readBack.product.videoUrl.trim() : '';
-  if (
-    expectedVideoUrl &&
-    /^https:\/\/(?:www\.)?vidhyaajewellerystudio\.com\/videos\/uploads\//i.test(expectedVideoUrl) &&
-    readBackVideoUrl !== expectedVideoUrl
-  ) {
+  if (expectedVideoUrl && readBackVideoUrl !== expectedVideoUrl) {
     const mismatchMsg = `Product read-back videoUrl mismatch on Hostinger (expected "${expectedVideoUrl}", got "${readBackVideoUrl || '(empty)'}").`;
     return {
       status: 502,
@@ -1009,6 +1302,7 @@ export async function forwardProductSaveToProduction({ product, actor }) {
       success: true,
       product: readBack.product,
       verifiedReadBack: true,
+      expectedVideoUrl: expectedVideoUrl || null,
       videoUrlVerified: !expectedVideoUrl || readBackVideoUrl === expectedVideoUrl,
       storageTarget: 'Hostinger Production',
       error: null,
@@ -1016,3 +1310,4 @@ export async function forwardProductSaveToProduction({ product, actor }) {
     }
   };
 }
+

@@ -22,6 +22,7 @@ import {
   __mergeProductMedia
 } from './lib/dbService';
 import { connectionReadyPromise } from './lib/firebase';
+import { isPreviewGatewayMode } from './lib/productionMediaClient';
 import { INITIAL_CATEGORIES, INITIAL_PRODUCTS, INITIAL_STORE_SETTINGS, isGenuineProduct } from './lib/sampleData';
 import { Header } from './components/Header';
 import { Footer } from './components/Footer';
@@ -238,7 +239,9 @@ function MainApp() {
   };
 
   // Firestore Live Catalog Data initialized with cached or sorted baseline so storefront renders immediately
+  // In Preview mode, start empty and wait for live Hostinger Production catalog (never masquerade stale local data as live).
   const [products, setProducts] = useState<Product[]>(() => {
+    if (isPreviewGatewayMode()) return [];
     const cached = getCachedProducts();
     const hasUsableCache =
       cached.length > 0 &&
@@ -296,11 +299,20 @@ function MainApp() {
       }
     } catch (e: any) {
       console.warn('Live data load warning:', e);
-      const idbOrLocal = await getCachedProductsAsync().catch(() => getCachedProducts());
-      if (idbOrLocal.length > 0) {
-        safeSetProducts(idbOrLocal);
+      if (isPreviewGatewayMode()) {
+        // Fail closed in Preview mode: never substitute stale IndexedDB/localStorage records as live Production catalog.
+        setProducts([]);
+        setInitError(
+          e?.message ||
+            'Production Catalog Unavailable: Unable to load live catalog from Hostinger Production.'
+        );
+      } else {
+        const idbOrLocal = await getCachedProductsAsync().catch(() => getCachedProducts());
+        if (idbOrLocal.length > 0) {
+          safeSetProducts(idbOrLocal);
+        }
+        setInitError(e?.message || 'Unable to sync live catalog data. Displaying saved catalog.');
       }
-      setInitError(e?.message || 'Unable to sync live catalog data. Displaying saved catalog.');
     } finally {
       setLoadingInitial(false);
       setLiveCatalogSynced(true);
@@ -309,14 +321,16 @@ function MainApp() {
 
   useEffect(() => {
     let active = true;
-    // Immediately hydrate full unstripped images from IndexedDB before remote sync finishes
-    getCachedProductsAsync()
-      .then((cachedFull) => {
-        if (active && Array.isArray(cachedFull) && cachedFull.length > 0) {
-          safeSetProducts(cachedFull);
-        }
-      })
-      .catch(() => {});
+    // Immediately hydrate full unstripped images from IndexedDB before remote sync finishes (non-Preview only)
+    if (!isPreviewGatewayMode()) {
+      getCachedProductsAsync()
+        .then((cachedFull) => {
+          if (active && Array.isArray(cachedFull) && cachedFull.length > 0) {
+            safeSetProducts(cachedFull);
+          }
+        })
+        .catch(() => {});
+    }
 
     void loadData();
 
@@ -334,7 +348,9 @@ function MainApp() {
   }, []);
 
   useEffect(() => {
-    if (!isAdmin) return;
+    // In Preview Gateway mode, Hostinger Production (/api/products) is the sole authoritative catalog;
+    // never let Firestore onSnapshot + INITIAL_PRODUCTS + localStorage deleted-ID merges overwrite it after Admin login.
+    if (!isAdmin || isPreviewGatewayMode()) return;
     let active = true;
     let unsubscribe = () => {};
 
@@ -661,6 +677,7 @@ function MainApp() {
                   products={products}
                   categories={categories}
                   storeSettings={storeSettings}
+                  catalogError={initError}
                   onRefreshData={loadData}
                   onExitAdmin={() => handleNavigate('home')}
                   onNavigateGoLive={() => handleNavigate('go-live')}
